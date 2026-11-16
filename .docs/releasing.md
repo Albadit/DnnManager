@@ -22,7 +22,7 @@ flowchart LR
    | Picker | What it offers |
    |---|---|
    | 1/4 Release type | **Latest** (what DNN Manager's update check finds), **Pre-release**, **None** |
-   | 2/4 Version | The next patch, minor and major after the newest release tag (`v2.5.0` → 2.5.1, 2.6.0, 3.0.0; a pre-release 2.5.1-rc1, with the next free `rcN`). Any other can be typed. |
+   | 2/4 Version | The versions whose notes are in `.docs/release-notes/` and that aren't released yet, of the type picked (`v2.0.0-rc2.md` → 2.0.0-rc2). Without any, the next patch, minor and major after the newest release on GitHub, marked *no release notes yet* (a pre-release gets the next free `rcN`). Any other can be typed. |
    | 3/4 Commit | The newest 30 commits on the branch's remote - a release is made from a pushed commit only; a released one says so |
    | 4/4 Confirm | The release spelled out (version, type, commit, notes) - or, when something is wrong, only *Can't release* with the reason |
 

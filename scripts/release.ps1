@@ -112,11 +112,28 @@ function Notes-Line([string]$version) {
     return "No $notes - GitHub writes the notes from the commits"
 }
 
-# -- 2. version: what to suggest after the newest release --
+# -- 2. version: the versions with release notes waiting; without any, what comes after the newest release --
 if ($Suggest) {
     $tags = Tags
     $newest = Newest-Stable $tags
     if (-not $newest) { $newest = @{ Major = 0; Minor = 0; Patch = 0; Text = "0.0.0" } }
+    $released = @($tags | ForEach-Object { $_.Text })
+
+    # .docs/release-notes/vX.Y.Z.md not released yet, newer than the newest release, of the type picked.
+    $ready = @(Get-ChildItem ".docs/release-notes" -Filter "v*.md" -ErrorAction SilentlyContinue |
+        ForEach-Object { Parse-Version $_.BaseName } |
+        Where-Object { $_ -and ($released -notcontains $_.Text) -and ((Base-Key $_) -gt (Base-Key $newest)) } |
+        Where-Object { if ($Label -eq "prerelease") { [bool]$_.Suffix } else { -not $_.Suffix } } |
+        Sort-Object { Base-Key $_ }, { $_.Text })
+    if ($ready.Count) {
+        foreach ($v in $ready) {
+            $icon = if ($v.Suffix) { "`$(beaker)" } else { "`$(tag)" }
+            Write-Output "$($v.Text)|$icon $($v.Text)|release notes ready|.docs/release-notes/v$($v.Text).md - or type another version"
+        }
+        exit 0
+    }
+
+    # No notes for this type yet: the next versions, said to have none.
     $bases = @(
         @{ Kind = "patch"; Detail = "fixes and small changes"; V = "$($newest.Major).$($newest.Minor).$($newest.Patch + 1)" },
         @{ Kind = "minor"; Detail = "new features, nothing removed"; V = "$($newest.Major).$($newest.Minor + 1).0" },
@@ -129,9 +146,9 @@ if ($Suggest) {
                 ForEach-Object { [int]($_.Suffix -replace "^rc", "") })
             $n = 1 + ($existing + 0 | Measure-Object -Maximum).Maximum
             $value = "$($b.V)-rc$n"
-            Write-Output "$value|`$(beaker) $value|$($b.Kind) pre-release|After v$($newest.Text): $($b.Detail) - or type another version"
+            Write-Output "$value|`$(beaker) $value|$($b.Kind) pre-release, no release notes yet|After v$($newest.Text): $($b.Detail) - or type another version"
         } else {
-            Write-Output "$($b.V)|`$(tag) $($b.V)|$($b.Kind)|After v$($newest.Text): $($b.Detail) - or type another version"
+            Write-Output "$($b.V)|`$(tag) $($b.V)|$($b.Kind), no release notes yet|After v$($newest.Text): $($b.Detail) - or type another version"
         }
     }
     exit 0
