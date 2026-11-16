@@ -2,26 +2,30 @@
 
 ## Skills
 
-This repository has twelve skills in `.claude/skills/`. For every prompt, decide which of them the request needs, use
+This repository has sixteen skills in `.claude/skills/`. For every prompt, decide which of them the request needs, use
 each one that applies, and name them in the first line of the reply (e.g. "Skills: functionality, documentation" or
-"Skills: none").
+"Skills: none"). **orchestrator** does that choosing: at the start of a task it matches the task against every
+skill's description and loads only the ones that fit; `#<skill-name>` in a message (e.g. `#security`) loads that
+skill as well.
 
-**Code: one specialist per quality area.** A task that is mainly about one area loads that one skill; a review, an
-audit or work that spans several areas goes through **orchestrator**, which scores the nine areas, runs the ones
-that matter and merges their findings.
+**Code: one specialist per area.** A task that touches several areas gets one skill per area.
 
 | Skill | Use it when the prompt… |
 |---|---|
-| **functionality** | builds a feature, fixes a bug, writes tests - business logic, edge cases, state, error paths |
+| **functionality** | builds a feature, fixes a bug - business logic, edge cases, state, error paths |
+| **testing** | writes, fixes or organises tests and quality gates: unit and integration tests, stand-ins, the fixture, CI test steps |
+| **rust-backend** | changes the Rust below the window: use cases and their undo, wiring, SQL Server (tiberius), Tokio and async, `dnnmanager.db` |
+| **backend** | is about databases and SQL: SQL Server scripts, DNN's database, the `dnnmanager.db` schema |
 | **security** | touches elevation, credentials, SQL, the hosts file, downloads and updates, file and zip handling |
 | **reliability** | is about failure and recovery: undo/rollback, timeouts, retries, cancel and quit, partial state |
-| **performance** | is about speed or resource use: UI-thread work, the monitor, logs, copies, memory |
-| **usability** | changes the UI or its wording: flows, error messages, keyboard, contrast, screen readers |
-| **maintainability** | refactors or cleans up: duplication, long methods, naming, tests, tech debt |
-| **architecture** | changes structure: layers, abstractions, module boundaries, ADRs |
+| **performance** | is about speed or resource use: UI-thread work, the monitor, logs, copies, memory, queries |
+| **usability** | changes the window (GPUI) or its wording: flows, error messages, keyboard, contrast, screen readers, spacing |
+| **frontend** | builds or changes a web page (HTML/CSS/JS) - not DNN Manager's window, which is GPUI: use usability for that |
+| **maintainability** | refactors or cleans up: duplication, long methods, naming, warnings, dependencies, tech debt |
+| **architecture** | changes structure: crates and layers, abstractions, module boundaries, ADRs |
 | **compliance** | handles personal data or secrets at rest: backups, exports, logs, the clipboard |
-| **operations** | touches CI, the release workflow, the packages (`Packager.toml`), self-update, logging or settings storage |
-| **orchestrator** | asks for a review, an audit or "run all skills", or carries `#all`, `#eco`, `#sync`, `#fix`, `#deeper` or a dimension tag such as `#security` |
+| **operations** | touches CI, the release workflow, the packages (`Packager.toml`), the VS Code tasks, self-update, logging or settings storage |
+| **orchestrator** | starts any task: picks and loads the skills above that fit it |
 
 **Docs and releases.**
 
