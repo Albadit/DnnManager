@@ -481,7 +481,7 @@ impl DnnUpgradePathDialog {
         self.ids.clear();
         self.open = None;
         let mut sorted: Vec<&DnnPathVersion> = path.iter().collect();
-        sorted.sort_by(|a, b| b.version.cmp(&a.version));
+        sorted.sort_by_key(|v| std::cmp::Reverse(v.version));
         for version in sorted {
             let row = self.row(Some(version), cx);
             self.push(row, false);

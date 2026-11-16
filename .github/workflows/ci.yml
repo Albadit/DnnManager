@@ -2,8 +2,10 @@
 # only from a commit this passed.
 #
 #   windows  build, the tests, clippy - DNN Manager's real platform (IIS)
-#   linux    build and the tests - the app opens there, without IIS
-#   macos    build - the app opens there, without IIS
+#   linux    build, the tests, clippy - the app opens there, without IIS
+#   macos    build, clippy - the app opens there, without IIS
+#
+# A build must be clean: a warning from the compiler or from clippy fails the job (RUSTFLAGS and -D warnings).
 name: CI
 
 on:
@@ -21,6 +23,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  RUSTFLAGS: -D warnings
 
 jobs:
   windows:
@@ -34,11 +37,11 @@ jobs:
       - name: Rust (rust-toolchain.toml)
         run: rustup toolchain install
       - name: Build
-        run: cargo build --workspace --locked
+        run: cargo build --workspace --all-targets --locked
       - name: Tests
         run: cargo test --workspace --locked
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   linux:
     name: Linux
@@ -54,11 +57,13 @@ jobs:
       - name: GPUI's build dependencies
         run: bash scripts/linux-deps.sh
       - name: Rust
-        run: rustup toolchain install stable --profile minimal
+        run: rustup toolchain install stable --profile minimal --component clippy
       - name: Build
-        run: cargo build --workspace --locked
+        run: cargo build --workspace --all-targets --locked
       - name: Tests
         run: cargo test --workspace --locked
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   macos:
     name: macOS
@@ -71,6 +76,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Rust
-        run: rustup toolchain install stable --profile minimal
+        run: rustup toolchain install stable --profile minimal --component clippy
       - name: Build
-        run: cargo build --workspace --locked
+        run: cargo build --workspace --all-targets --locked
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings

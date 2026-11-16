@@ -103,6 +103,9 @@ enum Drag {
     Panel { start_y: gpui::Pixels, start_height: gpui::Pixels },
 }
 
+/// What runs once the What's new dialog at the start has gone (the guide).
+type AfterNotes = Box<dyn FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>)>;
+
 /// The sidebar is dragged between these (`MainWindow.Layout.cs`); under half the smallest it closes.
 const MIN_SIDEBAR: f32 = 160.0;
 const MAX_SIDEBAR: f32 = 600.0;
@@ -150,7 +153,7 @@ pub struct Workspace {
     /// The store's failures already seen.
     failures_seen: u64,
     /// What follows the What's new dialog at the start (the guide).
-    after_notes: Option<Box<dyn FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>)>>,
+    after_notes: Option<AfterNotes>,
     /// The command palette, while it is open.
     palette: Option<Entity<Palette>>,
     /// The dialog shown over the window (one at a time, as WPF's modal windows), and what listens to it.
@@ -664,7 +667,7 @@ impl Workspace {
     pub(crate) fn customize_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let weak = cx.entity().downgrade();
         let refresh_weak = weak.clone();
-        let refresh: std::rc::Rc<dyn Fn(&mut App) -> Vec<PaletteItem>> =
+        let refresh: crate::palette::RefreshItems =
             std::rc::Rc::new(move |cx| refresh_weak.upgrade().map(|ws| layout_items(&ws, cx)).unwrap_or_default());
         let reset_weak = weak.clone();
         let reset: std::rc::Rc<dyn Fn(&mut App)> = std::rc::Rc::new(move |cx| {

@@ -108,10 +108,12 @@ fn main() {
     if fixture.is_none() && dnnm_system::single_instance::hand_off_to_running() {
         return;
     }
-    if !windows_security::is_elevated() && std::env::var_os(NO_ELEVATE).is_none() && fixture.is_none() {
-        if windows_security::relaunch_elevated(&own_args()) {
-            return;
-        }
+    if !windows_security::is_elevated()
+        && std::env::var_os(NO_ELEVATE).is_none()
+        && fixture.is_none()
+        && windows_security::relaunch_elevated(&own_args())
+    {
+        return;
     }
 
     // Numbers as the WPF app shows them: in the user's own separators (.NET formats in the current culture).

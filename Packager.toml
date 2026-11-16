@@ -1,6 +1,7 @@
 # How cargo-packager makes DNN Manager's installers: .msi (WiX) on Windows, .dmg on macOS, .deb on Linux.
-# The release (.github/workflows/release.yml) and the VS Code task "Package" run it after `cargo build --release`:
-#   copy target/release/DnnManager.exe into dist, then: cargo packager --release --formats wix --out-dir dist
+# The release (.github/workflows/release.yml) and the VS Code task "Publish" (scripts/publish.ps1, Installer) run it
+# after `cargo build --release`, with the exe copied into the output folder first:
+#   cargo packager --release --formats wix --out-dir dist
 # See .docs/releasing.md.
 
 name = "dnnmanager"

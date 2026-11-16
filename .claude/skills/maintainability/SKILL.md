@@ -1,10 +1,9 @@
 ---
 name: maintainability
 description: >-
-  Code quality and maintainability analysis and refactoring: readability, code smells, complexity metrics, naming and
-  vocabulary consistency, duplication, test quality and coverage, documentation, technical debt, dependency health and
-  conventions. Use for code-quality reviews, refactoring, cleaning up dead or duplicated code, and reducing technical
-  debt.
+  Improves code quality without changing behaviour: readability, naming, duplication, dead code, complexity and
+  long files, code smells, lint and type-safety debt, dependency hygiene and conventions. Use for "clean up the
+  codebase", refactoring for clarity, removing unused code or dependencies, and reducing technical debt.
 ---
 
 # Maintainability
@@ -15,10 +14,15 @@ completeness and dependency health. Code smells are warning signs that code will
 them raises the risk of bugs and compounds technical debt. Every finding must cite the specific smell or metric
 violated, its impact on development velocity, and an actionable refactoring with an effort estimate.
 
+## Project standards
+
+If the repository has `docs/website_design_and_development_standards.md` or `docs/backend_design_and_development_standards.md`,
+read the sections on this area before starting (website standards sections 4 and 5; backend standards section 4); `CLAUDE.md` says how this codebase applies them.
+
 ## Mode
 
 This skill both analyses and implements. Analyse and report by default. When the request is to build, fix or
-change something, or carries `#fix`, also make the changes: fix Critical and High findings directly and list
+change something, also make the changes: fix Critical and High findings directly and list
 Medium and Low ones in the report.
 
 ## What to cover

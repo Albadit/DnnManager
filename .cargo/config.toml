@@ -1,0 +1,7 @@
+# Cargo's settings for this repository.
+
+# Cargo's "future incompatibility" report is about GPUI's own dependency proc-macro-error2 2.0.1 (gpui -> stacksafe
+# -> stacksafe-macro), not our code: it can only go when GPUI updates it. Off, so a clean build prints nothing; run
+# `cargo report future-incompatibilities` to see it, and remove this once GPUI no longer pulls that crate in.
+[future-incompat-report]
+frequency = "never"

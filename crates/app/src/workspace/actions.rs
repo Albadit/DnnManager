@@ -27,6 +27,9 @@ use dnnm_wiring::{
 };
 
 use super::Workspace;
+
+/// An operation's work, run on its own thread.
+type OperationWork = Box<dyn FnOnce(&mut dnnm_application::operation::Operation) -> Result<(), String> + Send>;
 use crate::pages::projects::ProjectRun;
 use crate::store::ToastKind;
 
@@ -179,7 +182,7 @@ impl Workspace {
                         .await;
                     let _ = weak.update_in(cx, |ws, window, cx| {
                         let tester: dnnm_dialogs::database_connection::ConnectionTester =
-                            Arc::new(|c, l| connection::test_connection(c, l));
+                            Arc::new(connection::test_connection);
                         let view =
                             cx.new(|cx| DatabaseConnectionDialog::new(&name, current, &login, defaults, tester, window, cx));
                         let directory = p.directory.clone();
@@ -359,7 +362,7 @@ impl Workspace {
         let store = self.store.read(cx);
         let Some(p) = store.projects.iter().find(|p| p.name == name).cloned() else { return };
         let services = store.services();
-        let (title, toast, work): (String, String, Box<dyn FnOnce(&mut dnnm_application::operation::Operation) -> Result<(), String> + Send>) =
+        let (title, toast, work): (String, String, OperationWork) =
             match run {
                 ProjectRun::Backup(kind) => {
                     let (request, folder) = export_project::backup_request(&name, &p.directory, kind, backups::now());

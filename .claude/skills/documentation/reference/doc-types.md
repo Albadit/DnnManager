@@ -1,5 +1,12 @@
 # Documentation
 
+## Contents
+
+- Structure (the layout of README, user guide and `docs/`)
+- What each document holds: User guide, README, Architecture, Database, API, Configuration, Development, Testing,
+  Deployment / releasing, Troubleshooting entries, Security, External systems, Architecture Decision Records
+- Style, Accuracy, Code comments
+
 Documentation is part of the implementation. Update it whenever architecture, functionality, configuration, data
 structure, APIs, setup, deployment or important behaviour changes - in the same piece of work.
 

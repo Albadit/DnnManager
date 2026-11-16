@@ -30,6 +30,9 @@ pub fn bind_keys(cx: &mut App) {
 
 pub type ItemAction = Rc<dyn Fn(&mut Window, &mut App)>;
 
+/// Builds a settings list's items again (after one was changed).
+pub type RefreshItems = Rc<dyn Fn(&mut App) -> Vec<PaletteItem>>;
+
 /// One row: its title, a detail on the right (or its group's name on the group's first row), a shortcut.
 #[derive(Clone)]
 pub struct PaletteItem {
@@ -133,7 +136,7 @@ pub enum Mode {
     Settings {
         title: SharedString,
         prompt: SharedString,
-        refresh: Rc<dyn Fn(&mut App) -> Vec<PaletteItem>>,
+        refresh: RefreshItems,
         reset: Rc<dyn Fn(&mut App)>,
         items: Vec<PaletteItem>,
     },

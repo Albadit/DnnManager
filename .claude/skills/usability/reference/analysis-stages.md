@@ -5,10 +5,10 @@
 - Analysis Process (10 Stages)
   - Stage 1: User Flow Mapping and Consistency Audit
   - Stage 2: Cognitive Load and Progressive Disclosure
-  - Stage 3: Accessibility - Perceivable (WCAG 2.1 AA)
-  - Stage 4: Accessibility - Operable (WCAG 2.1 AA)
-  - Stage 5: Accessibility - Understandable (WCAG 2.1 AA)
-  - Stage 6: Accessibility - Robust (WCAG 2.1 AA)
+  - Stage 3: Accessibility - Perceivable (WCAG 2.2 AA)
+  - Stage 4: Accessibility - Operable (WCAG 2.2 AA)
+  - Stage 5: Accessibility - Understandable (WCAG 2.2 AA)
+  - Stage 6: Accessibility - Robust (WCAG 2.2 AA)
   - Stage 7: Error Messages and User Feedback
   - Stage 8: API Ergonomics and Developer Experience
   - Stage 9: CLI Interface Ergonomics
@@ -38,7 +38,7 @@
   - Navigation affordances are clear - users can tell where they are and where they can go
   - Complex workflows use step indicators, progress bars, or breadcrumbs
 
-### Stage 3: Accessibility - Perceivable (WCAG 2.1 AA)
+### Stage 3: Accessibility - Perceivable (WCAG 2.2 AA)
 
 **3a. Non-Text Content (WCAG 1.1.1):**
 - Every informative image has descriptive alt text conveying its meaning or function
@@ -62,7 +62,7 @@
 - Captions provided for pre-recorded audio/video (WCAG 1.2.2)
 - Audio descriptions for pre-recorded video (WCAG 1.2.5)
 
-### Stage 4: Accessibility - Operable (WCAG 2.1 AA)
+### Stage 4: Accessibility - Operable (WCAG 2.2 AA)
 
 **4a. Keyboard Accessibility (WCAG 2.1.1):**
 - ALL functionality is operable via keyboard - no mouse-only interactions
@@ -76,6 +76,16 @@
 - Focus indicator contrast meets 3:1 ratio with adjacent colors (WCAG 1.4.11)
 - Focus is managed correctly on dynamic content changes (modals trap focus, return focus on close)
 - `:focus` styles are not suppressed (`outline: none` without replacement is a HIGH finding)
+- **WCAG 2.4.11 Focus Not Obscured (2.2)**: the focused element is not hidden behind sticky headers, cookie banners,
+  toasts or other overlays
+
+**4b2. Pointer input (WCAG 2.2):**
+- **2.5.8 Target Size (Minimum)**: targets at least 24 x 24 CSS px, or spaced so a 24 px circle around each does not
+  overlap another (inline links in text are exempt)
+- **2.5.7 Dragging Movements**: every drag (sortable lists, sliders, resizers) has a single-pointer alternative such as
+  buttons or a menu
+- **2.5.3 Label in Name**: the accessible name contains the visible label text, starting with it where possible
+  (voice control users say what they see)
 
 **4c. Navigation Aids:**
 - Skip navigation links provided for repetitive content (WCAG 2.4.1)
@@ -83,7 +93,7 @@
 - Headings and labels describe topic or purpose (WCAG 2.4.6)
 - Sufficient time provided for interactions - no auto-advancing without user control (WCAG 2.2.1)
 
-### Stage 5: Accessibility - Understandable (WCAG 2.1 AA)
+### Stage 5: Accessibility - Understandable (WCAG 2.2 AA)
 
 **5a. Language and Readability:**
 - Page language is identified via `lang` attribute on `<html>` (WCAG 3.1.1)
@@ -99,8 +109,17 @@
 - Labels are programmatically associated with inputs (`for`/`id` or wrapping `<label>`)
 - ARIA attributes are used correctly so screen readers announce field purpose
 
-### Stage 6: Accessibility - Robust (WCAG 2.1 AA)
-- Valid, semantic HTML (correct heading hierarchy, landmark regions, lists, tables)
+**5c. Help, repeated input and sign-in (WCAG 2.2):**
+- **3.2.6 Consistent Help**: help (contact details, support link, chat) appears in the same relative place on every
+  page that offers it
+- **3.3.7 Redundant Entry**: information already entered in the same process is filled in or selectable, not asked
+  for again (except for security re-confirmation)
+- **3.3.8 Accessible Authentication (Minimum)**: sign-in needs no cognitive test - paste and password managers work,
+  or an alternative (passkey, e-mail link) exists; a CAPTCHA needs a non-cognitive alternative
+
+### Stage 6: Accessibility - Robust (WCAG 2.2 AA)
+- Valid, semantic HTML (correct heading hierarchy, landmark regions, lists, tables); 4.1.1 Parsing is obsolete in
+  WCAG 2.2, so duplicate IDs and markup errors count only where they break the accessible name, role or state
 - ARIA attributes used correctly - no conflicting or redundant ARIA
 - Custom components follow WAI-ARIA Authoring Practices (roles, states, properties, keyboard interaction patterns)
 - Compatible with major assistive technologies (screen readers: NVDA, JAWS, VoiceOver; magnifiers; switch devices)

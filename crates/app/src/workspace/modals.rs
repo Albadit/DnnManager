@@ -43,6 +43,9 @@ pub(crate) fn toast_kind(notice: Notice) -> ToastKind {
     }
 }
 
+/// Takes the container volume's old sa password (Set up docker-compose), on the operation's thread.
+type AdoptPassword = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+
 const UNSAVED: &str = "The settings have unsaved changes. Close them and lose the changes?";
 
 impl Workspace {
@@ -212,7 +215,7 @@ impl Workspace {
                 let services = self.store.read(cx).services();
                 // The volume's old password adopted: saved through the store, on the UI thread.
                 let (tx, rx) = std::sync::mpsc::channel::<String>();
-                let adopt: Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync> = Arc::new(move |password: &str| {
+                let adopt: AdoptPassword = Arc::new(move |password: &str| {
                     tx.send(password.to_string()).map_err(|e| e.to_string())
                 });
                 let store = self.store.downgrade();

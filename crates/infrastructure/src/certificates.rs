@@ -119,7 +119,8 @@ pub fn find(_thumbprint: &str, _store: &str) -> Option<IisCertificate> {
 }
 
 /// The IPv4 address http.sys keys a binding's certificate by: "*" (and an IPv6 address, which DNN sites don't use
-/// for https) is 0.0.0.0, every address.
+/// for https) is 0.0.0.0, every address. Windows only: http.sys is asked only there.
+#[cfg(windows)]
 fn ipv4(address: &str) -> [u8; 4] {
     address.parse::<std::net::Ipv4Addr>().map(|a| a.octets()).unwrap_or([0, 0, 0, 0])
 }

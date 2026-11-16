@@ -257,7 +257,7 @@ pub fn extract_zip(
     let mut entries = Vec::new();
     for i in 0..zip.len() {
         let entry = zip.by_index_raw(i).map_err(|e| failed(format!("A file in the zip is damaged: {e}")))?;
-        let raw = entry.name().to_string();
+        let raw = entry.name().map_err(|e| failed(format!("A file in the zip has an unreadable name: {e}")))?.to_string();
         if !safe_zip::is_folder(&raw) {
             entries.push((i, safe_zip::name(&raw), entry.size()));
         }
@@ -330,7 +330,7 @@ pub fn remove_files_not_in_zip(
     let mut zip = zip::ZipArchive::new(file).map_err(|_| invalid())?;
     let mut names = Vec::new();
     for i in 0..zip.len() {
-        let raw = zip.by_index_raw(i).map_err(|_| invalid())?.name().to_string();
+        let raw = zip.by_index_raw(i).map_err(|_| invalid())?.name().map_err(|_| invalid())?.to_string();
         if !safe_zip::is_folder(&raw) {
             names.push(safe_zip::name(&raw));
         }

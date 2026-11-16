@@ -393,6 +393,7 @@ fn leave_password_on_clipboard(ssms: &Ide, database: &SiteSqlConnection, host: &
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn ide(name: &str, opens_solution: bool, major: u32) -> Ide {
         Ide {

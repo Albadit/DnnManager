@@ -11,6 +11,7 @@
 #              linux-x86_64, linux-aarch64 (the last two are amd64 and arm64 under the other names, as the release
 #              publishes them: DnnManager-linux-x86_64.deb, DnnManager-linux-aarch64.deb)
 # The task's picker lists them itself (.vscode/tasks.json, input publishPlatforms).
+# Every build is warning-free (RUSTFLAGS=-D warnings): a warning stops it.
 param(
     [ValidateSet("executable", "installer")][string]$Kind = "executable",
     [string[]]$Platform = @()
@@ -74,8 +75,13 @@ foreach ($p in $Platform) {
     if ($p -eq "windows-arm64") {
         Write-Host "windows-arm64 needs Visual Studio's 'MSVC ARM64 build tools' component; without it the link step fails."
     }
-    cargo build --release -p dnnmanager --target $t.Triple
-    if ($LASTEXITCODE -ne 0) { throw "The build for $p failed." }
+
+    # Warnings are errors: a build that warns isn't published.
+    $env:RUSTFLAGS = "-D warnings"
+    cargo build --release --locked -p dnnmanager --target $t.Triple
+    $built_ok = $LASTEXITCODE -eq 0
+    Remove-Item Env:RUSTFLAGS -ErrorAction SilentlyContinue
+    if (-not $built_ok) { throw "The build for $p failed (a warning counts as an error)." }
 
     New-Item -ItemType Directory -Force dist | Out-Null
     $built = "target/$($t.Triple)/release/DnnManager$($t.Ext)"

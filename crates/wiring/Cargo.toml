@@ -20,14 +20,14 @@ log.workspace = true
 # (roxmltree for where it is), the diagnostics records, and tiberius' cells for the dates and decimals it reads.
 dnnm-diagnostics = { path = "../diagnostics" }
 roxmltree.workspace = true
-tiberius = { version = "0.12", default-features = false, features = ["tds73"] }
+tiberius = { version = "0.13", default-features = false, features = ["tds73"] }
 
 # New project: the install's start time for DNN's warm-up (a chrono time), and SqlPasswords.New for the site's login.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-getrandom = "0.3"
+getrandom = "0.4"
 
 # Backups, Export for deployment and Restore: the zip of a site read and its web.config replaced in it.
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile.workspace = true

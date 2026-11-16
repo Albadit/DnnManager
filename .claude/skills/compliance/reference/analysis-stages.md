@@ -5,7 +5,7 @@
 - Analysis Process (12 Stages)
   - Stage 1: Data Inventory and Classification
   - Stage 2: Lawful Basis and Purpose Limitation
-  - Stage 3: Data Minimization in AI Pipelines
+  - Stage 3: Data Minimization (and AI Pipelines)
   - Stage 4: Transparency, Notice, and AI-Specific Disclosure
   - Stage 5: User Rights as Working Technical Systems
   - Stage 6: Vendor and Processor Governance
@@ -35,7 +35,17 @@
 - Check compatibility of any secondary use against original purpose
 - Verify that higher-risk AI uses have structured **pre-launch assessment** (DPIA under GDPR Article 35, CPPA risk assessment for automated technologies)
 
-### Stage 3: Data Minimization in AI Pipelines
+### Stage 3: Data Minimization (and AI Pipelines)
+
+**3a. Every system (GDPR Art. 5(1)(c), 5(1)(e)):**
+- Each stored personal-data field has a purpose; fields nobody reads are a finding
+- Forms ask only for what the purpose needs; optional fields are marked optional
+- Logs, error reports, analytics and exports carry identifiers only where needed (IDs instead of names and e-mail
+  addresses; redaction before writing)
+- Retention is defined per data class and enforced by a job, not by policy text; backups follow the same clock
+- Test, seed and fixture data are synthetic, never copies of production records
+
+**3b. AI pipelines (where the system sends data to a model):**
 - Every personal-data element sent into prompts, tools, retrieval, logging, monitoring, or training must have a specific justified purpose
 - Put a **policy gate in front of prompt assembly**:
   - Whitelist only task-relevant fields into prompts and retrieval

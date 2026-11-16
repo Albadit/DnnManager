@@ -17,7 +17,9 @@ use crate::store::ToastKind;
 const ASK_AGAIN: Duration = Duration::from_secs(10 * 60);
 
 fn current() -> updates::Version {
-    updates::Version::parse(super::help::VERSION).unwrap_or(updates::Version { major: 0, minor: 0, build: None, revision: None })
+    // A pre-release's version has a suffix (2.6.0-rc1): compared by its numbers, as the tags are.
+    updates::try_parse_version(super::help::VERSION)
+        .unwrap_or(updates::Version { major: 0, minor: 0, build: None, revision: None })
 }
 
 impl Workspace {

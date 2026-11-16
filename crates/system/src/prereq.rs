@@ -372,6 +372,7 @@ mod tests {
         assert_eq!(states.len(), 3);
     }
 
+    #[cfg(windows)]
     #[test]
     fn says_a_restart_only_when_windows_says_so() {
         let missing = vec![

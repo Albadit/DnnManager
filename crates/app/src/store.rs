@@ -131,6 +131,9 @@ struct Snapshot {
     all_sites: Option<Vec<(String, dnnm_application::iis::IisSiteRuntime)>>,
 }
 
+/// What runs when the operation ends, with how it ended.
+type OnDone = Box<dyn FnOnce(&Outcome, &mut App)>;
+
 pub struct Store {
     pub settings: Settings,
     /// The settings couldn't be read: the defaults are used and nothing is saved over the database.
@@ -166,7 +169,7 @@ pub struct Store {
     /// Sites removed by the running operation: keep warm lets them go when it ends.
     keep_warm_forget: Vec<String>,
     /// What runs when the operation ends, with how it ended (Settings' "Set up IIS" refreshing its card).
-    on_done: Option<Box<dyn FnOnce(&Outcome, &mut App)>>,
+    on_done: Option<OnDone>,
     /// Keep warm (`KeepWarmService`): requests the sites kept warm so IIS doesn't shut them down for being idle.
     keep_warm: Arc<KeepWarmService>,
     /// The day's log file gets every operation's lines, as the Output tab does (`ActivityLog`).

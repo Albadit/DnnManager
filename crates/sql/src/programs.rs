@@ -519,6 +519,7 @@ pub mod registry {
         }
     }
 
+    #[cfg(windows)]
     const MACHINE_ENVIRONMENT: &str = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
 
     /// A variable of the computer's (HKLM), as written.
@@ -915,6 +916,12 @@ mod job {
             Self
         }
         pub fn terminate(&self) {}
+    }
+
+    // Nothing to close off Windows; dropped like the Windows job, where dropping ends the processes it holds.
+    #[cfg(not(windows))]
+    impl Drop for Job {
+        fn drop(&mut self) {}
     }
 }
 

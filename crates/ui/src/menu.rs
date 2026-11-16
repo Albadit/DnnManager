@@ -13,6 +13,9 @@ use crate::{Pad, Tooltip, icon, icons};
 
 pub type MenuAction = Rc<dyn Fn(&mut Window, &mut App)>;
 
+/// Called when the mouse rests on a submenu's item (its index), or leaves them (None).
+pub type HoverSubmenu = Rc<dyn Fn(Option<usize>, &mut Window, &mut App)>;
+
 /// One entry of a menu.
 #[derive(Clone)]
 pub enum MenuItem {
@@ -102,8 +105,8 @@ fn list(
     id: impl Into<ElementId>,
     items: &[MenuItem],
     open: Option<usize>,
-    on_close: Rc<dyn Fn(&mut Window, &mut App)>,
-    on_hover_submenu: Rc<dyn Fn(Option<usize>, &mut Window, &mut App)>,
+    on_close: MenuAction,
+    on_hover_submenu: HoverSubmenu,
     cx: &App,
 ) -> gpui::Stateful<gpui::Div> {
     let theme = Theme::get(cx);
@@ -186,7 +189,7 @@ fn list(
                         .child(icon(icons::CHEVRON_RIGHT, 9.0, c.text_muted, cx)),
                 );
                 if is_open {
-                    let noop: Rc<dyn Fn(Option<usize>, &mut Window, &mut App)> = Rc::new(|_, _, _| {});
+                    let noop: HoverSubmenu = Rc::new(|_, _, _| {});
                     entry = entry.child(
                         div().absolute().top(px(-5.0)).left_full().child(list(
                             SharedString::from(format!("{id}-sub-{i}")),

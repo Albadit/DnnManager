@@ -1,10 +1,10 @@
 ---
 name: performance
 description: >-
-  Performance analysis and optimisation: SLOs and per-stage budgets, tracing and profiling, algorithmic complexity,
-  database queries (N+1, plans, indexes, pooling), concurrency and blocking I/O, memory and leaks, caching and
-  invalidation, rate limits, backpressure and overload, LLM latency and token cost, load tests. Use for finding
-  bottlenecks, speeding up slow pages, queries or code, scalability assessments, and implementing optimisations.
+  Measures and improves speed and resource use: slow pages and Core Web Vitals, bundle size, slow queries, missing
+  or excess indexes, N+1 and round trips, caching and invalidation, concurrency, memory, rate limits and load
+  tests. Use for "optimize the database", "improve website performance", "this page is slow", scalability checks
+  and any optimisation, always measuring before and after.
 ---
 
 # Performance
@@ -13,10 +13,15 @@ Find bottlenecks, recommend and implement optimisations, and keep resource use e
 system property defined by explicit SLOs, measured with distributed tracing and profiling, and validated with load
 tests and quality evals. Never optimise without measuring first.
 
+## Project standards
+
+If the repository has `docs/website_design_and_development_standards.md` or `docs/backend_design_and_development_standards.md`,
+read the sections on this area before starting (website standards section 8; backend standards section 8); `CLAUDE.md` says how this codebase applies them.
+
 ## Mode
 
 This skill both analyses and implements. Analyse and report by default. When the request is to build, fix or
-change something, or carries `#fix`, also make the changes: fix Critical and High findings directly and list
+change something, also make the changes: fix Critical and High findings directly and list
 Medium and Low ones in the report.
 
 ## What to cover
@@ -41,6 +46,18 @@ Medium and Low ones in the report.
 Work through these stages. The questions and checks for each are in [reference/analysis-stages.md](reference/analysis-stages.md):
 read all of it for a full-scope review, or only the stages that match a focused scope.
 
+1. SLO Definition and Performance Budgets
+2. Distributed Tracing and Observability Baseline
+3. CPU and Memory Profiling
+4. Algorithmic Complexity Analysis
+5. Model-Call Latency and Token Economics (AI/LLM workloads only)
+6. Database and Query Performance
+7. Retrieval and Vector Search Performance (AI/RAG workloads only)
+8. Concurrency, Batching, and Parallelization
+9. Memory, Allocations, and GC Pressure
+10. Caching Strategy and Invalidation
+11. Rate Limiting, Backpressure, and Overload Protection
+12. Benchmarks, Load Tests, and Quality Validation
 
 ## Reference
 

@@ -13,15 +13,15 @@ idna = "1"
 log.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 ureq = "3"
 
 [target.'cfg(windows)'.dependencies]
-base64 = "0.22"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+base64 = "0.23"
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies.windows]
-version = "0.61"
+version = "0.62"
 features = [
     "Wdk_System_Threading",
     "Win32_Foundation",

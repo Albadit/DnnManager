@@ -75,7 +75,7 @@ mod tests {
         drop(op);
         let mut archive = zip::ZipArchive::new(std::fs::File::open(&zip).unwrap()).unwrap();
         let mut names: Vec<String> =
-            (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().replace('\\', "/")).collect();
+            (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().unwrap().replace('\\', "/")).collect();
         names.sort();
         assert_eq!(names, ["App_Data/keep.txt", "_backup.filter", "bin/DotNetNuke.dll", "web.config"]);
         assert!(

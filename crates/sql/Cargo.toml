@@ -12,28 +12,28 @@ dnnm-infrastructure.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "io-util"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
-sha1 = "0.10"
-sha2 = "0.10"
-md-5 = "0.10"
-hmac = "0.12"
-base64 = "0.22"
-getrandom = "0.3"
+sha1 = "0.11"
+sha2 = "0.11"
+md-5 = "0.11"
+hmac = "0.13"
+base64 = "0.23"
+getrandom = "0.4"
 
 # On Windows: TDS over TCP and named pipes; Windows authentication through SSPI; TLS through Windows' own (schannel),
 # so "a certificate Windows trusts" means what it means for SqlClient.
 [target.'cfg(windows)'.dependencies.tiberius]
-version = "0.12"
+version = "0.13"
 default-features = false
 features = ["tds73", "winauth", "native-tls", "sql-browser-tokio"]
 
 # Elsewhere (macOS, Linux): SQL logins only, TLS through rustls - no OpenSSL to install.
 [target.'cfg(not(windows))'.dependencies.tiberius]
-version = "0.12"
+version = "0.13"
 default-features = false
 features = ["tds73", "rustls", "sql-browser-tokio"]
 
 [target.'cfg(windows)'.dependencies.windows]
-version = "0.61"
+version = "0.62"
 features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_IpHelper",

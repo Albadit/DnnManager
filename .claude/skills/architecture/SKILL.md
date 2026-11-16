@@ -1,11 +1,10 @@
 ---
 name: architecture
 description: >-
-  Software architecture analysis, design and implementation: system purpose and constraints, quality attributes
-  (ATAM), architecture style, component boundaries, integration and API contracts, data ownership and consistency,
-  deployment topology, resilience, observability, testing strategy, cost and ADRs (ISO 42010, arc42, C4,
-  twelve-factor, well-architected). Use for architecture reviews, system design, module structure, comparing
-  architectural options, writing ADRs and architectural refactoring.
+  Designs and restructures systems: module and layer boundaries, dependency direction, API and data contracts,
+  data ownership, integration patterns, deployment topology, ADRs and option comparisons (C4, arc42, ATAM). Use
+  for system design, "how should we structure X", large refactors such as "refactor the authentication system",
+  architecture reviews and choosing between approaches.
 ---
 
 # Architecture
@@ -15,10 +14,15 @@ description, ATAM quality-attribute analysis, arc42 documentation, C4 diagrams, 
 SRE practices and FinOps principles. Be thorough, make every trade-off explicit, and base each conclusion on
 evidence from the code, configuration and documents.
 
+## Project standards
+
+If the repository has `docs/website_design_and_development_standards.md` or `docs/backend_design_and_development_standards.md`,
+read the sections on this area before starting (website standards section 4; backend standards sections 4 and 5); `CLAUDE.md` says how this codebase applies them.
+
 ## Mode
 
 This skill both analyses and implements. Analyse and report by default. When the request is to build, fix or
-change something, or carries `#fix`, also make the changes: fix Critical and High findings directly and list
+change something, also make the changes: fix Critical and High findings directly and list
 Medium and Low ones in the report.
 
 ## What to cover

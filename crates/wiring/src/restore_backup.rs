@@ -136,7 +136,8 @@ pub(crate) fn check_zip(zip: &Path, directory: &Path) -> Option<String> {
     let mut files = Vec::new();
     for i in 0..archive.len() {
         let Ok(entry) = archive.by_index_raw(i) else { return Some(invalid()) };
-        let raw = entry.name().to_string();
+        let Ok(raw) = entry.name() else { return Some(invalid()) };
+        let raw = raw.to_string();
         if !safe_zip::is_folder(&raw) {
             files.push((raw, entry.unix_mode()));
         }

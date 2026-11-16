@@ -22,7 +22,7 @@ cargo clippy --workspace --all-targets
 ```
 
 The VS Code tasks (Ctrl+Shift+B lists them: **Build: Debug**, **Build: Release**, **Run**, **Test**, **Clippy**,
-**Package**, **Publish**, **Release: Github**) run the same. Build into a
+**Publish**, **Release: Github**) run the same. Build into a
 folder of its own (`--target-dir <folder>`) when the IDE is building too.
 
 On Windows DNN Manager needs administrator rights to read IIS's configuration: started without them, it starts
@@ -105,6 +105,13 @@ DNN Manager runs elevated; what the user's account can change is untrusted input
 - **Tests** never change the system: no IIS writes, SQL Server, Docker, hosts file, Credential Manager or the user's
   `dnnmanager.db` - a temporary folder or a stand-in trait; a test that needs a real service is `#[ignore]`d with a
   comment saying what it needs.
+- **Clean builds**: no compiler or clippy warnings, on any system. CI builds with `RUSTFLAGS=-D warnings` and runs
+  `cargo clippy --workspace --all-targets -- -D warnings` on Windows, Linux and macOS; the release and **Publish**
+  build with `-D warnings` too. Code behind
+  `cfg(windows)` must not leave unused items on the other systems. Cargo's future-incompatibility report is off
+  (`.cargo/config.toml`) only because the one it reports is GPUI's own dependency.
+- **Dependencies**: kept at their newest release - `cargo update --dry-run --verbose` lists what is newer, including
+  new major versions (`available: …`), which need a change in `Cargo.toml` and a look at what broke.
 - **Spacing**: no margins and no per-side padding - gaps between elements, one `.p(..)` / `.pad(v, h)` inside a
   container ([design-system.md](design-system.md#spacing)).
 - **Files**: UTF-8 without BOM, CRLF (shell scripts LF); `rustfmt.toml` sets 120 columns. Comments say why, not what.

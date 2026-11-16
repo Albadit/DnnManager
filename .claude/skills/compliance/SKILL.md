@@ -1,11 +1,10 @@
 ---
 name: compliance
 description: >-
-  Regulatory compliance and data protection analysis and fixes: GDPR, CCPA/CPRA, LGPD, HIPAA/HITECH, PCI DSS, SOC 2,
-  SOX and the EU AI Act - field-level data inventory, lawful basis, purpose limitation and minimisation, notice, user
-  rights (access, export, erasure), vendor governance, audit trails and log hygiene. Use for privacy reviews,
-  compliance audits, handling of PII, health or payment data, retention and deletion logic, consent, and implementing
-  compliance fixes.
+  Checks and implements data-protection and regulatory requirements: GDPR and similar laws, personal data
+  inventory, lawful basis, minimisation and retention, user rights (access, export, erasure), consent, audit
+  trails, log hygiene, payment and health data rules (PCI DSS, HIPAA), SOC 2 and the EU AI Act. Use whenever
+  personal data, retention, deletion, consent or audit logging is involved.
 ---
 
 # Compliance
@@ -17,10 +16,15 @@ PCI DSS), adds audit and assurance frameworks (SOC 2, SOX), and now includes AI-
 Every finding must cite the specific regulation and article violated and give actionable remediation with a risk
 assessment.
 
+## Project standards
+
+If the repository has `docs/website_design_and_development_standards.md` or `docs/backend_design_and_development_standards.md`,
+read the sections on this area before starting (backend standards section 7; website standards section 9.4); `CLAUDE.md` says how this codebase applies them.
+
 ## Mode
 
 This skill both analyses and implements. Analyse and report by default. When the request is to build, fix or
-change something, or carries `#fix`, also make the changes: fix Critical and High findings directly and list
+change something, also make the changes: fix Critical and High findings directly and list
 Medium and Low ones in the report.
 
 ## Core Principles
@@ -51,9 +55,10 @@ The highest-performing compliant design is usually the simplest one: define the 
 - Check **AI literacy and staff training** obligations (AI Act, HIPAA, PCI, SOC controls)
 - Assess **dark pattern avoidance** in consent/opt-out UX (CPPA rules, GDPR transparency requirements)
 
-## Three-Plane Architecture for Compliance
+## Three-Plane Architecture for Compliance (systems with AI features)
 
-The best architecture for both compliance and performance is a three-plane design:
+Where personal data can reach a model, the best architecture for both compliance and performance is a three-plane
+design; for a system without AI features, apply the Policy and Evidence planes to its ordinary data flows:
 
 1. **Policy Plane**: Classifies data, selects lawful basis and routing path, chooses approved vendor, decides whether a prompt may include personal/sensitive/health/payment data. This is the gate that enforces purpose limitation and minimization.
 
@@ -80,7 +85,7 @@ read all of it for a full-scope review, or only the stages that match a focused 
 
 1. Data Inventory and Classification
 2. Lawful Basis and Purpose Limitation
-3. Data Minimization in AI Pipelines
+3. Data Minimization (and AI Pipelines)
 4. Transparency, Notice, and AI-Specific Disclosure
 5. User Rights as Working Technical Systems
 6. Vendor and Processor Governance

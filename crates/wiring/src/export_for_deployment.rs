@@ -81,7 +81,7 @@ fn prepare_in(zip_path: &Path, connection_string: &str, https: bool, temp: &Path
     let mut archive =
         zip::ZipArchive::new(std::fs::File::open(zip_path).map_err(|e| error(&e))?).map_err(|e| error(&e))?;
     let names: Vec<String> =
-        (0..archive.len()).map(|i| archive.name_for_index(i).unwrap_or_default().to_string()).collect();
+        (0..archive.len()).map(|i| archive.name_for_index(i).and_then(|n| n.ok()).unwrap_or_default().to_string()).collect();
     let Some(web_config_index) = entry_index(&names, "web.config") else {
         return Err("The site has no web.config.".into());
     };
@@ -320,7 +320,7 @@ mod tests {
                 let mut entry = archive.by_index(i).unwrap();
                 let mut text = String::new();
                 entry.read_to_string(&mut text).unwrap();
-                (entry.name().to_string(), text)
+                (entry.name().unwrap().to_string(), text)
             })
             .collect();
         entries.sort();

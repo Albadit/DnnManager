@@ -511,8 +511,16 @@ pub fn redirect_not_https(target: &str) -> Option<String> {
 fn kept_mismatch(zip_path: &Path, sha256: Option<&str>) -> Option<String> {
     let expected = sha256?;
     let matches = std::fs::File::open(zip_path).ok().and_then(|mut file| {
+        // sha2 0.11's hashers aren't io::Write: the file goes in in blocks.
         let mut hash = Sha256::new();
-        std::io::copy(&mut file, &mut hash).ok()?;
+        let mut block = vec![0u8; 64 * 1024];
+        loop {
+            let read = std::io::Read::read(&mut file, &mut block).ok()?;
+            if read == 0 {
+                break;
+            }
+            hash.update(&block[..read]);
+        }
         Some(hex(&hash.finalize()) == expected)
     });
     if matches == Some(true) {

@@ -3,8 +3,7 @@ name: release-notes
 description: >-
   Writes the release notes for the next DNN Manager release as .docs/release-notes/vX.Y.Z.md (bold summary,
   Highlights, Other changes, Upgrading, Tested), from the commits since the previous tag and real test results - every
-  claim checked against the code - plus the version bump in Cargo.toml and Packager.toml and the release commit's
-  message, ready to paste. The release workflow publishes that file as the GitHub release's notes and What's new shows
+  claim checked against the code - and the commit message for the notes, ready to paste. The release workflow publishes that file as the GitHub release's notes and What's new shows
   it in the app. Use when asked to write, draft, update or review release notes, prepare a release or "the next
   release" - and to redo a release whose tag is already made (a failed release workflow, one more change before
   anyone has it).
@@ -25,8 +24,8 @@ deciding whether to update and what changes for them - not developers.
 
 1. **The version.** The one asked for; when none is, ask. The previous release is the newest tag:
    `git describe --tags --abbrev=0`. When the version's tag exists already, this is a **redo** - see below.
-2. **Raise the version** in both `Cargo.toml` (`[workspace.package] version`) and `Packager.toml` (`version`) - the
-   release workflow refuses a tag that doesn't match `Cargo.toml`.
+2. **The version comes from the tag**, picked in the task **Release: Github** (it suggests the next patch, minor and
+   major after the newest tag); the workflow writes it into the build. Nothing in `Cargo.toml` needs raising.
 3. **Collect what changed**: `git log --no-merges --format="%h %s%n%b" <previous tag>..HEAD`, then the diff
    (`git diff --stat <previous tag>..HEAD`, and the files) wherever a commit is unclear.
 4. **Verify every claim against the code**: UI labels exactly as in the Rust source (`crates/app`, `crates/dialogs`),
@@ -38,14 +37,15 @@ deciding whether to update and what changes for them - not developers.
    (`v2.0.0.md`, `v2.0.0-rc1.md` for a pre-release).
 7. **Write the commit message** (below) and give it in the report.
 8. Report what the notes say, the commit message and what is unverified. Don't commit, tag or publish: the owner
-   commits and runs the VS Code task **Release** (`scripts/release.ps1`), which tags the version and pushes it.
+   commits and pushes the notes, then runs the VS Code task **Release: Github** (type, version, commit, confirm), which
+   tags the commit and pushes the tag; GitHub tests, builds and publishes only when everything passed.
 
 ## Redoing a release
 
-The tag exists but the release failed or one more change is wanted. Check it isn't published
-(`gh release view vX.Y.Z` - a published release is never redone: DNN Manager offers only *newer* versions; recommend
-the next one). Update the notes in place, have the owner commit and push, then run
-`scripts/release.ps1 -Redo`, which moves the tag to the new commit and pushes it again.
+The tag exists but its run failed, so nothing was published. Update the notes in place, have the owner commit and
+push, then either release the next version, or move the tag:
+`scripts/release.ps1 -Label <type> -Version X.Y.Z -Commit <sha> -Confirm yes -Redo`. `-Redo` refuses a published
+release - DNN Manager offers only *newer* versions; recommend the next one then.
 
 ## Structure
 

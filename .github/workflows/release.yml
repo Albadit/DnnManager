@@ -1,18 +1,22 @@
-# Release: pushing a version tag (vX.Y.Z, by the VS Code task "Release" - scripts/release.ps1) builds that tag on
-# GitHub and publishes it. Nothing built on a PC is uploaded. See .docs/releasing.md.
+# Release: pushing a version tag (vX.Y.Z or vX.Y.Z-rc1, made by the VS Code task "Release: Github" -
+# scripts/release.ps1) builds, tests and publishes that tag. Nothing built on a PC is uploaded. See .docs/releasing.md.
 #
-#   check    the tag is the version in Cargo.toml (and Packager.toml)
-#   package  one job per platform: build the release exe and package it with cargo-packager (Packager.toml)
-#              DnnManager-windows-x86_64.msi   DnnManager-windows-arm64.msi
-#              DnnManager-macos-arm64.dmg      DnnManager-macos-x86_64.dmg
-#              DnnManager-linux-amd64.deb      DnnManager-linux-arm64.deb
-#   publish  in the environment "publish" (add a required reviewer there to approve each release): the Linux packages
-#            also under their other names (x86_64 = amd64, aarch64 = arm64), SHA256SUMS.txt, then the release - its
-#            notes from .docs/release-notes/<tag>.md when there is one, labelled as the tag's message says
-#            ("Release-Label: latest | prerelease | none", written by scripts/release.ps1); a tag without one is
-#            Latest, or a pre-release when it has a suffix (v2.0.0-rc1).
+#   plan      the tag is a version; its release type (Latest / Pre-release / None) from the tag's message
+#             ("Release-Label: ..."); no release with that tag exists already
+#   test      Windows, Linux and macOS: build everything, clippy and every test - all with warnings as errors
+#   package   only when every test passed: one job per installer, the tag's version written into the build
+#             (scripts/set-version.py), built clean (-D warnings) and packaged with cargo-packager (Packager.toml):
+#               DnnManager-windows-x86_64.msi   DnnManager-windows-arm64.msi
+#               DnnManager-macos-arm64.dmg      DnnManager-macos-x86_64.dmg
+#               DnnManager-linux-amd64.deb      DnnManager-linux-arm64.deb
+#   publish   only when all six were made, in the environment "publish" (give it a required reviewer to approve each
+#             release): checks that the files are exactly the installers - never an executable -, adds the two .debs
+#             under their other names (x86_64 = amd64, aarch64 = arm64) and SHA256SUMS.txt, uploads them to a draft
+#             release, checks every file arrived, and only then publishes it with its type and notes
+#             (.docs/release-notes/<tag>.md, else GitHub's notes from the commits). A failure removes the draft:
+#             no release is ever left half made.
 #
-# The packages are not code-signed: Windows SmartScreen and macOS Gatekeeper warn on first start.
+# The installers are not code-signed: Windows SmartScreen and macOS Gatekeeper warn on first start.
 name: Release
 
 on:
@@ -29,37 +33,101 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
   TAG: ${{ github.ref_name }}
   # The packager's version, pinned like the actions: a release is built with what was tried.
   PACKAGER_VERSION: 0.11.8
 
 jobs:
-  check:
-    name: Tag matches Cargo.toml
+  plan:
+    name: Plan
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      label: ${{ steps.plan.outputs.label }}
+    steps:
+      - name: Version and release type from the tag
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${TAG#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.]*)?$ ]]; then
+            echo "::error::$TAG isn't a version tag (vX.Y.Z or vX.Y.Z-suffix)."; exit 1
+          fi
+          # The type chosen in VS Code, from the annotated tag's message; a tag without one: Latest, or a pre-release
+          # when it has a suffix.
+          ref=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG")
+          label=""
+          if [ "$(jq -r '.object.type' <<<"$ref")" = "tag" ]; then
+            sha=$(jq -r '.object.sha' <<<"$ref")
+            label=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq '.message' |
+              sed -nE 's/^Release-Label: *([a-z]+).*/\1/p' | head -n 1)
+          fi
+          if [ -z "$label" ]; then case "$version" in *-*) label=prerelease ;; *) label=latest ;; esac; fi
+          case "$label" in latest|prerelease|none) ;; *) echo "::error::Unknown release type '$label'."; exit 1 ;; esac
+          if [ "$label" = prerelease ] && [[ "$version" != *-* ]]; then
+            echo "::error::A pre-release needs a version with a suffix (v$version-rc1)."; exit 1
+          fi
+          if [ "$label" != prerelease ] && [[ "$version" == *-* ]]; then
+            echo "::error::$TAG has a suffix but is labelled $label - a suffix makes it a pre-release."; exit 1
+          fi
+          # A tag released already is never released again.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null | grep -q false; then
+            echo "::error::$TAG is published already."; exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "label=$label" >> "$GITHUB_OUTPUT"
+          echo "Release $TAG - version $version, type $label"
+
+  test:
+    name: Test (${{ matrix.os }})
+    needs: plan
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows
+            runner: windows-2025
+            toolchain: stable-x86_64-pc-windows-msvc
+          - os: linux
+            runner: ubuntu-22.04
+            toolchain: stable
+          - os: macos
+            runner: macos-14
+            toolchain: stable
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+      # A release is clean: a compiler warning fails it.
+      RUSTFLAGS: -D warnings
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-      - name: Compare
-        run: |
-          version=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
-          base="${TAG#v}"; base="${base%%-*}"
-          if [ "$base" != "$version" ]; then
-            echo "::error::The tag $TAG doesn't match the version $version in Cargo.toml."
-            exit 1
-          fi
-          packager=$(grep -m1 '^version = ' Packager.toml | sed -E 's/version = "(.*)"/\1/')
-          if [ "$packager" != "$version" ]; then
-            echo "::error::Packager.toml has version $packager, Cargo.toml $version."
-            exit 1
-          fi
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: bash scripts/linux-deps.sh
+      - name: Rust
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy
+      - name: Build
+        run: cargo build --workspace --all-targets --locked
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests
+        run: cargo test --workspace --locked
 
   package:
     name: ${{ matrix.name }}
-    needs: check
+    needs: [plan, test]
     permissions:
       contents: read
     strategy:
@@ -106,6 +174,7 @@ jobs:
     timeout-minutes: 90
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+      VERSION: ${{ needs.plan.outputs.version }}
     defaults:
       run:
         shell: bash
@@ -126,37 +195,51 @@ jobs:
       - name: cargo-packager
         run: cargo install cargo-packager --version "$PACKAGER_VERSION" --locked
 
-      - name: Build
+      - name: The tag's version into the build
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then python scripts/set-version.py "$VERSION"; else python3 scripts/set-version.py "$VERSION"; fi
+
+      - name: Build (clean, warnings are errors)
+        # RUSTFLAGS only here - not for cargo install above, whose own warnings aren't ours.
+        env:
+          RUSTFLAGS: -D warnings
         run: cargo build --release --locked -p dnnmanager --target ${{ matrix.target }}
 
       - name: Package
-        # cargo-packager takes the exe from its output folder.
+        # cargo-packager takes the executable from its output folder.
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/DnnManager${{ runner.os == 'Windows' && '.exe' || '' }} dist/
           cargo packager --release --target ${{ matrix.target }} --formats ${{ matrix.format }} --out-dir dist
 
-      - name: Name it
+      - name: Name and check the installer
         run: |
           mkdir -p out
           file=$(find dist -maxdepth 2 -name "*.${{ matrix.ext }}" | head -n 1)
-          if [ -z "$file" ]; then echo "::error::No .${{ matrix.ext }} in dist"; ls -R dist; exit 1; fi
+          if [ -z "$file" ]; then echo "::error::No .${{ matrix.ext }} was made"; ls -R dist; exit 1; fi
+          size=$(wc -c < "$file")
+          if [ "$size" -lt 1000000 ]; then echo "::error::$file is only $size bytes"; exit 1; fi
           cp "$file" "out/DnnManager-${{ matrix.name }}.${{ matrix.ext }}"
           ls -l out
 
+      # Only the installer goes on: never the executable.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.name }}
-          path: out/*
+          path: out/DnnManager-${{ matrix.name }}.${{ matrix.ext }}
           if-no-files-found: error
 
   publish:
     name: Publish
-    needs: package
+    needs: [plan, package]
     runs-on: ubuntu-24.04
     environment: publish
     permissions:
       contents: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      LABEL: ${{ needs.plan.outputs.label }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -167,34 +250,55 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Linux names, checksums
+      - name: Exactly the installers
         run: |
           cd artifacts
+          expected="DnnManager-linux-amd64.deb DnnManager-linux-arm64.deb DnnManager-macos-arm64.dmg DnnManager-macos-x86_64.dmg DnnManager-windows-arm64.msi DnnManager-windows-x86_64.msi"
+          actual=$(ls -1 | sort | tr '\n' ' ' | sed 's/ $//')
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::Expected exactly: $expected"; echo "::error::Got: $actual"; exit 1
+          fi
           cp DnnManager-linux-amd64.deb DnnManager-linux-x86_64.deb
           cp DnnManager-linux-arm64.deb DnnManager-linux-aarch64.deb
           sha256sum DnnManager-* > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      - name: Release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Draft release with every file
         run: |
           notes=".docs/release-notes/$TAG.md"
-          args=(--title "DNN Manager ${TAG#v}" --verify-tag)
+          args=(--draft --title "DNN Manager $VERSION" --verify-tag --repo "$GITHUB_REPOSITORY")
           if [ -f "$notes" ]; then args+=(--notes-file "$notes"); else args+=(--generate-notes); fi
-          # The label chosen in VS Code, from the annotated tag's message.
-          sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.sha')
-          type=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.type')
-          label=""
-          if [ "$type" = "tag" ]; then
-            label=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq '.message' | sed -nE 's/^Release-Label: *([a-z]+).*/\1/p' | head -n 1)
+          # A draft a failed run left behind goes first - only a draft: a published release is never touched.
+          state=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null || true)
+          if [ "$state" = true ]; then
+            gh release delete "$TAG" --yes --repo "$GITHUB_REPOSITORY"
+          elif [ "$state" = false ]; then
+            echo "::error::$TAG is published already."; exit 1
           fi
-          if [ -z "$label" ]; then case "$TAG" in *-*) label=prerelease ;; *) label=latest ;; esac; fi
-          echo "Label: $label"
-          case "$label" in
-            latest) args+=(--latest) ;;
-            prerelease) args+=(--prerelease --latest=false) ;;
-            none) args+=(--latest=false) ;;
-            *) echo "::error::Unknown release label '$label'"; exit 1 ;;
+          gh release create "$TAG" artifacts/* "${args[@]}"
+
+      - name: Every file arrived
+        run: |
+          want=$(ls -1 artifacts | sort)
+          got=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | select(.state == "uploaded") | .name' | sort)
+          if [ "$want" != "$got" ]; then
+            echo "::error::The draft doesn't have every file."; echo "want: $want"; echo "got: $got"; exit 1
+          fi
+
+      - name: Publish
+        run: |
+          case "$LABEL" in
+            latest) flags=(--latest --prerelease=false) ;;
+            prerelease) flags=(--prerelease --latest=false) ;;
+            none) flags=(--latest=false --prerelease=false) ;;
           esac
-          gh release create "$TAG" artifacts/* "${args[@]}" --repo "$GITHUB_REPOSITORY"
+          gh release edit "$TAG" --draft=false "${flags[@]}" --repo "$GITHUB_REPOSITORY"
+          echo "Published $TAG ($LABEL): https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
+
+      - name: Remove the draft after a failure
+        if: failure()
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null | grep -q true; then
+            gh release delete "$TAG" --yes --repo "$GITHUB_REPOSITORY"
+            echo "The draft release was removed - nothing was published."
+          fi
