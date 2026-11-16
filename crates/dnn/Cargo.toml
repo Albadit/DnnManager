@@ -1,0 +1,31 @@
+[package]
+name = "dnnm-dnn"
+description = "DNN releases, packages, installs and upgrades for DNN Manager (the C# Github and Dnn folders of DnnManager.Infrastructure, and Application/Upgrades)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+dnnm-domain.workspace = true
+dnnm-application.workspace = true
+dnnm-infrastructure.workspace = true
+roxmltree.workspace = true
+rusqlite.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+regex = "1"
+serde_json = "1"
+sha1 = "0.10"
+sha2 = "0.10"
+getrandom = "0.3"
+ureq = "3"
+url = "2"
+xot = "0.31"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.61"
+features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Registry", "Win32_Security"]
+
+[dev-dependencies]
+tempfile.workspace = true

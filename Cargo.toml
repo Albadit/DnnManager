@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "1.8.7"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+dnnm-domain = { path = "crates/domain" }
+dnnm-application = { path = "crates/application" }
+dnnm-infrastructure = { path = "crates/infrastructure" }
+log = "0.4"
+roxmltree = "0.20"
+rusqlite = { version = "0.37", features = ["bundled"] }
+tempfile = "3"
+
+# xattr 0.2.3 (GPUI's tar reader, through zed-async-tar) doesn't build on Linux with libc 0.2.191, which dropped
+# ENOATTR there. vendor/xattr is 0.2.3 with that one constant mapped to ENODATA (see its src/sys/mod.rs).
+[patch.crates-io]
+xattr = { path = "vendor/xattr" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

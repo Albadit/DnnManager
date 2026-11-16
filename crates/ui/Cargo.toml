@@ -1,0 +1,12 @@
+[package]
+name = "dnnm-ui"
+description = "DNN Manager's theme and controls for GPUI - the design tokens of Themes/*.xaml and the control styles of Themes/Controls."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+dnnm-application.workspace = true
+gpui = "0.2.2"
+unicode-segmentation = "1"

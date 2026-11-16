@@ -1,0 +1,33 @@
+[package]
+name = "dnnm-wiring"
+description = "The use cases joined to what they act on: the application's traits implemented with the IIS, SQL, DNN and Windows crates."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+dnnm-domain.workspace = true
+dnnm-application.workspace = true
+dnnm-infrastructure.workspace = true
+dnnm-sql = { path = "../sql" }
+dnnm-dnn = { path = "../dnn" }
+dnnm-system = { path = "../system" }
+dnnm-keepwarm = { path = "../keepwarm" }
+dnnm-openwith = { path = "../openwith" }
+log.workspace = true
+# Change connection, Change host password and the Details' database read: web.config's SiteSqlServer written in place
+# (roxmltree for where it is), the diagnostics records, and tiberius' cells for the dates and decimals it reads.
+dnnm-diagnostics = { path = "../diagnostics" }
+roxmltree.workspace = true
+tiberius = { version = "0.12", default-features = false, features = ["tds73"] }
+
+# New project: the install's start time for DNN's warm-up (a chrono time), and SqlPasswords.New for the site's login.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+getrandom = "0.3"
+
+# Backups, Export for deployment and Restore: the zip of a site read and its web.config replaced in it.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile.workspace = true

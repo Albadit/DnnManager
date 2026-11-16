@@ -1,0 +1,50 @@
+[package]
+name = "dnnm-system"
+description = "DNN Manager's Windows services: hosts file, secrets, file locks and safe files, sign-in task, prerequisites, self-update, single instance and efficiency mode."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+dnnm-application.workspace = true
+dnnm-infrastructure.workspace = true
+idna = "1"
+log.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+ureq = "3"
+
+[target.'cfg(windows)'.dependencies]
+base64 = "0.22"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.61"
+features = [
+    "Wdk_System_Threading",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authentication_Identity",
+    "Win32_Security_Authorization",
+    "Win32_Security_Credentials",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_Kernel",
+    "Win32_System_Memory",
+    "Win32_System_Registry",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_RestartManager",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+    "Win32_System_Time",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,6 +1,8 @@
 {
-    // Tasks Shell Input fills the pickers of the task "Release" (.vscode/tasks.json) each time it runs.
+    // rust-analyzer for the Rust code; Command Variable gives the task "Publish" its multi-select picker of systems
+    // (VS Code's own pickString chooses only one).
     "recommendations": [
-        "augustocdias.tasks-shell-input"
+        "rust-lang.rust-analyzer",
+        "rioj7.command-variable"
     ]
 }

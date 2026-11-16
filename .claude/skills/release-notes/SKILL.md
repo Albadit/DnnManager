@@ -1,83 +1,51 @@
 ---
 name: release-notes
 description: >-
-  Writes the release notes for the next DNN Manager release as .docs/release-notes/vX.Y.Z.md, in the structure every
-  release uses (bold summary, Highlights, Other changes, Upgrading, Tested, link to the changelog), from the
-  CHANGELOG.md entry, the commits since the previous tag and real test results - every claim checked against the
-  code - and the release commit's message, ready to paste. The VS Code task "Release" publishes that file as
-  the GitHub release's notes. Use when asked to write, draft,
-  update or review release notes, prepare a release or "the next release", or turn the Unreleased changelog entry
-  into notes - and to redo a release whose tag is already made (a failed release workflow, one more change before
-  anyone has it): the notes and changelog updated in place, then the task "Release" with the same version.
+  Writes the release notes for the next DNN Manager release as .docs/release-notes/vX.Y.Z.md (bold summary,
+  Highlights, Other changes, Upgrading, Tested), from the commits since the previous tag and real test results - every
+  claim checked against the code - plus the version bump in Cargo.toml and Packager.toml and the release commit's
+  message, ready to paste. The release workflow publishes that file as the GitHub release's notes and What's new shows
+  it in the app. Use when asked to write, draft, update or review release notes, prepare a release or "the next
+  release" - and to redo a release whose tag is already made (a failed release workflow, one more change before
+  anyone has it).
 ---
 
 # Release notes
 
-The notes for a release are **`.docs/release-notes/vX.Y.Z.md`**. The VS Code task **Release**
-(`.github/scripts/publish-release.ps1`) pushes the version tag, and the release workflow on GitHub
-(`.github/workflows/release.yml`) builds the exes from that tag - this file built into them - and publishes it
-unchanged as the GitHub release's notes (`.github/scripts/release-notes.ps1`). So it is written and committed before
-the release: a commit without it isn't released. [`.docs/release-notes/v1.6.0.md`](../../../.docs/release-notes/v1.6.0.md) is the model: match
-its structure, length and tone.
+The notes for a release are **`.docs/release-notes/vX.Y.Z.md`**. They are used twice:
 
-Readers are **people who use DNN Manager**, deciding whether to update and what changes for them - not developers.
+- the release workflow (`.github/workflows/release.yml`) publishes the file as the GitHub release's notes (without
+  it, GitHub writes notes from the commits);
+- the app embeds every `.docs/release-notes/v*.md` at build time (`crates/dialogs/build.rs`) for **What's new**.
+
+So the file is written and committed **before** the tag is pushed. Readers are **people who use DNN Manager**,
+deciding whether to update and what changes for them - not developers.
 
 ## Workflow
 
-1. **Find the version and the range.** The version is the one asked for; when none is, ask (there is no
-   `<Version>` in `DnnManager.csproj` to raise or read - builds take the newest tag's). The previous release is the newest tag: `git describe --tags --abbrev=0`.
-   When the version's own tag exists already, this is a **redo** - see [Redoing a release](#redoing-a-release)
-   first.
-2. **Collect what changed:**
-   - the `## Unreleased` (or `## vX.Y.Z`) entry in `CHANGELOG.md` - the main source, written by hand;
-   - `git log --no-merges --format="%h %s%n%b" <previous tag>..HEAD` - for what the changelog misses;
-   - the diff (`git diff --stat <previous tag>..HEAD`, then the files) wherever an entry is unclear.
-3. **Verify every claim against the code**: UI labels exactly as in the XAML, settings keys and defaults, paths,
-   numbers. Drop what you can't confirm, or ask. Never describe a change that isn't in the range.
-4. **Get the test results** - run the fast tests and read the counts:
-   `dotnet test tests\DnnManager.IntegrationTests --filter "TestCategory!=Integration" --artifacts-path <temp folder>`.
-   Compare with the previous notes' *Tested* section ("up from N"). Add the integration tests or manual checks only
-   if they were really run - ask the owner what was tested by hand. The integration tests that run real sites (e.g.
-   `DnnUpgradeTests`, DNN upgrades on IIS Express and a SQL Server container) go in as what they did and found, in
-   the user's words: the versions, the content on the site, the result.
-5. **Write `.docs/release-notes/vX.Y.Z.md`** in the structure below. The file name is the tag and the release title,
-   so it must be exactly `v` + the version (`v1.7.0.md`, or `v1.7.0-rc.1.md` for a pre-release). If the changelog
-   entry is still `## Unreleased`, offer to rename it `## vX.Y.Z`.
-6. **Check it**: every relative link resolves, the changelog anchor exists, and
-   `.github\scripts\release-notes.ps1 -Version X.Y.Z -OutFile <temp>\notes.md` shows the notes as GitHub will get
-   them (relative links turned into links to the tag's files).
-7. **Write the commit message** for the release commit (see [Commit message](#commit-message)) and give it in the
-   report, ready to paste.
-8. Report what the notes say, the commit message, and anything left unverified. Don't commit, tag or publish - the
-   owner does, with the VS Code task **Release** (`.github/scripts/publish-release.ps1`, see
-   `.docs/releasing.md`), which picks this file and a commit and pushes the tag; GitHub's release workflow builds
-   both exes and publishes the release - for a redo too: picking a version that is tagged but not published releases
-   it again (below).
+1. **The version.** The one asked for; when none is, ask. The previous release is the newest tag:
+   `git describe --tags --abbrev=0`. When the version's tag exists already, this is a **redo** - see below.
+2. **Raise the version** in both `Cargo.toml` (`[workspace.package] version`) and `Packager.toml` (`version`) - the
+   release workflow refuses a tag that doesn't match `Cargo.toml`.
+3. **Collect what changed**: `git log --no-merges --format="%h %s%n%b" <previous tag>..HEAD`, then the diff
+   (`git diff --stat <previous tag>..HEAD`, and the files) wherever a commit is unclear.
+4. **Verify every claim against the code**: UI labels exactly as in the Rust source (`crates/app`, `crates/dialogs`),
+   settings keys and defaults, paths, numbers. Drop what you can't confirm, or ask.
+5. **Get the test results**: `cargo test --workspace` and the counts; compare with the previous notes' *Tested*.
+   Manual checks only if they were really done - ask the owner what was tested by hand, and on which systems
+   (Windows with IIS, macOS, Linux).
+6. **Write `.docs/release-notes/vX.Y.Z.md`** in the structure below; the file name is exactly `v` + the version
+   (`v2.0.0.md`, `v2.0.0-rc1.md` for a pre-release).
+7. **Write the commit message** (below) and give it in the report.
+8. Report what the notes say, the commit message and what is unverified. Don't commit, tag or publish: the owner
+   commits and runs the VS Code task **Release** (`scripts/release.ps1`), which tags the version and pushes it.
 
 ## Redoing a release
 
-The version's tag is made already - its release workflow failed, or one more change is wanted - and the owner wants
-the same version again, not the next one. The VS Code task **Release** does it when that version is picked
-(`.github/scripts/publish-release.ps1`, see `.docs/releasing.md#release-a-version-again`): its picker marks the
-version *tagged, not published*, and it releases it again from the commit the owner picks - the tag on GitHub is
-deleted and made again there; nothing is amended or pushed, so the changes have to be committed and pushed first (a
-draft the failed run left is reused). It refuses a release that is published, naming the next version.
-
-1. **Is a redo still possible?** Look the release up:
-   `curl -s https://api.github.com/repos/<owner>/<repo>/releases/tags/vX.Y.Z` (the repository is `origin`'s) - a
-   404 means none is published (a draft isn't listed there). When it is published, a redo is refused: DNN Manager
-   updates only to a *newer* version, so whoever installed it would never be offered the redone one. Recommend the
-   next version instead.
-2. **The range** is the tag before it to the newest commit: the previous release is
-   `git describe --tags --abbrev=0 vX.Y.Z^`, and the changes are its commits plus what isn't committed yet
-   (`git status`, `git diff HEAD`) - which the owner commits and pushes before the redo.
-3. **Update in place**: the `## vX.Y.Z` entry in `CHANGELOG.md` (no new heading) and `.docs/release-notes/vX.Y.Z.md`
-   get the new changes where they belong - a new highlight, a line in *Other changes*, an *Upgrading* note for a
-   removed setting or changed behaviour. Run the fast tests again and update *Tested*.
-4. **The commit message**: give one for the commit with the updated notes, in the release format when the themes
-   changed - the redo doesn't rewrite any commit.
-5. **Don't run it**: releasing again deletes the tag on GitHub - only the owner runs **Release**. Say which commit
-   to pick (the newest pushed one with the updated notes) and that the old tag moves there.
+The tag exists but the release failed or one more change is wanted. Check it isn't published
+(`gh release view vX.Y.Z` - a published release is never redone: DNN Manager offers only *newer* versions; recommend
+the next one). Update the notes in place, have the owner commit and push, then run
+`scripts/release.ps1 -Redo`, which moves the tag to the new commit and pushes it again.
 
 ## Structure
 
@@ -91,54 +59,41 @@ draft the failed run left is reused). It refuses a release that is published, na
 ### A theme, named by what the user gets
 - What they can do now, and where (**UI name** in bold).
 
-### Another theme
-- ...
-
 ## Other changes
 - Smaller changes, one line each.
 - Fixed: a bug, described by what the user saw.
 
 ## Upgrading
-Install over X.Y-1.x as usual. Your settings keep their format.
+Install the new package over the old one: the .msi on Windows, the .dmg on macOS, the .deb on Linux. Your settings
+keep their format.
 - Anything the user must do once, or that now works differently.
 
 ## Tested
-- What was checked by hand, against what (e.g. a real DNN 10.3.3 site).
-- All N fast automated tests pass, up from M. New ones cover ...
-
-Full list of changes: [CHANGELOG.md](../../CHANGELOG.md#vxyz)
+- What was checked by hand, on which system, against what.
+- All N automated tests pass, up from M.
 ```
 
 | Part | Rules |
 |---|---|
-| **Title** | `# DNN Manager X.Y.Z`, followed directly by the summary - no date, release link or download links (GitHub shows those next to the notes). |
-| **Summary** | Starts with a bold phrase of 3-7 words, then 1-2 plain sentences. No version number, no "This release…". |
-| **Highlights** | 3-6 `###` themes, the most important first; 2-7 bullets each. Group by what the user gets, not by code layer. |
-| **Other changes** | Everything else worth knowing, one line each. Bug fixes go last, as `Fixed: …`. |
-| **Upgrading** | Always present. First line: `Install over X.Y.x as usual.` plus whether settings keep their format or are upgraded. Bullets only for actions or changed behaviour - removed features, renamed settings, a step to run once. |
-| **Tested** | Only real results. Leave the section out rather than guess. |
-| **Changelog link** | Always the last line - nothing after it: no `---` separator, footer or note about earlier version numbers. The anchor is the heading in lower case without dots: `## v1.7.0` → `#v170`. Changelog headings carry no date. |
+| **Title** | `# DNN Manager X.Y.Z`, then the summary - no date or download links (GitHub lists the files). |
+| **Summary** | A bold phrase of 3-7 words, then 1-2 plain sentences. No version number, no "This release…". |
+| **Highlights** | 3-6 `###` themes, the most important first; 2-7 bullets each, by what the user gets. |
+| **Other changes** | One line each; bug fixes last, as `Fixed: …`. |
+| **Upgrading** | Always present. Bullets only for actions or changed behaviour. |
+| **Tested** | Only real results; leave it out rather than guess. |
 
 ## Style
 
-- Write for the user: "you", present tense, what they can do and where. Name UI elements exactly as on screen, in
-  **bold**; files, folders, settings and commands in `code`.
-- Concrete over vague: "folder sizes are only measured while the **Size** column is shown", not "improved
-  performance". Give numbers only when measured.
-- No commit hashes, class names, internal refactors or dependency bumps - unless they change what the user sees
-  (then say what changes).
-- No emoji, no marketing words ("powerful", "seamless", "exciting"), no filler introductions.
-- UTF-8 without BOM, CRLF line endings, like the rest of the repository.
+- "You", present tense, what they can do and where. UI elements exactly as on screen, in **bold**; files, settings
+  and commands in `code`.
+- Concrete over vague; numbers only when measured. No commit hashes, type names or dependency bumps unless they
+  change what the user sees. No emoji or marketing words.
+- UTF-8 without BOM, CRLF line endings.
 
 ## Commit message
 
-One line - no body. It follows the repository's release commits (`git log --grep "^release:"`):
+One line, no body:
 
 ```text
 release: vX.Y.Z - <the Highlights' themes, lower case, comma-separated>
 ```
-
-- `release: vX.Y.Z - ` and the release's themes, a few words each, in the order of the Highlights - e.g.
-  `release: v1.7.0 - self-update, workspace restore, keyboard and command palette, VS Code look, customizable layout`.
-- No full stop, no body, no bullets: what changed is in the notes and the changelog.
-- Give it in a `text` code block in the report, so it can be pasted into `git commit` or the VS Code commit box as is.

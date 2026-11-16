@@ -1,29 +1,16 @@
-# Release: when a version tag is pushed (by the VS Code task "Release", .github/scripts/publish-release.ps1),
-# GitHub builds that tag and publishes it - nothing built on a PC is ever uploaded. See .docs/releasing.md.
+# Release: pushing a version tag (vX.Y.Z, by the VS Code task "Release" - scripts/release.ps1) builds that tag on
+# GitHub and publishes it. Nothing built on a PC is uploaded. See .docs/releasing.md.
 #
-#   plan     waits for CI on the tagged commit (wait-for-ci.ps1) - a release is built only from a commit CI passed,
-#            and nothing is tested twice - then reads the tag's message (release-plan.ps1): the release label chosen in VS Code - Latest, Pre-release or
-#            None - and the platforms to build. Only Windows is switched on for now (EnabledReleasePlatforms in
-#            .github/scripts/ReleaseCommon.psm1); a tag without them builds Windows, with the label its version gives
-#            (v2.0.0-rc1 a pre-release).
-#   build    Windows: the portable exe, the app for Setup and the launcher (Native AOT) with the tag's version -
-#            unsigned. It runs the packages' code, so it gets no OpenID Connect token. No tests run here: the plan job waited for CI, which tests every
-#            commit pushed to a branch (.github/workflows/ci.yml) - a release doesn't wait for them.
-#   (macOS and Linux: switched off. They are the cross-platform app (src/DnnManager.Desktop) on the branch
-#            feature/cross-platform, built there by the jobs "macos" and "linux" with .github/workflows/desktop.yml -
-#            brought back here when that app is merged. release-plan.ps1 already writes their outputs, always false.)
-#   sign     signs the Windows files when signing is set up, compiles Setup with the pinned Inno Setup (which signs
-#            Setup and its uninstaller), writes SHA256SUMS.txt and attests every file in it. Only this job can get the
-#            token Azure signs with and the attestation's certificate - and it restores no package and runs no test.
-#   smoke    Windows: installs the built Setup into a temporary folder, starts DNN Manager through its launcher,
-#            starts the portable exe, and uninstalls - a release whose files don't start isn't offered.
-#   draft    only once all of the above have passed: the files go on a draft release and GitHub's SHA-256 of each is
-#            checked.
-#   publish  in the environment "publish", which a required reviewer approves: checks that the tag still points at the
-#            commit built and the draft's files are the ones built, then publishes the release with its label - as
-#            Latest, the one every DNN Manager offers with its Update button.
+#   check    the tag is the version in Cargo.toml (and Packager.toml)
+#   package  one job per platform: build the release exe and package it with cargo-packager (Packager.toml)
+#              DnnManager-windows-x86_64.msi   DnnManager-windows-arm64.msi
+#              DnnManager-macos-arm64.dmg      DnnManager-macos-x86_64.dmg
+#              DnnManager-linux-amd64.deb      DnnManager-linux-arm64.deb
+#   publish  in the environment "publish" (add a required reviewer there to approve each release): the Linux packages
+#            also under their other names (x86_64 = amd64, aarch64 = arm64), SHA256SUMS.txt, then the release - its
+#            notes from .docs/release-notes/<tag>.md when there is one, a pre-release for a tag with a suffix (v2.0.0-rc1).
 #
-# Each job gets only the permissions it needs; the workflow's own GITHUB_TOKEN is the only GitHub credential.
+# The packages are not code-signed: Windows SmartScreen and macOS Gatekeeper warn on first start.
 name: Release
 
 on:
@@ -32,398 +19,166 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]+'
       - 'v[0-9]+.[0-9]+.[0-9]+-*'
 
-# Nothing by default; each job below asks for what it needs.
 permissions: {}
 
-# One release run per tag at a time, never cancelled half way (a redo pushes the tag again after the first run ended).
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 env:
-  DOTNET_NOLOGO: true
-  DOTNET_CLI_TELEMETRY_OPTOUT: true
-  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  CARGO_TERM_COLOR: always
   TAG: ${{ github.ref_name }}
-
-defaults:
-  run:
-    shell: pwsh
+  # The packager's version, pinned like the actions: a release is built with what was tried.
+  PACKAGER_VERSION: 0.11.8
 
 jobs:
-  plan:
-    name: Plan
+  check:
+    name: Tag matches Cargo.toml
     runs-on: ubuntu-24.04
-    # It waits for CI on the commit first - up to 90 minutes.
-    timeout-minutes: 100
     permissions:
-      # Read the tag's message.
       contents: read
-      # Read CI's runs and jobs on the commit.
-      actions: read
-    outputs:
-      version: ${{ steps.plan.outputs.version }}
-      file-version: ${{ steps.plan.outputs.file-version }}
-      label: ${{ steps.plan.outputs.label }}
-      windows: ${{ steps.plan.outputs.windows }}
-      desktop: ${{ steps.plan.outputs.desktop }}
-      targets: ${{ steps.plan.outputs.targets }}
-      macos: ${{ steps.plan.outputs.macos }}
-      macos-targets: ${{ steps.plan.outputs.macos-targets }}
-      linux: ${{ steps.plan.outputs.linux }}
-      linux-targets: ${{ steps.plan.outputs.linux-targets }}
-      assets: ${{ steps.plan.outputs.assets }}
-      replace: ${{ steps.plan.outputs.replace }}
     steps:
-      - name: Check out the scripts
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          sparse-checkout: .github/scripts
           persist-credentials: false
+      - name: Compare
+        run: |
+          version=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          base="${TAG#v}"; base="${base%%-*}"
+          if [ "$base" != "$version" ]; then
+            echo "::error::The tag $TAG doesn't match the version $version in Cargo.toml."
+            exit 1
+          fi
+          packager=$(grep -m1 '^version = ' Packager.toml | sed -E 's/version = "(.*)"/\1/')
+          if [ "$packager" != "$version" ]; then
+            echo "::error::Packager.toml has version $packager, Cargo.toml $version."
+            exit 1
+          fi
 
-      - name: Wait for CI on the commit
-        # Nothing is tested twice: CI (ci.yml) tests every commit pushed, and a release is built only from one it
-        # passed - the VS Code task pushes the tag at once, and the waiting is done here, not on your PC.
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: ./.github/scripts/wait-for-ci.ps1 -Sha $env:GITHUB_SHA
-
-      - name: Label and platforms from the tag
-        id: plan
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: ./.github/scripts/release-plan.ps1 -Tag $env:TAG
-
-  build:
-    name: Windows
-    needs: plan
-    if: needs.plan.outputs.windows == 'true'
-    # A pinned image, not windows-latest: a release is built on the image it was tested on until this line changes.
-    runs-on: windows-2025
-    timeout-minutes: 60
+  package:
+    name: ${{ matrix.name }}
+    needs: check
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            toolchain: stable-x86_64-pc-windows-msvc
+            format: wix
+            ext: msi
+          - name: windows-arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            toolchain: stable-aarch64-pc-windows-msvc
+            format: wix
+            ext: msi
+          - name: macos-arm64
+            runner: macos-14
+            target: aarch64-apple-darwin
+            toolchain: stable
+            format: dmg
+            ext: dmg
+          - name: macos-x86_64
+            runner: macos-14
+            target: x86_64-apple-darwin
+            toolchain: stable
+            format: dmg
+            ext: dmg
+          - name: linux-amd64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            toolchain: stable
+            format: deb
+            ext: deb
+          - name: linux-arm64
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+            toolchain: stable
+            format: deb
+            ext: deb
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     env:
-      # MSBuild reads these as properties: every restore below in locked mode, every build deterministic.
-      RestoreLockedMode: true
-      ContinuousIntegrationBuild: true
-
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+    defaults:
+      run:
+        shell: bash
     steps:
-      # Actions pinned to a commit, not a tag that can be moved: what runs is what was reviewed. Dependabot proposes updates.
-      - name: Check out
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          # The tags too: the build takes its version from the newest tag, as every build does.
-          fetch-depth: 0
-          # No token left in .git/config for the build's steps.
           persist-credentials: false
 
-      - name: Set up .NET
-        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: bash scripts/linux-deps.sh
+
+      - name: Rust
+        run: |
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+          rustup target add ${{ matrix.target }}
+
+      - name: cargo-packager
+        run: cargo install cargo-packager --version "$PACKAGER_VERSION" --locked
+
+      - name: Build
+        run: cargo build --release --locked -p dnnmanager --target ${{ matrix.target }}
+
+      - name: Package
+        # cargo-packager takes the exe from its output folder.
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/DnnManager${{ runner.os == 'Windows' && '.exe' || '' }} dist/
+          cargo packager --release --target ${{ matrix.target }} --formats ${{ matrix.format }} --out-dir dist
+
+      - name: Name it
+        run: |
+          mkdir -p out
+          file=$(find dist -maxdepth 2 -name "*.${{ matrix.ext }}" | head -n 1)
+          if [ -z "$file" ]; then echo "::error::No .${{ matrix.ext }} in dist"; ls -R dist; exit 1; fi
+          cp "$file" "out/DnnManager-${{ matrix.name }}.${{ matrix.ext }}"
+          ls -l out
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          # Exactly the SDK global.json names (rollForward: disable).
-          global-json-file: global.json
-
-      - name: Runner, SDK and C++ build tools
-        # Native AOT (the launcher) links with MSVC: the image's Visual Studio must have the C++ build tools.
-        run: |
-          Write-Host "Runner image: $env:ImageOS $env:ImageVersion"
-          dotnet --info
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-          $vc = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          if (-not $vc) { throw 'No Visual Studio with the C++ build tools on this runner - Native AOT (the launcher) needs them.' }
-          Write-Host "C++ build tools: $vc"
-
-      - name: Restore
-        # Exactly the packages packages.lock.json names, with their hashes, from nuget.org only (nuget.config).
-        run: |
-          dotnet restore tests/DnnManager.IntegrationTests/DnnManager.IntegrationTests.csproj --locked-mode
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          dotnet restore src/DnnManager.Launcher/DnnManager.Launcher.csproj --locked-mode
-
-      - name: Stamp the version
-        # The exe's manifest carries the file version too (its file properties).
-        env:
-          FILE_VERSION: ${{ needs.plan.outputs.file-version }}
-        run: |
-          $manifest = 'app.manifest'
-          $text = [IO.File]::ReadAllText($manifest) -replace '(<assemblyIdentity version=")[0-9.]+(")', "`${1}$env:FILE_VERSION`${2}"
-          [IO.File]::WriteAllText($manifest, $text, [Text.UTF8Encoding]::new($false))
-
-      - name: Portable exe
-        # One file: the native DLLs inside are extracted to %TEMP%\.net when it starts - an accepted risk of the
-        # portable exe (.docs/security.md); the installed DNN Manager has them beside it, in Program Files.
-        env:
-          VERSION: ${{ needs.plan.outputs.version }}
-          FILE_VERSION: ${{ needs.plan.outputs.file-version }}
-        # The Windows app (WPF, DnnManager.csproj); -p:PortableExe=true names the exe DnnManager-<version>-x64.exe, as
-        # the Update button looks for it.
-        run: |
-          dotnet publish DnnManager.csproj -c Release -r win-x64 --self-contained true `
-            -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true `
-            -p:PortableExe=true "-p:Version=$env:VERSION" "-p:AssemblyVersion=$env:FILE_VERSION" "-p:FileVersion=$env:FILE_VERSION" `
-            -o publish
-          if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed (exit code $LASTEXITCODE)." }
-
-      - name: App and launcher for Setup
-        # Windows PowerShell, as on the publisher's PC. Publishes into src/DnnManager.Installer/bin/app and bin/launcher;
-        # the sign job compiles Setup from them.
-        shell: powershell
-        env:
-          VERSION: ${{ needs.plan.outputs.version }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          & .\src\DnnManager.Installer\build.ps1 -Version $env:VERSION -PublishOnly
-
-      - name: Hand the files to the sign job
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: unsigned
-          path: |
-            publish/DnnManager-*.exe
-            src/DnnManager.Installer/bin/app/
-            src/DnnManager.Installer/bin/launcher/
+          name: ${{ matrix.name }}
+          path: out/*
           if-no-files-found: error
-          retention-days: 7
-
-  sign:
-    name: Sign, package and attest
-    needs: [plan, build]
-    # Once what was chosen is built - a platform not chosen is skipped, not failed. (With macOS and Linux switched on,
-    # their jobs join "needs" here, each success or skipped.)
-    if: >-
-      !cancelled() && needs.plan.result == 'success' &&
-      (needs.build.result == 'success' || needs.build.result == 'skipped')
-    runs-on: windows-2025
-    timeout-minutes: 45
-    # The environment "release" gives Azure's sign-in a fixed subject (repo:<owner>/<repo>:environment:release) - see
-    # .docs/releasing.md, Code signing. Restrict it to v* tags in Settings -> Environments.
-    environment: release
-    permissions:
-      contents: read
-      # Both only for the attestation (a Sigstore certificate for this run) and, when signing is set up, Azure's
-      # OpenID Connect sign-in. No package is restored and no test runs in this job.
-      id-token: write
-      attestations: write
-    env:
-      VERSION: ${{ needs.plan.outputs.version }}
-      WINDOWS: ${{ needs.plan.outputs.windows }}
-      DESKTOP: ${{ needs.plan.outputs.desktop }}
-      # Signing runs only when its repository variables are set, and only the Windows files are signed; without them
-      # the files are built unsigned...
-      SIGNING: ${{ needs.plan.outputs.windows == 'true' && vars.ARTIFACT_SIGNING_ACCOUNT != '' && vars.AZURE_CLIENT_ID != '' }}
-      # ...unless REQUIRE_SIGNING is true: then a release with Windows files but without signing fails here.
-      REQUIRE_SIGNING: ${{ needs.plan.outputs.windows == 'true' && vars.REQUIRE_SIGNING == 'true' }}
-
-    steps:
-      - name: Check out
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          # The tags too: release-notes.ps1 looks for the previous release.
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Get the unsigned files
-        if: env.WINDOWS == 'true'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: unsigned
-          path: .
-
-      - name: Get the macOS and Linux packages
-        if: env.DESKTOP == 'true'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: desktop-*
-          path: desktop
-          merge-multiple: true
-
-      - name: Signing required?
-        env:
-          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
-          ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
-          ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
-        run: |
-          $names = 'AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_SUBSCRIPTION_ID', 'ARTIFACT_SIGNING_ENDPOINT', 'ARTIFACT_SIGNING_ACCOUNT', 'ARTIFACT_SIGNING_PROFILE'
-          $missing = @($names | Where-Object { -not [Environment]::GetEnvironmentVariable($_) })
-          if ($env:REQUIRE_SIGNING -eq 'true' -and $missing) { throw "REQUIRE_SIGNING is true, but these signing variables aren't set: $($missing -join ', ') - nothing is released unsigned." }
-          if ($env:SIGNING -eq 'true' -and $missing) { throw "Signing is half set up - missing: $($missing -join ', ')." }
-          Write-Host $(if ($env:SIGNING -eq 'true') { 'The files are signed.' } else { 'Signing isn''t set up - the files are unsigned.' })
-
-      # Right before the first file is signed: the Azure CLI's sign-in lives only for the steps that sign.
-      - name: Sign in to Azure (signing)
-        if: env.SIGNING == 'true'
-        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Set up signing
-        if: env.SIGNING == 'true'
-        env:
-          ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
-          ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
-          ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
-        run: ./.github/scripts/sign.ps1 -Setup
-
-      - name: Sign the portable exe
-        if: env.SIGNING == 'true'
-        run: ./.github/scripts/sign.ps1 -Path "publish/DnnManager-$env:VERSION-x64.exe"
-
-      - name: Installer
-        if: env.WINDOWS == 'true'
-        # Windows PowerShell, as on the publisher's PC: build.ps1 draws the wizard images with System.Drawing. It signs
-        # DnnManager.exe and the launcher, and Inno signs Setup and its uninstaller.
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $sign = @{}
-          if ($env:SIGNING -eq 'true') { $sign.SignScript = '.github\scripts\sign.ps1' }
-          # The pinned Inno Setup, never one installed on the runner: every release is compiled by the same one.
-          & .\src\DnnManager.Installer\build.ps1 -Version $env:VERSION -SkipPublish -PinnedInno @sign
-
-      - name: Sign out of Azure
-        if: always() && env.SIGNING == 'true'
-        run: |
-          az logout 2>$null; az account clear 2>$null
-          exit 0
-
-      - name: Check the files
-        run: |
-          $out = New-Item -ItemType Directory -Force dist
-          $assets = @()
-          if ($env:WINDOWS -eq 'true') { $assets = "DnnManager-$env:VERSION-x64.exe", "DnnManager_Setup-$env:VERSION-x64.exe" }
-          # The macOS and Linux packages chosen (desktop job) - not signed with a certificate, so not checked for one.
-          $desktop = @(Get-ChildItem desktop -File -ErrorAction SilentlyContinue | ForEach-Object Name | Sort-Object)
-          if ($env:DESKTOP -eq 'true' -and -not $desktop) { throw 'The desktop job built no package.' }
-          $launcher = @(if ($env:WINDOWS -eq 'true') { 'src/DnnManager.Installer/bin/launcher/DnnManager-launcher.exe' })
-          foreach ($path in @($assets | ForEach-Object { "publish/$_" }) + $launcher) {
-            $info = (Get-Item $path).VersionInfo
-            $product = ($info.ProductVersion -split '\+')[0].Trim()
-            Write-Host ("{0}: file version {1}, product version {2}" -f (Split-Path $path -Leaf), $info.FileVersion.Trim(), $info.ProductVersion.Trim())
-            # A download whose version isn't the release's is refused by DNN Manager and Setup.
-            if ($product -ne $env:VERSION) { throw "$path reports $product, not $env:VERSION." }
-            if ($env:SIGNING -eq 'true') {
-              $signature = Get-AuthenticodeSignature $path
-              if ($signature.Status -ne 'Valid') { throw "$path isn't signed ($($signature.Status))." }
-              Write-Host "  signed by $($signature.SignerCertificate.Subject)"
-            }
-          }
-          foreach ($name in $assets) { Copy-Item "publish/$name" $out }
-          foreach ($name in $desktop) { Copy-Item "desktop/$name" $out }
-          $assets += $desktop
-          # The files' SHA-256, for whoever downloads them by hand: a file beside them, and in the release's notes.
-          $sums = foreach ($name in $assets) { "{0}  {1}" -f (Get-FileHash "dist/$name" -Algorithm SHA256).Hash.ToLowerInvariant(), $name }
-          [IO.File]::WriteAllText("$PWD/dist/SHA256SUMS.txt", ($sums -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
-          $sums | ForEach-Object { Write-Host $_ }
-          ./.github/scripts/release-notes.ps1 -Version $env:VERSION -Tag $env:TAG -Repository $env:GITHUB_REPOSITORY -OutFile dist/release-notes.md
-
-      - name: Attest build provenance
-        # Signed by GitHub (Sigstore): these files were built by this workflow, from this commit of this repository.
-        # Every file in SHA256SUMS.txt - the platforms chosen. Check one with: gh attestation verify <file> --repo <owner>/<repo>
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-checksums: dist/SHA256SUMS.txt
-
-      - name: Hand the files on
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: release
-          path: dist/
-          if-no-files-found: error
-          retention-days: 7
-
-  smoke:
-    name: Try the files
-    needs: [plan, sign]
-    if: needs.plan.outputs.windows == 'true'
-    runs-on: windows-2025
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - name: Check out the scripts
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          sparse-checkout: .github/scripts
-          persist-credentials: false
-
-      - name: Get the files
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: release
-          path: dist
-
-      - name: Install, start and uninstall
-        run: ./.github/scripts/smoke-test.ps1 -Directory dist -Tag $env:TAG
-
-  draft:
-    name: Draft the release
-    # Only once the build, the signing and the smoke test have passed; until the publish job ends, the release is at
-    # most a draft.
-    needs: [plan, sign, smoke]
-    # Without Windows there is nothing to try: the smoke test is skipped, not failed.
-    if: >-
-      !cancelled() && needs.sign.result == 'success' &&
-      (needs.smoke.result == 'success' || needs.smoke.result == 'skipped')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      # Create the draft and upload the files.
-      contents: write
-    steps:
-      - name: Check out the scripts
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          sparse-checkout: .github/scripts
-          persist-credentials: false
-
-      - name: Get the files
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: release
-          path: dist
-
-      - name: Draft, upload and check
-        env:
-          GH_TOKEN: ${{ github.token }}
-          LABEL: ${{ needs.plan.outputs.label }}
-          PLATFORMS: ${{ needs.plan.outputs.assets }}
-          # A published pre-release of this version is deleted first, when the tag says it is replaced.
-          REPLACE: ${{ needs.plan.outputs.replace }}
-        run: ./.github/scripts/upload-release.ps1 -Stage Draft -Tag $env:TAG -Directory dist -Label $env:LABEL -Platforms $env:PLATFORMS -Replace:($env:REPLACE -eq 'true')
 
   publish:
-    name: Publish the release
-    needs: [plan, draft]
+    name: Publish
+    needs: package
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    # A person approves this job before it runs: Settings -> Environments -> publish -> Required reviewers (and only
-    # v* tags under Deployment branches and tags). A pushed tag alone builds a draft, never a release.
     environment: publish
     permissions:
-      # Publish the draft.
       contents: write
     steps:
-      - name: Check out the scripts
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          sparse-checkout: .github/scripts
           persist-credentials: false
 
-      - name: Get the files
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: release
-          path: dist
+          path: artifacts
+          merge-multiple: true
 
-      - name: Check and publish
+      - name: Linux names, checksums
+        run: |
+          cd artifacts
+          cp DnnManager-linux-amd64.deb DnnManager-linux-x86_64.deb
+          cp DnnManager-linux-arm64.deb DnnManager-linux-aarch64.deb
+          sha256sum DnnManager-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
-          LABEL: ${{ needs.plan.outputs.label }}
-          PLATFORMS: ${{ needs.plan.outputs.assets }}
-        run: ./.github/scripts/upload-release.ps1 -Stage Publish -Tag $env:TAG -Directory dist -Label $env:LABEL -Platforms $env:PLATFORMS
+        run: |
+          notes=".docs/release-notes/$TAG.md"
+          args=(--title "DNN Manager ${TAG#v}" --verify-tag)
+          if [ -f "$notes" ]; then args+=(--notes-file "$notes"); else args+=(--generate-notes); fi
+          case "$TAG" in *-*) args+=(--prerelease) ;; *) args+=(--latest) ;; esac
+          gh release create "$TAG" artifacts/* "${args[@]}" --repo "$GITHUB_REPOSITORY"
