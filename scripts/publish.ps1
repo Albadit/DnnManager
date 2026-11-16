@@ -7,7 +7,10 @@
 # every one.
 #
 #   -Kind      executable (default) | installer
-#   -Platform  windows-x86_64,windows-arm64,macos-arm64,macos-x86_64,linux-amd64,linux-arm64 (one or more)
+#   -Platform  one or more of: windows-x86_64, windows-arm64, macos-arm64, macos-x86_64, linux-amd64, linux-arm64,
+#              linux-x86_64, linux-aarch64 (the last two are amd64 and arm64 under the other names, as the release
+#              publishes them: DnnManager-linux-x86_64.deb, DnnManager-linux-aarch64.deb)
+# The task's picker lists them itself (.vscode/tasks.json, input publishPlatforms).
 param(
     [ValidateSet("executable", "installer")][string]$Kind = "executable",
     [string[]]$Platform = @()
@@ -16,7 +19,7 @@ param(
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)
 
-$order = @("windows-x86_64", "windows-arm64", "macos-arm64", "macos-x86_64", "linux-amd64", "linux-arm64")
+$order = @("windows-x86_64", "windows-arm64", "macos-arm64", "macos-x86_64", "linux-amd64", "linux-arm64", "linux-x86_64", "linux-aarch64")
 $targets = @{
     "windows-x86_64" = @{ Triple = "x86_64-pc-windows-msvc"; Os = "Windows"; Ext = ".exe"; Format = "wix"; Toolchain = "stable-x86_64-pc-windows-msvc" }
     "windows-arm64"  = @{ Triple = "aarch64-pc-windows-msvc"; Os = "Windows"; Ext = ".exe"; Format = "wix"; Toolchain = "stable-x86_64-pc-windows-msvc" }
@@ -24,9 +27,10 @@ $targets = @{
     "macos-x86_64"   = @{ Triple = "x86_64-apple-darwin"; Os = "macOS"; Ext = ""; Format = "dmg"; Toolchain = "stable" }
     "linux-amd64"    = @{ Triple = "x86_64-unknown-linux-gnu"; Os = "Linux"; Ext = ""; Format = "deb"; Toolchain = "stable" }
     "linux-arm64"    = @{ Triple = "aarch64-unknown-linux-gnu"; Os = "Linux"; Ext = ""; Format = "deb"; Toolchain = "stable" }
+    "linux-x86_64"   = @{ Triple = "x86_64-unknown-linux-gnu"; Os = "Linux"; Ext = ""; Format = "deb"; Toolchain = "stable" }
+    "linux-aarch64"  = @{ Triple = "aarch64-unknown-linux-gnu"; Os = "Linux"; Ext = ""; Format = "deb"; Toolchain = "stable" }
 }
 $here = if ($IsMacOS) { "macOS" } elseif ($IsLinux) { "Linux" } else { "Windows" }
-
 # The systems: given, or picked here.
 $Platform = @($Platform | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($Platform.Count -eq 0) {

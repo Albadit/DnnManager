@@ -2,9 +2,12 @@
 # tag. GitHub then builds, packages and publishes it (.github/workflows/release.yml) - nothing built here is uploaded.
 # Run it from the repository root with a clean working tree, after the version in Cargo.toml was raised and committed.
 #
-#   -Suffix rc1   tags vX.Y.Z-rc1: a pre-release
+#   -Label latest | prerelease | none   how GitHub labels the release (Latest is what the app's update check finds);
+#                 written into the tag's message as "Release-Label: <label>", which the release workflow reads
+#   -Suffix rc1   tags vX.Y.Z-rc1
 #   -Redo         moves an existing tag to this commit and pushes it again (a failed release run, before anyone has it)
 param(
+    [ValidateSet("latest", "prerelease", "none")][string]$Label = "latest",
     [string]$Suffix = "",
     [switch]$Redo
 )
@@ -25,7 +28,7 @@ $exists = git tag --list $tag
 if ($exists -and -not $Redo) { throw "$tag exists already. Raise the version in Cargo.toml, or use -Redo to move it." }
 
 $notes = ".docs/release-notes/$tag.md"
-Write-Host "Release $tag from $branch ($(git rev-parse --short HEAD))."
+Write-Host "Release $tag from $branch ($(git rev-parse --short HEAD)), labelled: $Label."
 Write-Host ($(if (Test-Path $notes) { "Notes: $notes" } else { "No $notes - GitHub writes the notes from the commits." }))
 $answer = Read-Host "Push $tag now? (y/n)"
 if ($answer -ne "y") { Write-Host "Nothing pushed."; exit 0 }
@@ -35,6 +38,6 @@ if ($Redo -and $exists) {
     git tag -d $tag | Out-Null
     git push origin ":refs/tags/$tag"
 }
-git tag -a $tag -m "DNN Manager $version$(if ($Suffix) { " ($Suffix)" })"
+git tag -a $tag -m "DNN Manager $version$(if ($Suffix) { " ($Suffix)" })" -m "Release-Label: $Label"
 git push origin $tag
 Write-Host "Pushed $tag. Follow it on GitHub: Actions > Release. Approve the 'publish' environment if it asks."

@@ -67,9 +67,9 @@
             "presentation": { "reveal": "always", "panel": "shared", "clear": true }
         },
         {
-            // Executable or installer, then the systems - several at once (the multi-select needs the extension
-            // Command Variable, rioj7.command-variable). Into dist\ (scripts/publish.ps1). This PC compiles for its own
-            // operating system only; the others are skipped with a note - the release on GitHub builds all.
+            // Executable or installer, then the systems - several at once (the multi-select comes from the extension
+            // Tasks Shell Input, augustocdias.tasks-shell-input). Into dist\ (scripts/publish.ps1). This PC compiles for
+            // its own operating system only; the others are skipped with a note - the release on GitHub builds all.
             "label": "Publish",
             "detail": "Executable or installer, then the systems - into dist",
             "type": "process",
@@ -87,14 +87,19 @@
             "presentation": { "reveal": "always", "panel": "shared", "clear": true }
         },
         {
-            // Tags the version in Cargo.toml and pushes it; GitHub builds every package and publishes the release.
+            // Tags the version in Cargo.toml with the label picked and pushes it; GitHub builds every package and
+            // publishes the release with that label (scripts/release.ps1, .github/workflows/release.yml).
             "label": "Release: Github",
             "detail": "Tag vX.Y.Z and push - GitHub builds and publishes",
             "type": "process",
             "command": "powershell",
             "osx": { "command": "pwsh" },
             "linux": { "command": "pwsh" },
-            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/release.ps1"],
+            "args": [
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}/scripts/release.ps1",
+                "-Label", "${input:releaseLabel}"
+            ],
             "group": "build",
             "problemMatcher": [],
             "presentation": { "reveal": "always", "panel": "dedicated", "focus": true, "clear": true }
@@ -104,29 +109,51 @@
         {
             "id": "publishKind",
             "type": "pickString",
-            "description": "Just the executable, or also its installer (.msi / .dmg / .deb)",
-            "options": ["executable", "installer"],
+            "description": "What to build",
+            "options": [
+                { "label": "$(file-binary) Executable - one program, nothing to install", "value": "executable" },
+                { "label": "$(package) Installer - the executable and its .msi (Windows), .dmg (macOS), .deb (Linux)", "value": "installer" }
+            ],
             "default": "executable"
         },
         {
-            // Several at once (Command Variable's multiPick); passed on as one comma-separated list.
+            // Several at once (Tasks Shell Input's multiselect). The list is right here: each line is
+            // value|label|description, PowerShell only prints them back. The picked values go to publish.ps1 as one
+            // comma-separated -Platform. This PC builds its own operating system's; the others are skipped.
             "id": "publishPlatforms",
             "type": "command",
-            "command": "extension.commandvariable.pickStringRemember",
+            "command": "shellCommand.execute",
             "args": {
-                "key": "publishPlatforms",
+                "command": "powershell",
+                "commandArgs": [
+                    "-NoProfile", "-Command",
+                    "'windows-x86_64|$(window) Windows x64|DnnManager-windows-x86_64 .exe / .msi',",
+                    "'windows-arm64|$(window) Windows ARM64|DnnManager-windows-arm64 .exe / .msi - needs the MSVC ARM64 build tools',",
+                    "'macos-arm64|$(device-desktop) macOS Apple silicon|DnnManager-macos-arm64 .dmg - built on a Mac',",
+                    "'macos-x86_64|$(device-desktop) macOS Intel|DnnManager-macos-x86_64 .dmg - built on a Mac',",
+                    "'linux-amd64|$(terminal-debian) Linux amd64|DnnManager-linux-amd64 .deb - built on Linux',",
+                    "'linux-arm64|$(terminal-debian) Linux arm64|DnnManager-linux-arm64 .deb - built on Linux',",
+                    "'linux-x86_64|$(terminal-linux) Linux x86_64|DnnManager-linux-x86_64 .deb - built on Linux',",
+                    "'linux-aarch64|$(terminal-linux) Linux aarch64|DnnManager-linux-aarch64 .deb - built on Linux'"
+                ],
                 "description": "Which systems? This PC builds its own operating system's; the others are skipped",
-                "multiPick": true,
-                "multiPickSeparator": ",",
-                "options": [
-                    ["Windows x64", "windows-x86_64"],
-                    ["Windows ARM64", "windows-arm64"],
-                    ["macOS Apple silicon", "macos-arm64"],
-                    ["macOS Intel", "macos-x86_64"],
-                    ["Linux x64 (.deb amd64)", "linux-amd64"],
-                    ["Linux ARM64 (.deb arm64)", "linux-arm64"]
-                ]
+                "fieldSeparator": "|",
+                "multiselect": true,
+                "multiselectSeparator": ",",
+                "rememberPrevious": true,
+                "taskId": "publishPlatforms"
             }
+        },
+        {
+            "id": "releaseLabel",
+            "type": "pickString",
+            "description": "Release label - Latest is what every DNN Manager's update check offers",
+            "options": [
+                { "label": "$(circle-slash) None - published, but not the latest", "value": "none" },
+                { "label": "$(beaker) Pre-release - label it as not ready for production", "value": "prerelease" },
+                { "label": "$(star-full) Latest - label it as the latest for this repository", "value": "latest" }
+            ],
+            "default": "latest"
         }
     ]
 }

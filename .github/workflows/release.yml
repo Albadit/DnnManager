@@ -8,7 +8,9 @@
 #              DnnManager-linux-amd64.deb      DnnManager-linux-arm64.deb
 #   publish  in the environment "publish" (add a required reviewer there to approve each release): the Linux packages
 #            also under their other names (x86_64 = amd64, aarch64 = arm64), SHA256SUMS.txt, then the release - its
-#            notes from .docs/release-notes/<tag>.md when there is one, a pre-release for a tag with a suffix (v2.0.0-rc1).
+#            notes from .docs/release-notes/<tag>.md when there is one, labelled as the tag's message says
+#            ("Release-Label: latest | prerelease | none", written by scripts/release.ps1); a tag without one is
+#            Latest, or a pre-release when it has a suffix (v2.0.0-rc1).
 #
 # The packages are not code-signed: Windows SmartScreen and macOS Gatekeeper warn on first start.
 name: Release
@@ -180,5 +182,19 @@ jobs:
           notes=".docs/release-notes/$TAG.md"
           args=(--title "DNN Manager ${TAG#v}" --verify-tag)
           if [ -f "$notes" ]; then args+=(--notes-file "$notes"); else args+=(--generate-notes); fi
-          case "$TAG" in *-*) args+=(--prerelease) ;; *) args+=(--latest) ;; esac
+          # The label chosen in VS Code, from the annotated tag's message.
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.sha')
+          type=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.type')
+          label=""
+          if [ "$type" = "tag" ]; then
+            label=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq '.message' | sed -nE 's/^Release-Label: *([a-z]+).*/\1/p' | head -n 1)
+          fi
+          if [ -z "$label" ]; then case "$TAG" in *-*) label=prerelease ;; *) label=latest ;; esac; fi
+          echo "Label: $label"
+          case "$label" in
+            latest) args+=(--latest) ;;
+            prerelease) args+=(--prerelease --latest=false) ;;
+            none) args+=(--latest=false) ;;
+            *) echo "::error::Unknown release label '$label'"; exit 1 ;;
+          esac
           gh release create "$TAG" artifacts/* "${args[@]}" --repo "$GITHUB_REPOSITORY"
