@@ -926,6 +926,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn a_bacpac_replaces_through_sqlpackage_and_a_bak_through_restore() {
         let world = World::new();

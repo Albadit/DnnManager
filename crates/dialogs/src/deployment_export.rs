@@ -269,6 +269,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn the_form_makes_the_request() {
         let site = Path::new(r"C:\DNN\shop");

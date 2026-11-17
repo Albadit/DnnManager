@@ -1061,6 +1061,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn kept_packages_are_per_repository() {
         let installer = installer(Path::new(r"C:\data"));

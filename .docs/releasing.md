@@ -1,14 +1,13 @@
 # Releasing
 
-A release is built, tested and published by GitHub from a version tag - nothing built on a PC is uploaded, and
-nothing is published unless every build and test passed.
+A release is packaged and published by GitHub from a version tag - nothing built on a PC is uploaded. CI is the test:
+the release waits for CI on the tagged commit and publishes nothing unless it passed. Nothing is tested twice.
 
 ```mermaid
 flowchart LR
     A["VS Code: Release: Github<br/>1 type, 2 version, 3 commit, 4 confirm"] --> B["tag vX.Y.Z pushed"]
-    B --> C["plan"]
-    C --> D["test<br/>Windows, Linux, macOS"]
-    D --> E["package<br/>6 installers"]
+    B --> C["plan<br/>waits for CI on the commit"]
+    C --> E["package<br/>6 installers"]
     E --> F["publish<br/>draft, check, publish"]
 ```
 
@@ -27,7 +26,8 @@ flowchart LR
    | 4/4 Confirm | The release spelled out (version, type, commit, notes) - or, when something is wrong, only *Can't release* with the reason |
 
    It refuses - before anything is pushed - a version that isn't newer than the newest release, a tag that exists, a
-   pre-release without a suffix (`-rc1`) or a Latest with one, and a commit that isn't on the remote. On **Release** it
+   pre-release without a suffix (`-rc1`) or a Latest with one, a commit that isn't on the remote, and a commit whose CI
+   failed, was cancelled or never ran (the confirmation says whether CI passed or is still running). On **Release** it
    checks all of that again, tags the commit (an annotated tag whose message carries `Release-Label: <type>`) and
    pushes only the tag.
 3. **Follow the run** on GitHub (Actions → Release). The `publish` job runs in the environment `publish`: give that
@@ -43,8 +43,7 @@ MSI's version is numbers only). The `1.8.7` in `Cargo.toml` is only what a local
 
 | Job | Runs on | What it does - a failure stops everything after it |
 |---|---|---|
-| plan | ubuntu-24.04 | The tag is a version; the release type from the tag's message (a tag without one: Latest, or a pre-release with a suffix); type and suffix agree; the tag isn't published already |
-| test | windows-2025, ubuntu-22.04, macos-14 | Builds everything, clippy and every test - warnings are errors |
+| plan | ubuntu-24.04 | The tag is a version; the release type from the tag's message (a tag without one: Latest, or a pre-release with a suffix); type and suffix agree; the tag isn't published already. Then it waits (up to an hour) for **CI** (`ci.yml`: build, clippy and every test on Windows, Linux and macOS, warnings as errors) on the tagged commit, and stops when CI failed, was cancelled or never ran. |
 | package | one runner per installer | Writes the version in, builds clean (`-D warnings`), packages with cargo-packager, checks the file is there and not empty. Only the installer leaves the job. |
 | publish | ubuntu-24.04, environment `publish` | Checks the files are exactly the six installers (never an executable), adds the .debs as `-x86_64.deb` / `-aarch64.deb` and `SHA256SUMS.txt`, uploads everything to a **draft**, checks every file arrived, then publishes it with its type. A failure deletes the draft - no release is left half made. |
 
@@ -52,8 +51,8 @@ MSI's version is numbers only). The `1.8.7` in `Cargo.toml` is only what a local
 |---|---|
 | `DnnManager-windows-x86_64.msi` | windows-2025 |
 | `DnnManager-windows-arm64.msi` | windows-11-arm |
-| `DnnManager-macos-arm64.dmg` | macos-14 |
-| `DnnManager-macos-x86_64.dmg` | macos-14 (cross-built) |
+| `DnnManager-macos-arm64.dmg` | macos-15 |
+| `DnnManager-macos-x86_64.dmg` | macos-15 (cross-built) |
 | `DnnManager-linux-amd64.deb` (also `-x86_64.deb`) | ubuntu-22.04 |
 | `DnnManager-linux-arm64.deb` (also `-aarch64.deb`) | ubuntu-22.04-arm |
 
@@ -92,7 +91,7 @@ output folder, so the script copies it there first. Tried on Windows: `dist\DnnM
 
 ## Release a version again
 
-The tag exists but its run failed (a test, a package), so nothing was published. Fix it, push the fix, and either
+The tag exists but its run failed (CI, a package), so nothing was published. Fix it, push the fix, and either
 release the next version, or move the tag to the new commit:
 `powershell -File scripts/release.ps1 -Label <type> -Version X.Y.Z -Commit <sha> -Confirm yes -Redo`. `-Redo` refuses
 a tag whose release is published - DNN Manager offers only newer versions, so a published release is never redone.

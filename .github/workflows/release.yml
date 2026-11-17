@@ -2,9 +2,10 @@
 # scripts/release.ps1) builds, tests and publishes that tag. Nothing built on a PC is uploaded. See .docs/releasing.md.
 #
 #   plan      the tag is a version; its release type (Latest / Pre-release / None) from the tag's message
-#             ("Release-Label: ..."); no release with that tag exists already
-#   test      Windows, Linux and macOS: build everything, clippy and every test - all with warnings as errors
-#   package   only when every test passed: one job per installer, the tag's version written into the build
+#             ("Release-Label: ..."); no release with that tag exists already; and CI (ci.yml) passed on the tagged
+#             commit - it waits for that run, and stops when it failed, was cancelled or never ran. Nothing is tested
+#             twice: CI's build, clippy and tests on Windows, Linux and macOS are the release's.
+#   package   only then: one job per installer, the tag's version written into the build
 #             (scripts/set-version.py), built clean (-D warnings) and packaged with cargo-packager (Packager.toml):
 #               DnnManager-windows-x86_64.msi   DnnManager-windows-arm64.msi
 #               DnnManager-macos-arm64.dmg      DnnManager-macos-x86_64.dmg
@@ -42,8 +43,12 @@ jobs:
   plan:
     name: Plan
     runs-on: ubuntu-24.04
+    # It waits for CI on the commit - up to an hour.
+    timeout-minutes: 75
     permissions:
       contents: read
+      # Read CI's runs on the commit.
+      actions: read
     outputs:
       version: ${{ steps.plan.outputs.version }}
       label: ${{ steps.plan.outputs.label }}
@@ -82,52 +87,35 @@ jobs:
           echo "label=$label" >> "$GITHUB_OUTPUT"
           echo "Release $TAG - version $version, type $label"
 
-  test:
-    name: Test (${{ matrix.os }})
-    needs: plan
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows
-            runner: windows-2025
-            toolchain: stable-x86_64-pc-windows-msvc
-          - os: linux
-            runner: ubuntu-22.04
-            toolchain: stable
-          - os: macos
-            runner: macos-14
-            toolchain: stable
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
-    env:
-      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
-      # A release is clean: a compiler warning fails it.
-      RUSTFLAGS: -D warnings
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - name: Linux build dependencies
-        if: runner.os == 'Linux'
-        run: bash scripts/linux-deps.sh
-      - name: Rust
-        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy
-      - name: Build
-        run: cargo build --workspace --all-targets --locked
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - name: Tests
-        run: cargo test --workspace --locked
+      - name: CI passed on the commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="$GITHUB_SHA"
+          echo "Waiting for CI on $sha"
+          for attempt in $(seq 1 120); do
+            # The newest CI run of a push of this commit (a re-run counts as that run).
+            run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$sha&event=push&per_page=50" \
+              --jq '.workflow_runs | sort_by(.created_at) | last // empty')
+            if [ -z "$run" ]; then
+              if [ "$attempt" -ge 10 ]; then
+                echo "::error::CI never ran on $sha - push the branch with this commit, let CI pass, then release it."; exit 1
+              fi
+            else
+              status=$(jq -r '.status' <<<"$run"); conclusion=$(jq -r '.conclusion' <<<"$run"); url=$(jq -r '.html_url' <<<"$run")
+              if [ "$status" = completed ]; then
+                if [ "$conclusion" = success ]; then echo "CI passed: $url"; exit 0; fi
+                echo "::error::CI on $sha ended '$conclusion' - nothing is released. Fix it (or re-run CI) and release again: $url"; exit 1
+              fi
+              echo "CI is $status ($url) - waiting"
+            fi
+            sleep 30
+          done
+          echo "::error::CI on $sha didn't finish within an hour."; exit 1
 
   package:
     name: ${{ matrix.name }}
-    needs: [plan, test]
+    needs: plan
     permissions:
       contents: read
     strategy:
@@ -147,13 +135,13 @@ jobs:
             format: wix
             ext: msi
           - name: macos-arm64
-            runner: macos-14
+            runner: macos-15
             target: aarch64-apple-darwin
             toolchain: stable
             format: dmg
             ext: dmg
           - name: macos-x86_64
-            runner: macos-14
+            runner: macos-15
             target: x86_64-apple-darwin
             toolchain: stable
             format: dmg

@@ -217,6 +217,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn a_real_backup_round_trip_puts_the_files_back() {
         // Zip a site, change it, then extract and remove what came after - in temporary folders only.

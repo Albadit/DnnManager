@@ -365,6 +365,7 @@ mod tests {
         ));
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn the_default_folder_is_dated_in_deployments() {
         let now = Stamp::from_folder_name("x_20260928_154210").unwrap();

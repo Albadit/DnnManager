@@ -9,8 +9,9 @@
 #
 # Then:  release.ps1 -Label <type> -Version <x.y.z[-suffix]> -Commit <sha> -Confirm yes
 # checks everything again, tags the commit vX.Y.Z (an annotated tag whose message carries "Release-Label: <type>") and
-# pushes only the tag. GitHub (.github/workflows/release.yml) then builds and tests on every system, packages the
-# installers, and publishes the release only when all of that passed - nothing built on this PC is uploaded.
+# pushes only the tag. GitHub (.github/workflows/release.yml) then waits for CI on that commit (CI is the test - a
+# commit whose CI failed is refused here already), packages the installers, and publishes the release only when all of
+# that passed - nothing built on this PC is uploaded.
 #
 #   -Redo   moves an existing tag that has no published release (a failed run) to the commit picked
 param(
@@ -67,6 +68,22 @@ function Newest-Stable($tags) {
     return $tags | Where-Object { -not $_.Suffix } | Sort-Object { Base-Key $_ } | Select-Object -Last 1
 }
 
+# CI (.github/workflows/ci.yml) on the commit, from GitHub: @{ State = passed | running | failed | none | unknown;
+# Url }. The release workflow waits for it and makes nothing unless it passed.
+function Ci-State([string]$commit) {
+    try {
+        $runs = Invoke-RestMethod "https://api.github.com/repos/$(Repo-Slug)/actions/workflows/ci.yml/runs?head_sha=$commit&event=push&per_page=50" `
+            -Headers @{ "User-Agent" = "DnnManager-release" }
+    } catch {
+        return @{ State = "unknown"; Url = "" }
+    }
+    $run = @($runs.workflow_runs | Sort-Object created_at) | Select-Object -Last 1
+    if (-not $run) { return @{ State = "none"; Url = "" } }
+    if ($run.status -ne "completed") { return @{ State = "running"; Url = $run.html_url } }
+    if ($run.conclusion -eq "success") { return @{ State = "passed"; Url = $run.html_url } }
+    return @{ State = "failed"; Url = $run.html_url; Conclusion = $run.conclusion }
+}
+
 # Everything that would make the release wrong - empty when it can be made.
 function Problems([string]$label, [string]$version, [string]$commit, [switch]$redo) {
     $issues = @()
@@ -100,7 +117,16 @@ function Problems([string]$label, [string]$version, [string]$commit, [switch]$re
         } else {
             $upstream = Upstream
             Git-Quiet merge-base --is-ancestor $commit $upstream | Out-Null
-            if ($LASTEXITCODE -ne 0) { $issues += "Commit $commit isn't on $upstream - push it first." }
+            if ($LASTEXITCODE -ne 0) {
+                $issues += "Commit $commit isn't on $upstream - push it first."
+            } else {
+                $ci = Ci-State (git rev-parse $commit)
+                if ($ci.State -eq "failed") {
+                    $issues += "CI on this commit ended '$($ci.Conclusion)' - fix it or re-run it first: $($ci.Url)"
+                } elseif ($ci.State -eq "none") {
+                    $issues += "CI hasn't run on this commit - push it to a branch and let CI pass first."
+                }
+            }
         }
     }
     return $issues
@@ -179,7 +205,13 @@ if ($Summary) {
     }
     $v = Parse-Version $Version
     $short = (git log -1 "--format=%h %s" $Commit) -replace "\|", "/"
-    Write-Output "yes|`$(rocket) Release v$($v.Text)|$($labelNames[$Label]) - $short|$(Notes-Line $Version). GitHub builds, tests and publishes the installers."
+    $ci = Ci-State (git rev-parse $Commit)
+    $ciText = switch ($ci.State) {
+        "passed" { "CI passed" }
+        "running" { "CI still running - the release waits for it" }
+        default { "CI state unknown - the release checks it" }
+    }
+    Write-Output "yes|`$(rocket) Release v$($v.Text)|$($labelNames[$Label]) - $short|$ciText. $(Notes-Line $Version). GitHub packages and publishes the installers once CI passed."
     Write-Output "no|`$(close) Cancel|nothing is tagged or pushed|"
     exit 0
 }
@@ -221,6 +253,6 @@ if ($LASTEXITCODE -ne 0) {
     throw "Pushing $tag failed - the local tag was removed again; nothing was released."
 }
 Write-Host ""
-Write-Host "Pushed $tag. GitHub now builds and tests on every system, then publishes the installers:" -ForegroundColor Green
+Write-Host "Pushed $tag. GitHub waits for CI on the commit, then packages and publishes the installers:" -ForegroundColor Green
 Write-Host "  https://github.com/$slug/actions/workflows/release.yml"
 Write-Host "Approve the 'publish' environment there if it asks. If anything fails, nothing is published."

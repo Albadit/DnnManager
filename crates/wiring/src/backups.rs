@@ -455,8 +455,8 @@ impl Databases for SqlDatabases {
     }
 }
 
-/// A reporter and a prompt for the backup use cases' tests here.
-#[cfg(test)]
+/// A reporter and a prompt for the backup use cases' tests here (all Windows-only).
+#[cfg(all(test, windows))]
 pub(crate) mod test_support {
     use dnnm_application::operation::{Prompt, Reporter};
 
@@ -544,6 +544,7 @@ mod tests {
         assert_eq!(keep_days(&settings), 0);
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn the_menu_texts_are_the_wpf_apps() {
         assert_eq!(

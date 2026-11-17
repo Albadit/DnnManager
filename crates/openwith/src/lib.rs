@@ -408,6 +408,7 @@ mod tests {
         entries.iter().map(|e| e.label.as_str()).collect()
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn editors_then_a_line_then_ssms_with_its_two_entries() {
         let ides = [ide("Visual Studio Community 2022", true, 17), ide("Visual Studio Code", false, 0)];
@@ -454,16 +455,19 @@ mod tests {
         assert_eq!(menu[0].tooltip.as_deref(), Some("DNN Manager doesn't start …"));
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn a_missing_project_folder_is_said_before_anything_starts() {
         let err = open_in_ide(&ide("Zed", false, 0), Path::new(r"C:\no\such\project")).unwrap_err();
         assert_eq!(err, r"The project folder no longer exists: C:\no\such\project");
     }
 
+    #[cfg(windows)] // only the Windows-only tests use it
     struct Host {
         lines: std::sync::Mutex<Vec<String>>,
     }
 
+    #[cfg(windows)]
     impl OpenHost for Host {
         fn info(&self, text: &str) {
             self.lines.lock().unwrap().push(text.into());
@@ -482,6 +486,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn a_project_without_a_database_is_said_in_the_output_and_nothing_starts() {
         let host = Host { lines: Default::default() };
@@ -505,6 +510,7 @@ mod tests {
         assert_eq!(*host.lines.lock().unwrap(), ["'shop' has no database to open: its web.config names none."]);
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn windows_sign_in_to_a_foreign_server_that_is_declined_starts_nothing() {
         let host = Host { lines: Default::default() };

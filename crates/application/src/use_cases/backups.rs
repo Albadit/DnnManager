@@ -402,6 +402,7 @@ pub(crate) mod tests {
         assert!(is_same_or_inside(Path::new(r"C:\DNN\shop\"), Path::new(r"C:\DNN\shop")));
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn backups_are_listed_newest_first_with_their_halves_and_notes() {
         let dir = tempfile::tempdir().unwrap();

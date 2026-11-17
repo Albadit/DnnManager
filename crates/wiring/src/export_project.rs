@@ -30,7 +30,8 @@ pub fn export_project(services: &Services, request: ExportProjectRequest, op: &m
     use_case::export_project(&ExportProjectDeps { files: &CopierFiles, bacpacs: &bacpacs }, &request, op)
 }
 
-#[cfg(test)]
+// Every test here uses Windows paths.
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
 

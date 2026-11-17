@@ -301,6 +301,7 @@ mod tests {
         assert!(!is_app_log("Windows", "ASP.NET errors and warnings"));
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn a_site_lists_dnn_iis_http_sys_and_the_event_logs() {
         let dir = tempfile::tempdir().unwrap();
@@ -356,6 +357,7 @@ mod tests {
         assert_eq!(titles, ["ASP.NET errors and warnings", "Worker process crashes"]);
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn sizes_and_days() {
         assert_eq!(one_decimal(0.0, ','), "0");

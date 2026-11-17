@@ -361,7 +361,8 @@ pub fn made_at(folder: &Path) -> SystemTime {
 
 /// Replaces the settings with the defaults (`SettingsStore.ResetToDefaults`): every row goes, the settings version
 /// stays, and so does the container's sa password - the container was made with it - unless this Windows account
-/// can't decrypt it; then `new_sa_password` (`SqlPasswords.New`, from the app) is kept, encrypted.
+/// can't decrypt it; then `new_sa_password` (`SqlPasswords.New`, from the app) is kept, encrypted. Off Windows there
+/// is no encryption for it (DPAPI): the settings are reset without an sa password - the SQL container is Windows'.
 pub fn reset_settings(database: &Path, new_sa_password: &str) -> Result<(), String> {
     let mut connection = Connection::open(database).map_err(|e| e.to_string())?;
     connection.busy_timeout(Duration::from_secs(5)).map_err(|e| e.to_string())?;
@@ -369,9 +370,12 @@ pub fn reset_settings(database: &Path, new_sa_password: &str) -> Result<(), Stri
         connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
     let kept: Option<String> =
         tx.query_row("SELECT value FROM settings WHERE key = ?1", [SA_PASSWORD_KEY], |r| r.get(0)).ok();
-    let sa = match kept.filter(|v| secrets::decrypts(v)) {
-        Some(kept) if !kept.is_empty() => kept,
-        _ => secrets::protect(new_sa_password)?,
+    let sa: Option<String> = match kept.filter(|v| secrets::decrypts(v)) {
+        Some(kept) if !kept.is_empty() => Some(kept),
+        #[cfg(windows)]
+        _ => Some(secrets::protect(new_sa_password)?),
+        #[cfg(not(windows))]
+        _ => secrets::protect(new_sa_password).ok(),
     };
     tx.execute("DELETE FROM settings", []).map_err(|e| e.to_string())?;
     tx.execute(
@@ -379,8 +383,10 @@ pub fn reset_settings(database: &Path, new_sa_password: &str) -> Result<(), Stri
         [dnnm_application::settings::CURRENT_VERSION.to_string()],
     )
     .map_err(|e| e.to_string())?;
-    tx.execute("INSERT INTO settings (key, value) VALUES (?1, ?2)", [SA_PASSWORD_KEY, sa.as_str()])
-        .map_err(|e| e.to_string())?;
+    if let Some(sa) = sa {
+        tx.execute("INSERT INTO settings (key, value) VALUES (?1, ?2)", [SA_PASSWORD_KEY, sa.as_str()])
+            .map_err(|e| e.to_string())?;
+    }
     tx.commit().map_err(|e| e.to_string())
 }
 
@@ -781,6 +787,7 @@ impl Render for TroubleshootPage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
     use std::collections::BTreeMap;
     use std::sync::Mutex;
 
@@ -809,13 +816,13 @@ mod tests {
         let db = root.join("dnnmanager.db");
         std::fs::create_dir_all(&root).unwrap();
         database(&db);
-        write(&root.join(r"logs\2026-11-16.log"), 100);
-        write(&root.join(r"packages\dnnsoftware.Dnn.Platform\DNN_10.zip"), 1000);
-        write(&root.join(r"backups\site1\site1_20200101_120000\site1.zip"), 50);
-        write(&root.join(r"deployments\site1_20200101_120000\site1.bacpac"), 70);
+        write(&root.join("logs/2026-11-16.log"), 100);
+        write(&root.join("packages/dnnsoftware.Dnn.Platform/DNN_10.zip"), 1000);
+        write(&root.join("backups/site1/site1_20200101_120000/site1.zip"), 50);
+        write(&root.join("deployments/site1_20200101_120000/site1.bacpac"), 70);
         write(&root.join("settings.json"), 10);
         write(&root.join("dnnmanager.damaged-1.db"), 5);
-        write(&root.join(r"state\forms.json"), 3);
+        write(&root.join("state/forms.json"), 3);
         write(&root.join("keep.txt"), 1);
         (dir, AppDataCleaner::new(root, db))
     }
@@ -836,13 +843,13 @@ mod tests {
         let (_dir, cleaner) = setup();
         let root = cleaner.root.clone();
         assert_eq!(cleaner.clean(AppDataKind::ProjectBackups), CleanupResult { freed: 50, skipped: 0 });
-        assert!(!root.join(r"backups\site1").exists());
+        assert!(!root.join("backups/site1").exists());
         assert!(root.join("backups").is_dir(), "the backups folder itself stays");
         assert_eq!(cleaner.clean(AppDataKind::OldSettingsFiles).freed, 18);
         assert!(root.join("keep.txt").is_file() && root.join("dnnmanager.db").is_file());
         assert_eq!(cleaner.clean(AppDataKind::KeepWarmChoices), CleanupResult { freed: 4, skipped: 0 });
         assert_eq!(cleaner.measure(AppDataKind::KeepWarmChoices), 0);
-        assert!(root.join(r"logs\2026-11-16.log").is_file());
+        assert!(root.join("logs/2026-11-16.log").is_file());
         assert_eq!(cleaner.clean(AppDataKind::DnnPackages).freed, 1000);
         assert!(!root.join("packages").exists());
     }
@@ -851,12 +858,12 @@ mod tests {
     fn deletes_backups_older_than_kept_by_the_date_in_their_name() {
         let (_dir, cleaner) = setup();
         let root = cleaner.root.clone();
-        write(&root.join(r"backups\site2\site2_29991231_000000\x.zip"), 9);
+        write(&root.join("backups/site2/site2_29991231_000000/x.zip"), 9);
         let result = cleaner.delete_expired(30, SystemTime::now());
         assert_eq!(result.freed, 120);
         assert_eq!(result.deleted.len(), 2);
-        assert!(root.join(r"backups\site2\site2_29991231_000000\x.zip").is_file());
-        assert!(!root.join(r"backups\site1").exists());
+        assert!(root.join("backups/site2/site2_29991231_000000/x.zip").is_file());
+        assert!(!root.join("backups/site1").exists());
         assert_eq!(cleaner.delete_expired(0, SystemTime::now()), ExpiredResult::default());
     }
 
@@ -867,6 +874,8 @@ mod tests {
         assert_eq!(days_from_civil(2000, 3, 1), 11_017);
     }
 
+    // The sa password is encrypted with DPAPI, which only Windows has.
+    #[cfg(windows)]
     #[test]
     fn a_settings_reset_keeps_only_the_version_and_the_sa_password() {
         let (_dir, cleaner) = setup();
@@ -891,6 +900,18 @@ mod tests {
         let sa: String =
             c.query_row("SELECT value FROM settings WHERE key = ?1", [SA_PASSWORD_KEY], |r| r.get(0)).unwrap();
         assert_eq!(secrets::unprotect(&sa).unwrap(), "New-Sa-1");
+    }
+
+    // Off Windows nothing can encrypt the sa password: the reset keeps only the version.
+    #[cfg(not(windows))]
+    #[test]
+    fn off_windows_a_settings_reset_keeps_only_the_version() {
+        let (_dir, cleaner) = setup();
+        reset_settings(&cleaner.database, "New-Sa-1").unwrap();
+        let c = Connection::open(&cleaner.database).unwrap();
+        let keys: Vec<String> =
+            c.prepare("SELECT key FROM settings").unwrap().query_map([], |r| r.get(0)).unwrap().flatten().collect();
+        assert_eq!(keys, vec!["version".to_string()]);
     }
 
     #[derive(Default)]
@@ -930,8 +951,8 @@ mod tests {
         let problems = factory_reset(&cleaner, "New-Sa-1", &secrets, &SignIn(true)).unwrap();
         assert_eq!(problems, vec!["refused".to_string(), "Starting at sign-in: Access is denied.".to_string()]);
         assert_eq!(secrets.0.lock().unwrap().len(), 2);
-        assert!(!cleaner.root.join(r"logs\2026-11-16.log").exists());
-        assert!(cleaner.root.join(r"backups\site1\site1_20200101_120000\site1.zip").is_file(), "backups stay");
+        assert!(!cleaner.root.join("logs/2026-11-16.log").exists());
+        assert!(cleaner.root.join("backups/site1/site1_20200101_120000/site1.zip").is_file(), "backups stay");
         let c = Connection::open(&cleaner.database).unwrap();
         let state: i64 = c.query_row("SELECT COUNT(*) FROM state", [], |r| r.get(0)).unwrap();
         assert_eq!(state, 0);

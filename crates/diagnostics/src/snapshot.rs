@@ -292,6 +292,7 @@ mod tests {
         assert_eq!(stamp("shop_20261328_154210"), None);
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn reads_a_product_name() {
         let windows = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());

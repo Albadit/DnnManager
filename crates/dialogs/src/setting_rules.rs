@@ -887,6 +887,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn projects_folder_rules_come_from_the_folder_guard() {
         let s = settings(&[("projects.baseDirectory", r"C:\")]);

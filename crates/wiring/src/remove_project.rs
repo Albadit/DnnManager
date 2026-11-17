@@ -318,6 +318,7 @@ mod tests {
         assert_eq!(remove_title(&["a".into(), "b".into()]), "Remove 2 projects");
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn backups_are_only_ever_inside_the_backups_folder() {
         let folders = SiteFolders { backups_root: PathBuf::from(r"C:\Users\x\Documents\DnnManager\backups") };

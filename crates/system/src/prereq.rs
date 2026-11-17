@@ -131,7 +131,12 @@ pub fn get_iis_feature_states(features: &[IisFeature]) -> BTreeMap<String, bool>
 /// Checks the features and offers to enable the missing ones. Missing isn't a failure yet - only what still doesn't
 /// work afterwards is, so a stage whose missing features were enabled doesn't end as failed.
 #[cfg(not(windows))]
-pub fn ensure_iis_features(_: &[IisFeature], _: &mut Operation) -> Result<(), String> {
+pub fn ensure_iis_features(features: &[IisFeature], op: &mut Operation) -> Result<(), String> {
+    // Nothing to check is the same answer everywhere; a feature to check needs Windows.
+    if features.is_empty() {
+        op.report.info("No IIS features configured to check.");
+        return Ok(());
+    }
     Err(IIS_ONLY_ON_WINDOWS.into())
 }
 

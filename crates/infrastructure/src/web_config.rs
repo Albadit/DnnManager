@@ -301,6 +301,7 @@ mod tests {
         assert_eq!(read_database_connection(&web_config).unwrap().database, "dnn10");
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn follows_config_source_only_inside_the_site() {
         let dir = tempfile::tempdir().unwrap();
@@ -340,6 +341,7 @@ mod tests {
         assert!(read_database_connection(&web_config).unwrap_err().contains("DTD"));
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn inside_compares_whole_components_ignoring_case() {
         assert!(is_inside(Path::new(r"C:\DNN\site\x"), Path::new(r"c:\dnn\SITE")));

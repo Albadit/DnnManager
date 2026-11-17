@@ -500,6 +500,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn a_source_in_the_container_is_backed_up_there_and_one_with_the_clones_name_is_refused() {
         let world = World::new();

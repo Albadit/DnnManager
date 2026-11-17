@@ -645,6 +645,7 @@ mod tests {
         assert_eq!(format_timespan(Duration::ZERO), "00:00:00");
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn log_folder_is_the_sites_then_the_defaults() {
         assert_eq!(log_directory_from(SITES, "default web site"), Some(PathBuf::from(r"D:\logs\W3SVC1")));

@@ -173,6 +173,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)] // only the Windows-only tests use it
     fn dnn_site() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -205,6 +206,7 @@ mod tests {
         (result, lines.0)
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn asks_first_and_a_no_changes_nothing() {
         let site = dnn_site();
@@ -220,6 +222,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn deletes_dnns_cache_files_keeps_the_folders_and_recycles() {
         let site = dnn_site();
@@ -254,6 +257,7 @@ mod tests {
         assert_eq!(lines[0], "## Recycling the app pool");
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn never_deletes_through_a_link() {
         let site = dnn_site();

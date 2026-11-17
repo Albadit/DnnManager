@@ -1,9 +1,9 @@
-# CI: every push and pull request is built and tested on Windows, Linux and macOS. A release (release.yml) is built
-# only from a commit this passed.
+# CI: every push and pull request is built and tested on Windows, Linux and macOS. It is the release's test: the
+# release workflow (release.yml) waits for this run on the tagged commit and makes nothing unless it passed.
 #
 #   windows  build, the tests, clippy - DNN Manager's real platform (IIS)
 #   linux    build, the tests, clippy - the app opens there, without IIS
-#   macos    build, clippy - the app opens there, without IIS
+#   macos    build, the tests, clippy - the app opens there, without IIS
 #
 # A build must be clean: a warning from the compiler or from clippy fails the job (RUSTFLAGS and -D warnings).
 name: CI
@@ -67,7 +67,7 @@ jobs:
 
   macos:
     name: macOS
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     env:
       RUSTUP_TOOLCHAIN: stable
@@ -79,5 +79,7 @@ jobs:
         run: rustup toolchain install stable --profile minimal --component clippy
       - name: Build
         run: cargo build --workspace --all-targets --locked
+      - name: Tests
+        run: cargo test --workspace --locked
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings

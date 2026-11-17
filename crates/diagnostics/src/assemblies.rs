@@ -353,6 +353,7 @@ mod tests {
         assert!(!in_range("x-y", v));
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn code_base_paths() {
         let root = Path::new(r"C:\DNN\shop");

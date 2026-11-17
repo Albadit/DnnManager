@@ -319,6 +319,7 @@ mod tests {
         assert_eq!(quote("a b"), "\"a b\"");
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn the_app_attaches_a_local_db_file_by_its_full_path() {
         let c = DatabaseConnection::new(

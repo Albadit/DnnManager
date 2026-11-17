@@ -682,6 +682,7 @@ pub fn expand_environment(path: &str) -> PathBuf {
 mod tests {
     use super::*;
 
+    #[cfg(windows)] // only the Windows-only tests use it
     const SITES: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <appcmd>
     <SITE SITE.NAME="Default Web Site" SITE.ID="1" bindings="http/*:80:" state="Stopped">
@@ -704,6 +705,7 @@ mod tests {
     </SITE>
 </appcmd>"#;
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn reads_sites_with_their_pools_and_workers() {
         let pools = parse_app_pools(

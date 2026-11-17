@@ -474,6 +474,7 @@ mod tests {
         assert_eq!(problem(&file, &release, &asset).unwrap(), "it is version (none), not 1.8.7");
     }
 
+    #[cfg(windows)] // Windows paths, drives or programs
     #[test]
     fn tells_an_installed_dnn_manager_from_a_portable_one() {
         let installs = vec![(PathBuf::from(r"C:\Program Files\DNN Manager\"), true)];
