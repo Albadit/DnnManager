@@ -14,7 +14,7 @@ use windows::Win32::UI::Shell::{
     FOLDERID_ProgramFilesCommon, FOLDERID_ProgramFilesCommonX86, FOLDERID_ProgramFilesX86, FOLDERID_Windows,
 };
 
-use super::safe_path::{full, has_link, is_same_or_inside};
+use super::safe_path::{full, has_link, is_same_or_inside, long_path};
 use crate::acl::{Ace, Security, current_user_sid, flags, rights, sids};
 use crate::trusted::is_reparse_point;
 use crate::win::known_folder;
@@ -43,6 +43,9 @@ pub fn projects_folder_problem(folder: &str) -> Option<String> {
     let Some(full_path) = (!folder.trim().is_empty() && fully_qualified).then(|| full(path)).flatten() else {
         return Some("must be a full path, e.g. C:\\DNN.".into());
     };
+    // Compared by its long name: a short one (C:\Users\RUNNER~1\..., as TEMP can be) would look like another account's
+    // folder next to the known folders, which are spelled long.
+    let full_path = long_path(&full_path);
     const USE_OWN: &str = " - use a folder of its own, e.g. C:\\DNN.";
     let text = full_path.display().to_string();
     if text.len() <= 3 && text.ends_with(['\\', ':']) {
@@ -278,6 +281,10 @@ mod tests {
         );
         assert!(projects_folder_problem(r"C:\Windows\x").unwrap().starts_with("can't be a system folder"));
         assert!(projects_folder_problem(r"C:\Program Files\DNN").unwrap().starts_with("can't be a system folder"));
+        // Spelled short, where the drive has 8.3 names, it is still Program Files.
+        if Path::new(r"C:\PROGRA~1").is_dir() {
+            assert!(projects_folder_problem(r"C:\PROGRA~1\DNN").unwrap().starts_with("can't be a system folder"));
+        }
         assert!(projects_folder_problem(r"C:\$Recycle.Bin\x").unwrap().starts_with("can't be in $Recycle.Bin"));
         assert_eq!(
             projects_folder_problem(r"\\server\share\dnn").unwrap(),
@@ -358,5 +365,20 @@ mod tests {
         let kept = secure(&projects.display().to_string());
         assert!(kept);
         assert!(!lets_everyone_in(&Security::read(&projects).unwrap()));
+    }
+
+    #[test]
+    fn a_folder_in_the_own_profile_spelled_short_is_allowed() {
+        use windows::Win32::Storage::FileSystem::GetShortPathNameW;
+        use windows::core::PCWSTR;
+        let dir = tempfile::tempdir().unwrap();
+        let wide: Vec<u16> = dir.path().as_os_str().to_string_lossy().encode_utf16().chain([0]).collect();
+        let mut buffer = vec![0u16; 32768];
+        // SAFETY: the buffer's length is passed in.
+        let length = unsafe { GetShortPathNameW(PCWSTR(wide.as_ptr()), Some(&mut buffer)) } as usize;
+        assert!(length > 0 && length < buffer.len());
+        let short = PathBuf::from(String::from_utf16_lossy(&buffer[..length])).join("DNN");
+        // Where 8.3 names are off, or no part needs one, it is the long spelling: still allowed.
+        assert_eq!(projects_folder_problem(&short.display().to_string()), None, "{}", short.display());
     }
 }
