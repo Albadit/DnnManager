@@ -273,7 +273,7 @@ jobs:
       - name: Draft release with every file
         run: |
           notes=".docs/release-notes/$TAG.md"
-          args=(--draft --title "DNN Manager $VERSION" --verify-tag --repo "$GITHUB_REPOSITORY")
+          args=(--draft --title "$VERSION" --verify-tag --repo "$GITHUB_REPOSITORY")
           if [ -f "$notes" ]; then args+=(--notes-file "$notes"); else args+=(--generate-notes); fi
           # A draft a failed run left behind goes first - only a draft: a published release is never touched.
           state=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft' 2>/dev/null || true)
