@@ -28,6 +28,11 @@ folder of its own (`--target-dir <folder>`) when the IDE is building too.
 On Windows DNN Manager needs administrator rights to read IIS's configuration: started without them, it starts
 itself again with the UAC prompt; refused, it runs anyway and the Projects page says why it can't read IIS.
 
+A release build (what the packages ship) runs once per Windows session: a second start brings the open window to the
+front and ends (mutex `DnnManager.Running`, events `DnnManager.Activate` / `DnnManager.Quit` - not the C# app's
+`DnnManager.NET.*`, so the two can run side by side). A debug build opens as many copies as you start, for testing;
+so does one with the fixture. They all share one `dnnmanager.db`, so settings saved in one are the others' too.
+
 | Environment variable | Effect |
 |---|---|
 | `DNNMANAGER_GPUI_NO_ELEVATE` | Set to anything: don't ask for administrator rights (IIS can't be read). For working on the UI. |

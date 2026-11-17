@@ -35,8 +35,8 @@ impl Workspace {
     /// The page the help is for - Settings or Troubleshoot when one is open over the page (`HelpPage`).
     pub(crate) fn help_page(&self, cx: &gpui::App) -> HelpPage {
         match &self.settings {
-            Some(Modal::Settings(_)) => HelpPage::Settings,
-            Some(Modal::Troubleshoot(_)) => HelpPage::Troubleshoot,
+            Some(Modal::Settings(_, _)) => HelpPage::Settings,
+            Some(Modal::Troubleshoot(_, _)) => HelpPage::Troubleshoot,
             None => match self.page {
                 Page::NewProject => HelpPage::Setup,
                 Page::Projects if self.projects.read(cx).details_of(cx).is_some() => HelpPage::Details,

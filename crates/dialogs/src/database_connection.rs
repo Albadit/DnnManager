@@ -6,12 +6,10 @@
 //!
 //! The fields' rules are [`ConnectionForm`], plain data the view reads its text fields into.
 
+use dnnm_ui::px;
 use std::sync::Arc;
 
-use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, SharedString,
-    Subscription, Task, Window, div, prelude::*, px,
-};
+use gpui::{AnyElement, App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, SharedString, Subscription, Task, Window, div, prelude::*};
 
 use dnnm_application::use_cases::database_connection::{
     ConnectionDefaults, DatabaseCheckReport, DatabaseConnection, DatabaseKind, SqlAuthentication,
@@ -19,7 +17,7 @@ use dnnm_application::use_cases::database_connection::{
 use dnnm_ui::dialog::{self, DialogEvent};
 use dnnm_ui::text_input::{TextChanged, TextInput};
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{self as ui, Tooltip};
+use dnnm_ui::{self as ui, Tip};
 
 use crate::database_check_list::{CheckListState, database_check_list};
 use crate::host_password::{PasswordField, PasswordFieldChanged};
@@ -505,7 +503,7 @@ impl Render for DatabaseConnectionDialog {
                         cx,
                     )
                     .min_w(px(80.0))
-                    .tooltip(Tooltip::text("Test connection"))
+                    .tip("Test connection")
                     .when(state.can_test, |b| b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.test(cx)))),
                 ),
             )
@@ -523,7 +521,6 @@ impl Render for DatabaseConnectionDialog {
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .child(div().w_full().child(intro(&self.site)))
             .child(
                 div()
                     .w_full()
@@ -567,13 +564,13 @@ impl Render for DatabaseConnectionDialog {
             .child(
                 ui::button("dialog-ok", "Save", ui::ButtonKind::Primary, state.can_save, cx)
                     .min_w(px(80.0))
-                    .tooltip(Tooltip::text("Save (Enter)"))
+                    .tip("Save (Enter)")
                     .when(state.can_save, |b| b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.save(cx)))),
             )
             .child(
                 ui::button("dialog-cancel", "Cancel", ui::ButtonKind::Secondary, true, cx)
                     .min_w(px(80.0))
-                    .tooltip(Tooltip::text("Cancel (Esc)"))
+                    .tip("Cancel (Esc)")
                     .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(DialogEvent::Cancelled))),
             );
 
@@ -585,7 +582,14 @@ impl Render for DatabaseConnectionDialog {
                     this.save(cx);
                 }
             }))
-            .child(dialog::frame("Change database connection", 520.0, body, buttons, cx))
+            .child(dialog::frame_with_tip(
+                "Change database connection",
+                Some(intro(&self.site)),
+                520.0,
+                body,
+                buttons,
+                cx,
+            ))
     }
 }
 

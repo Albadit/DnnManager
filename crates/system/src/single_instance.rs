@@ -1,7 +1,9 @@
 //! DNN Manager runs once per Windows session (`Presentation/SingleInstance.cs`, `Presentation/RunningMarker.cs`). A
 //! second start finds the running marker mutex, asks the running DNN Manager to show its window through a named event
-//! and exits. Setup and the uninstaller ask it to quit through another event before they replace or remove its files -
-//! they can't close it themselves, as it runs elevated. The names are the WPF app's: Setup knows them.
+//! and exits. Another event asks it to quit (it runs elevated, so an unelevated process can't close it).
+//!
+//! The names are its own, not the C# (WPF) app's `DnnManager.NET.*`: the two are separate programs and may run side
+//! by side - each still once.
 
 use std::ffi::c_void;
 use std::thread::JoinHandle;
@@ -21,11 +23,9 @@ use windows::core::PCWSTR;
 use crate::acl::current_user_sid;
 use crate::win::{Handle, wide};
 
-pub const ACTIVATE_EVENT_NAME: &str = "DnnManager.NET.Activate";
-/// Keep in step with `QuitEvent` in `src\DnnManager.Installer\DnnManager.iss`.
-pub const QUIT_EVENT_NAME: &str = "DnnManager.NET.Quit";
-/// Keep in step with `RunningMutex` in `src\DnnManager.Installer\DnnManager.iss`.
-pub const RUNNING_MARKER_NAME: &str = "DnnManager.NET.Running";
+pub const ACTIVATE_EVENT_NAME: &str = "DnnManager.Activate";
+pub const QUIT_EVENT_NAME: &str = "DnnManager.Quit";
+pub const RUNNING_MARKER_NAME: &str = "DnnManager.Running";
 
 /// The running marker; keep it alive until the app exits - Windows removes it with the last handle.
 pub struct RunningMarker {

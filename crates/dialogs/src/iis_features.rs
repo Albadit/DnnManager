@@ -2,16 +2,14 @@
 //! enables, a row each - how it is shown and its Windows feature name - added, removed, or the defaults again. Emits
 //! `DialogEvent::Done(features)` only when something changed and every row is right.
 
-use gpui::{
-    App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString, Subscription, Window, div,
-    prelude::*, px,
-};
+use dnnm_ui::px;
+use gpui::{App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString, Subscription, Window, div, prelude::*};
 
 use dnnm_system::prereq::{IisFeature, default_features, is_iis_feature_name};
 use dnnm_ui::dialog::{self, DialogEvent};
 use dnnm_ui::text_input::{TextChanged, TextInput};
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{self as ui, Tooltip, icons};
+use dnnm_ui::{self as ui, Tip, icons};
 
 /// A row as typed: (shown as, Windows feature name).
 pub type FeatureRow = (String, String);
@@ -152,7 +150,7 @@ impl Render for IisFeaturesDialog {
                                 true,
                                 cx,
                             )
-                            .tooltip(Tooltip::text("Remove this feature"))
+                            .tip("Remove this feature")
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 if i < this.rows.len() {
                                     this.rows.remove(i);
@@ -164,8 +162,8 @@ impl Render for IisFeaturesDialog {
             );
         }
 
-        // The intro 18 above the column labels, 4 above the rows; the links 10 under the rows, the problem 10 under
-        // them.
+        // The column labels 4 above the rows; the links 10 under the rows, the problem 10 under them. What the list is,
+        // and where the names come from, in the tip beside the dialog's title.
         let body = div()
             .flex()
             .flex_col()
@@ -174,24 +172,15 @@ impl Render for IisFeaturesDialog {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(18.0))
-                    .child(div().child(
-                        "The Windows features Test checks and Set up IIS enables. dism /online /get-features lists their names.",
-                    ))
+                    .gap(px(4.0))
                     .child(
                         div()
                             .flex()
-                            .flex_col()
-                            .gap(px(4.0))
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap(px(8.0))
-                                    .child(div().w(px(230.0)).child(dialog::label("Shown as", cx)))
-                                    .child(div().child(dialog::label("Windows feature name", cx))),
-                            )
-                            .child(list),
-                    ),
+                            .gap(px(8.0))
+                            .child(div().w(px(230.0)).child(dialog::label("Shown as", cx)))
+                            .child(div().child(dialog::label("Windows feature name", cx))),
+                    )
+                    .child(list),
             )
             .child(
                 div()
@@ -204,9 +193,10 @@ impl Render for IisFeaturesDialog {
                             cx.notify();
                         },
                     )))
-                    .child(ui::link("default-features", "Use the defaults", cx).on_click(cx.listener(
-                        |this, _: &ClickEvent, _, cx| this.fill(&default_features(), cx),
-                    ))),
+                    .child(
+                        ui::link("default-features", "Use the defaults", cx)
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.fill(&default_features(), cx))),
+                    ),
             )
             .children(dialog::field_error(problem.map(SharedString::from), cx));
 
@@ -215,7 +205,7 @@ impl Render for IisFeaturesDialog {
             .gap(px(8.0))
             .child(
                 ui::button("dialog-ok", "Save", ui::ButtonKind::Primary, ok, cx)
-                    .tooltip(Tooltip::text("Save (Enter)"))
+                    .tip("Save (Enter)")
                     .when(ok, |b| {
                         b.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             let features = features_of(&this.typed(cx));
@@ -225,11 +215,20 @@ impl Render for IisFeaturesDialog {
             )
             .child(
                 ui::button("dialog-cancel", "Cancel", ui::ButtonKind::Secondary, true, cx)
-                    .tooltip(Tooltip::text("Cancel (Esc)"))
+                    .tip("Cancel (Esc)")
                     .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(DialogEvent::Cancelled))),
             );
 
-        div().track_focus(&self.focus).child(dialog::frame("Edit Windows features", 560.0, body, buttons, cx))
+        div().track_focus(&self.focus).child(dialog::frame_with_tip(
+            "Edit Windows features",
+            Some(
+                "The Windows features Test checks and Set up IIS enables. dism /online /get-features lists their names.",
+            ),
+            560.0,
+            body,
+            buttons,
+            cx,
+        ))
     }
 }
 

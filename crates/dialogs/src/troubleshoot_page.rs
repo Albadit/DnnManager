@@ -10,13 +10,11 @@
 //! no row (the WPF app writes them all back at its next start); the age of a backup folder named with its date is
 //! read as UTC, so `delete_expired` can be a few hours off a day boundary.
 
+use dnnm_ui::px;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use gpui::{
-    App, ClickEvent, Context, EventEmitter, FocusHandle, Focusable, FontWeight, SharedString, Window, div, prelude::*,
-    px,
-};
+use gpui::{App, ClickEvent, Context, EventEmitter, FocusHandle, Focusable, FontWeight, SharedString, Window, div, prelude::*};
 use rusqlite::Connection;
 
 use dnnm_application::project::view::byte_size;
@@ -24,7 +22,7 @@ use dnnm_system::files::safe_path::{has_link, is_link};
 use dnnm_system::secrets::{self, SA_PASSWORD_KEY, names};
 use dnnm_ui::dialog;
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{self as ui, ButtonKind, Pad, Tooltip, icons};
+use dnnm_ui::{self as ui, ButtonKind, Pad, Tip, icons};
 
 use crate::settings_page::{Notice, SecretStore, SignInTask, hint};
 
@@ -509,6 +507,13 @@ fn choice_detail(kind: AppDataKind) -> &'static str {
     }
 }
 
+/// An action's explanation: a tip beside its title, or - a warning about what it removes - shown under it.
+#[derive(Debug, Clone, Copy)]
+enum Explain {
+    Tip(&'static str),
+    Warning(&'static str),
+}
+
 /// What the page asks the app to do.
 #[derive(Debug, Clone)]
 pub enum TroubleshootEvent {
@@ -603,7 +608,7 @@ impl TroubleshootPage {
         &self,
         id: &'static str,
         title: &'static str,
-        text: &'static str,
+        text: Explain,
         button: (&'static str, &'static str, ButtonKind, bool),
         event: TroubleshootEvent,
         cx: &mut Context<Self>,
@@ -614,20 +619,17 @@ impl TroubleshootPage {
             .flex()
             .items_center()
             .gap(px(16.0))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.0))
-                    .flex_1()
-                    .min_w_0()
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
-                    .child(hint(text, &theme)),
-            )
+            .child(div().flex().flex_col().gap(px(2.0)).flex_1().min_w_0().map(|d| {
+                let title = div().font_weight(FontWeight::SEMIBOLD).child(title);
+                match text {
+                    Explain::Tip(tip) => d.child(ui::with_tip(title, SharedString::from(format!("{id}-tip")), tip, cx)),
+                    Explain::Warning(text) => d.child(title).child(hint(text, &theme)),
+                }
+            }))
             .child(
                 ui::button(id, label, kind, enabled, cx)
                     .min_w(px(120.0))
-                    .tooltip(Tooltip::text(tip))
+                    .tip(tip)
                     .when(enabled, |b| b.on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(event.clone())))),
             )
     }
@@ -690,16 +692,15 @@ impl Render for TroubleshootPage {
                     .border_b_1()
                     .border_color(c.card_border)
                     // 8 more than the bar's 20 puts the title 28 from the edge, in line with the page.
-                    .child(
-                        div()
-                            .pad(px(0.0), px(8.0))
-                            .text_size(theme.text.large)
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Troubleshoot"),
-                    )
+                    .child(div().pad(px(0.0), px(8.0)).child(ui::with_tip(
+                        div().text_size(theme.text.large).font_weight(FontWeight::SEMIBOLD).child("Troubleshoot"),
+                        "troubleshoot-tip",
+                        "Restart, clean up or reset DNN Manager. Your projects are never touched here.",
+                        cx,
+                    )))
                     .child(
                         ui::icon_button("troubleshoot-close", icons::CLOSE, c.link_fg, true, cx)
-                            .tooltip(Tooltip::text("Close (Esc)"))
+                            .tip("Close (Esc)")
                             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(TroubleshootEvent::Close))),
                     ),
             )
@@ -714,11 +715,6 @@ impl Render for TroubleshootPage {
                         .pad(px(22.0), px(28.0))
                         .child(
                             div()
-                                .text_color(c.text_muted)
-                                .child("Restart, clean up or reset DNN Manager. Your projects are never touched here."),
-                        )
-                        .child(
-                            div()
                                 .flex()
                                 .flex_col()
                                 .gap(px(12.0))
@@ -729,7 +725,7 @@ impl Render for TroubleshootPage {
                                         .child(row(self.action_row(
                                             "restart",
                                             "Restart DNN Manager",
-                                            "Closes and starts it again. Your projects, settings and data are kept.",
+                                            Explain::Tip("Closes and starts it again. Your projects, settings and data are kept."),
                                             ("Restart", "Close DNN Manager and open it again - nothing is lost", ButtonKind::Secondary, idle),
                                             TroubleshootEvent::Restart,
                                             cx,
@@ -742,7 +738,7 @@ impl Render for TroubleshootPage {
                                             .child(self.action_row(
                                                 "clean-up",
                                                 "Clean up data",
-                                                r"The data selected below is removed from Documents\DnnManager.",
+                                                Explain::Warning(r"The data selected below is removed from Documents\DnnManager."),
                                                 ("Clean up data", "Delete what is ticked below, to free disk space", ButtonKind::Secondary, can_clean),
                                                 TroubleshootEvent::CleanUp { question, kinds },
                                                 cx,
@@ -751,7 +747,7 @@ impl Render for TroubleshootPage {
                                         .child(row(self.action_row(
                                             "reset-settings",
                                             "Reset settings to defaults",
-                                            "Every setting back to its default, passwords and start at sign-in too. Projects, logs and keep warm stay.",
+                                            Explain::Warning("Every setting back to its default, passwords and start at sign-in too. Projects, logs and keep warm stay."),
                                             (
                                                 "Reset settings",
                                                 "Put every setting back as it was at install - your websites aren't touched",
@@ -764,7 +760,7 @@ impl Render for TroubleshootPage {
                                         .child(row(self.action_row(
                                             "factory-reset",
                                             "Reset to factory defaults",
-                                            "Removes settings, passwords, logs, kept packages and keep warm, then restarts. Projects and backups stay.",
+                                            Explain::Warning("Removes settings, passwords, logs, kept packages and keep warm, then restarts. Projects and backups stay."),
                                             (
                                                 "Reset to factory defaults",
                                                 "Put DNN Manager back as it was installed - your websites and backups are kept; asks first",

@@ -173,8 +173,14 @@ pub const FLAME_FILLED: &str = "M4.11056 6.18914L4.10959 6.19037L4.10785 6.19258
 
 /// The paths' bounds: WPF draws them `Stretch="Uniform"` into the flame's box, so the box fits these, not 16×16.
 pub const FLAME_VIEW_BOX: &str = "3 1 10.5034 14";
-/// The flame's box in the rows and the card (and the bulk button's icon).
-pub const FLAME_SIZE: f32 = 14.0;
+/// The flame's height in the rows and the card (and the bulk button's icon): the 13 px of the glyphs beside it. GPUI
+/// scales an SVG to its box's width, so the box takes the path's proportions - `flame_width`.
+pub const FLAME_SIZE: f32 = 13.0;
+
+/// The flame's width for a height: the path's 10.5 × 14.
+pub fn flame_width(height: f32) -> f32 {
+    height * 10.5034 / 14.0
+}
 /// The failing dot: 6×6 at the bottom right, 2 px past the right edge and 1 px past the bottom.
 pub const FLAME_DOT_SIZE: f32 = 6.0;
 pub const FLAME_DOT_OVERHANG: (f32, f32) = (2.0, 1.0);

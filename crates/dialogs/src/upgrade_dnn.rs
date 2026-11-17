@@ -8,18 +8,16 @@
 //! `dnnm_wiring::upgrade_dnn::upgrade_dnn` with an `UpgradeDnnRequest` titled `texts::operation_title(site,
 //! choice.version)`, and shows `texts::done` when it finishes.
 
+use dnnm_ui::px;
 use std::sync::Arc;
 
-use gpui::{
-    AnyElement, App, ClickEvent, Context, EventEmitter, FocusHandle, Focusable, FontWeight, KeyDownEvent, Pixels,
-    SharedString, Window, div, prelude::*, px,
-};
+use gpui::{AnyElement, App, ClickEvent, Context, EventEmitter, FocusHandle, Focusable, FontWeight, KeyDownEvent, Pixels, SharedString, Window, div, prelude::*};
 
 use dnnm_application::use_cases::upgrade_dnn::{DnnNumber, Finding, Severity, StepMethod, UpgradePlan};
 use dnnm_domain::{DnnRelease, DnnReleaseList};
 use dnnm_ui::dialog::{self, DialogEvent};
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{self as ui, Pad, Tooltip};
+use dnnm_ui::{self as ui, Pad, Tip};
 
 use crate::markdown::stack_with_gaps;
 
@@ -70,10 +68,15 @@ pub fn newer_releases(releases: &[DnnRelease], current: Option<DnnNumber>) -> Ve
         .collect()
 }
 
+/// When the release list saved for offline use was saved, to the minute: `2026-11-17T10:53:52.0135567+01:00` →
+/// `2026-11-17 10:53` (it is saved as a round-trip time).
+pub fn saved_at_shown(saved_at: &str) -> String {
+    saved_at.replace('T', " ").chars().take(16).collect()
+}
+
 /// The hint when the releases come from the list saved for offline use.
 pub fn offline_hint(saved_at: &str) -> String {
-    // Saved as a round-trip time: shown to the minute.
-    let shown: String = saved_at.replace('T', " ").chars().take(16).collect();
+    let shown = saved_at_shown(saved_at);
     format!(
         "GitHub can't be reached - the releases as of {shown}. The upgrade downloads each step's package, so it needs internet."
     )
@@ -381,7 +384,7 @@ impl UpgradeDnnDialog {
                     .when(line.kind == LineKind::Heading, |d| d.font_weight(FontWeight::SEMIBOLD))
                     .child(line.text.clone()),
             )
-            .when_some(line.tip.clone(), |d, tip| d.tooltip(Tooltip::text(tip)))
+            .when_some(line.tip.clone(), |d, tip| d.tip(tip))
             .into_any_element()
     }
 }
@@ -450,7 +453,6 @@ impl Render for UpgradeDnnDialog {
             .flex()
             .flex_col()
             .gap(px(12.0))
-            .child(div().w_full().child(intro(&self.site, &current)))
             .when(self.sources.len() > 1, |d| {
                 d.child(stack(4.0).child(dialog::label("Repository", cx)).child(
                     div().id("repository-box").on_click(toggle(Open::Repository)).child(dialog::select(
@@ -498,13 +500,13 @@ impl Render for UpgradeDnnDialog {
             .child(
                 ui::button("dialog-ok", "Start upgrade", ui::ButtonKind::Primary, ok, cx)
                     .min_w(px(80.0))
-                    .tooltip(Tooltip::text("Back up and upgrade, step by step (Enter)"))
+                    .tip("Back up and upgrade, step by step (Enter)")
                     .when(ok, |b| b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.submit(cx)))),
             )
             .child(
                 ui::button("dialog-cancel", "Cancel", ui::ButtonKind::Secondary, true, cx)
                     .min_w(px(80.0))
-                    .tooltip(Tooltip::text("Cancel (Esc)"))
+                    .tip("Cancel (Esc)")
                     .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(DialogEvent::Cancelled))),
             );
 
@@ -515,7 +517,7 @@ impl Render for UpgradeDnnDialog {
                     this.submit(cx);
                 }
             }))
-            .child(dialog::frame("Upgrade DNN", 700.0, body, buttons, cx))
+            .child(dialog::frame_with_tip("Upgrade DNN", Some(intro(&self.site, &current)), 700.0, body, buttons, cx))
     }
 }
 

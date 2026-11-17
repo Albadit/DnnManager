@@ -11,6 +11,7 @@ pub mod buffer;
 #[cfg(windows)]
 pub mod environment;
 pub mod panel;
+pub mod scale;
 #[cfg(windows)]
 mod pty;
 #[cfg(windows)]

@@ -4,13 +4,11 @@
 //!
 //! Also the guide's and the tour's text with its `**bold**` parts (`GuideDialog.AddText`).
 
+use dnnm_ui::px;
 use std::ops::Range;
 use std::rc::Rc;
 
-use gpui::{
-    AnyElement, App, Div, FontStyle, FontWeight, Hsla, InteractiveText, Pixels, SharedString, StyledText, TextRun,
-    UnderlineStyle, Window, div, font, prelude::*, px,
-};
+use gpui::{AnyElement, App, Div, FontStyle, FontWeight, Hsla, InteractiveText, Pixels, SharedString, StyledText, TextRun, UnderlineStyle, Window, div, font, prelude::*};
 
 use dnnm_ui::theme::Theme;
 use dnnm_ui::{Pad, Tooltip};

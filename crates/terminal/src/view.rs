@@ -5,16 +5,11 @@
 //! program when nothing is selected), Ctrl+Shift+C copies; Ctrl+V or Ctrl+Shift+V pastes; a right-click copies when
 //! text is selected and pastes when not. Shift+PageUp/PageDown and Ctrl+Shift+arrows/PageUp/PageDown scroll.
 
+use crate::scale::px;
 use std::ops::Range;
 
 use futures::StreamExt;
-use gpui::{
-    App, BorderStyle, Bounds, ClipboardItem, Context, CursorStyle, ElementInputHandler, Entity, EntityInputHandler,
-    EventEmitter, FocusHandle, Focusable, Font, FontFallbacks, FontStyle, FontWeight, Hsla, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ScrollWheelEvent, ShapedLine, SharedString,
-    Size, Task, TextRun, UTF16Selection, UnderlineStyle, Window, canvas, div, fill, font, outline, point, prelude::*,
-    px, rgb, size,
-};
+use gpui::{App, BorderStyle, Bounds, ClipboardItem, Context, CursorStyle, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, Font, FontFallbacks, FontStyle, FontWeight, Hsla, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ScrollWheelEvent, ShapedLine, SharedString, Size, Task, TextRun, UTF16Selection, UnderlineStyle, Window, canvas, div, fill, font, outline, point, prelude::*, rgb, size};
 
 use crate::buffer::{Cell, CellStyle, colour_rgb};
 use crate::session::{SessionEvent, TerminalSession};
@@ -80,6 +75,9 @@ pub struct TerminalView {
     scroll_remainder: Pixels,
     // Text an input method is composing - sent once it is committed.
     marked: Option<String>,
+    // The panel's Find bar's matches, by line: (first column, columns, the current one), and their two colours.
+    find_marks: std::collections::HashMap<usize, Vec<(usize, usize, bool)>>,
+    find_colors: (Hsla, Hsla),
     _events: Task<()>,
 }
 
@@ -128,6 +126,8 @@ impl TerminalView {
             grid_origin: point(px(PAD_LEFT), px(PAD_TOP)),
             scroll_remainder: px(0.),
             marked: None,
+            find_marks: Default::default(),
+            find_colors: (gpui::transparent_black(), gpui::transparent_black()),
             _events: task,
         }
     }
@@ -159,6 +159,33 @@ impl TerminalView {
     /// The first line shown, from 0 (the oldest line) to [`Self::scroll_maximum`] (the bottom).
     pub fn scroll_position(&self) -> usize {
         self.view_top.unwrap_or(usize::MAX).min(self.scroll_maximum())
+    }
+
+    /// Every line - the scrollback, then the screen - as text: what the panel's Find bar searches. A character per cell,
+    /// so a match's character offsets are its columns.
+    pub fn find_lines(&self) -> Vec<String> {
+        let buffer = self.session.buffer();
+        (0..buffer.total_lines()).map(|i| crate::buffer::line_text(buffer.line(i))).collect()
+    }
+
+    /// The Find bar's matches to highlight - by line, (first column, columns, current) - in their colours (every match,
+    /// the current one); `reveal` scrolls that line into the middle of the view.
+    pub fn set_find(
+        &mut self,
+        marks: std::collections::HashMap<usize, Vec<(usize, usize, bool)>>,
+        colors: (Hsla, Hsla),
+        reveal: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.find_marks != marks || self.find_colors != colors {
+            self.find_marks = marks;
+            self.find_colors = colors;
+            cx.notify();
+        }
+        if let Some(line) = reveal {
+            let rows = self.session.buffer().rows();
+            self.scroll_to(line.saturating_sub(rows / 2), cx);
+        }
     }
 
     pub fn scroll_to(&mut self, position: usize, cx: &mut Context<Self>) {
@@ -507,6 +534,7 @@ fn prepaint(view: &Entity<TerminalView>, bounds: Bounds<Pixels>, window: &mut Wi
     let origin = view.grid_origin;
     let top = view.scroll_position();
     let selection = view.ordered_selection();
+    let (find_other, find_current) = view.find_colors;
     let mut frame = Frame { quads: Vec::new(), lines: Vec::new(), overlays: Vec::new(), line_height: cell.height };
 
     for row in 0..buffer.rows() {
@@ -569,6 +597,14 @@ fn prepaint(view: &Entity<TerminalView>, bounds: Bounds<Pixels>, window: &mut Wi
             // Each glyph on its own cell, whatever the font's own advance (fallback fonts, bold).
             let shaped = text_system.shape_line(text.into(), font_size, &runs, Some(cell.width));
             frame.lines.push((point(origin.x, y), shaped));
+        }
+
+        // The Find bar's matches on this line, under the selection.
+        for &(column, columns, current) in view.find_marks.get(&index).map(Vec::as_slice).unwrap_or_default() {
+            frame.overlays.push(fill(
+                Bounds::new(point(origin.x + cell.width * column as f32, y), size(cell.width * columns as f32, cell.height)),
+                if current { find_current } else { find_other },
+            ));
         }
 
         if let Some((from, to)) = selection

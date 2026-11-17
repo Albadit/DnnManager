@@ -5,14 +5,12 @@
 //! The texts are written for someone who has never used DNN Manager, IIS or DNN; change them with the UI they
 //! describe. [`onboarding`] keeps which guide the user saw (the `onboarding` state area, as the WPF app keeps it).
 
-use gpui::{
-    App, Bounds, ClickEvent, Context, EventEmitter, FocusHandle, Focusable, FontWeight, Hsla, KeyBinding, PathBuilder,
-    Pixels, ScrollHandle, SharedString, Window, actions, canvas, div, point, prelude::*, px,
-};
+use dnnm_ui::px;
+use gpui::{App, Bounds, ClickEvent, Context, EventEmitter, FocusHandle, Focusable, FontWeight, Hsla, KeyBinding, PathBuilder, Pixels, ScrollHandle, SharedString, Window, actions, canvas, div, point, prelude::*};
 
 use dnnm_ui::icons::{self, LayoutIcon};
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{ButtonKind, Pad, Tooltip, button, icon, link, status_dot};
+use dnnm_ui::{ButtonKind, Pad, Tip, button, icon, link, status_dot};
 
 use crate::help_menu::HelpPage;
 use crate::markdown::bold_text;
@@ -1124,7 +1122,7 @@ impl GuideDialog {
                             .child(mark),
                     )
                     .child(
-                        div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(step.short_title),
+                        dnnm_ui::one_line(step.short_title),
                     )
             })))
     }
@@ -1178,7 +1176,7 @@ impl GuideDialog {
                         .border_1()
                         .border_color(c.info_banner_border)
                         .bg(c.info_banner_bg)
-                        .child(div().flex_none().pad(px(1.0), px(0.0)).child(icon(icons::INFO, 14.0, c.accent, cx)))
+                        .child(dnnm_ui::line_icon(icons::INFO, icons::SIZE, c.accent, cx))
                         .child(div().flex_1().min_w_0().child(bold_text(tip))),
                 )
             })
@@ -1289,7 +1287,7 @@ fn item_icon(key: &'static str, cx: &App) -> gpui::AnyElement {
         "Dot.Running" => status_dot(c.success_text, true, px(10.0)).into_any_element(),
         "Dot.Stopped" => status_dot(c.text_muted, false, px(10.0)).into_any_element(),
         "Dot.Busy" => status_dot(c.log_warn, true, px(10.0)).into_any_element(),
-        "Dot.None" => icon(glyph("GlyphDash").unwrap_or_default(), 14.0, c.text_muted, cx).into_any_element(),
+        "Dot.None" => icon(glyph("GlyphDash").unwrap_or_default(), icons::SIZE, c.text_muted, cx).into_any_element(),
         "FlameFilled" => flame(c.keep_warm_fg).into_any_element(),
         "LayoutPanel" => icons::layout_icon(LayoutIcon::Panel, false, c.text_primary).into_any_element(),
         number if !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()) => div()
@@ -1298,7 +1296,7 @@ fn item_icon(key: &'static str, cx: &App) -> gpui::AnyElement {
             .text_color(c.accent)
             .child(number)
             .into_any_element(),
-        other => icon(glyph(other).unwrap_or(icons::INFO), 14.0, c.text_primary, cx).into_any_element(),
+        other => icon(glyph(other).unwrap_or(icons::INFO), icons::SIZE, c.text_primary, cx).into_any_element(),
     }
 }
 
@@ -1405,7 +1403,7 @@ impl Render for GuideDialog {
             .min_w(px(84.0))
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.next(cx)));
         if !last {
-            next = next.tooltip(Tooltip::text("The next page (Enter)"));
+            next = next.tip("The next page (Enter)");
         }
         let bar = div()
             .flex()
@@ -1422,7 +1420,7 @@ impl Render for GuideDialog {
                     .gap(px(16.0))
                     .child(
                         link("guide-skip", self.skip_text.clone(), cx)
-                            .tooltip(Tooltip::text("Close the guide (Esc) - the ? at the top right opens it again"))
+                            .tip("Close the guide (Esc) - the ? at the top right opens it again")
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.skip(cx))),
                     )
                     .when(several, |d| {
@@ -1443,14 +1441,14 @@ impl Render for GuideDialog {
                         d.child(
                             button("guide-back", "Back", ButtonKind::Secondary, self.index > 0, cx)
                                 .min_w(px(84.0))
-                                .tooltip(Tooltip::text("The previous page"))
+                                .tip("The previous page")
                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.back(cx))),
                         )
                     })
                     .when(last && self.offer_tour, |d| {
                         d.child(
                             button("guide-tour", "Take the tour", ButtonKind::Secondary, true, cx)
-                                .tooltip(Tooltip::text("Close this guide and point at each part of the window"))
+                                .tip("Close this guide and point at each part of the window")
                                 .on_click(
                                     cx.listener(|this, _: &ClickEvent, _, cx| this.finish(GuideResult::Tour, cx)),
                                 ),

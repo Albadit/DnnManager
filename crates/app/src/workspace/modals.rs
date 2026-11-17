@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use gpui::{AnyView, AppContext, Context, Entity, SharedString, Window};
+use gpui::{AnyView, AppContext, Context, Entity, SharedString, Subscription, Window};
 
 use dnnm_dialogs::setting_rules::Category;
 use dnnm_dialogs::settings_page::{Notice, SettingsEvent, SettingsInputs, SettingsPage, SettingsServices, SystemSignIn};
@@ -15,22 +15,24 @@ use crate::store::ToastKind;
 
 /// What is open over the page.
 pub(crate) enum Modal {
-    Settings(Entity<SettingsPage>),
-    Troubleshoot(Entity<TroubleshootPage>),
+    // Each with its subscriptions: they end when it closes (kept on the workspace they would pile up, and a page's
+    // store observer would go on running after it was gone).
+    Settings(Entity<SettingsPage>, #[allow(dead_code, reason = "held: dropped, they end")] Vec<Subscription>),
+    Troubleshoot(Entity<TroubleshootPage>, #[allow(dead_code, reason = "held: dropped, they end")] Vec<Subscription>),
 }
 
 impl Modal {
     pub(crate) fn view(&self) -> AnyView {
         match self {
-            Modal::Settings(v) => v.clone().into(),
-            Modal::Troubleshoot(v) => v.clone().into(),
+            Modal::Settings(v, _) => v.clone().into(),
+            Modal::Troubleshoot(v, _) => v.clone().into(),
         }
     }
 
     pub(crate) fn key(&self) -> &'static str {
         match self {
-            Modal::Settings(_) => "Settings",
-            Modal::Troubleshoot(_) => "Troubleshoot",
+            Modal::Settings(_, _) => "Settings",
+            Modal::Troubleshoot(_, _) => "Troubleshoot",
         }
     }
 }
@@ -81,7 +83,7 @@ impl Workspace {
         cx: &mut Context<Self>,
         then: impl FnOnce(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
     ) {
-        let unsaved = matches!(&self.settings, Some(Modal::Settings(page)) if page.read(cx).has_unsaved_changes());
+        let unsaved = matches!(&self.settings, Some(Modal::Settings(page, _)) if page.read(cx).has_unsaved_changes());
         if !unsaved {
             self.drop_modal(window, cx);
             then(self, window, cx);
@@ -109,7 +111,7 @@ impl Workspace {
     /// Settings over the page - on `category` when given; Ctrl+, again closes it (`settings.open`).
     pub(crate) fn open_settings_on(&mut self, category: Option<Category>, window: &mut Window, cx: &mut Context<Self>) {
         self.menu = None;
-        if let Some(Modal::Settings(page)) = &self.settings {
+        if let Some(Modal::Settings(page, _)) = &self.settings {
             match category {
                 Some(category) => page.update(cx, |p, cx| p.show_category(category, cx)),
                 None => self.close_modal(window, cx),
@@ -135,8 +137,7 @@ impl Workspace {
             let sub = cx.subscribe_in(&page, window, |ws, page, e: &SettingsEvent, window, cx| {
                 ws.settings_event(page.clone(), e.clone(), window, cx)
             });
-            ws._subscriptions.push(sub);
-            ws.settings = Some(Modal::Settings(page));
+            ws.settings = Some(Modal::Settings(page, vec![sub]));
             cx.notify();
         });
     }
@@ -144,7 +145,7 @@ impl Workspace {
     /// Troubleshoot over the page (`troubleshoot.open`).
     pub(crate) fn open_troubleshoot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.menu = None;
-        if matches!(self.settings, Some(Modal::Troubleshoot(_))) {
+        if matches!(self.settings, Some(Modal::Troubleshoot(_, _))) {
             return;
         }
         self.close_modal_then(window, cx, |ws, window, cx| {
@@ -161,9 +162,7 @@ impl Workspace {
                     let _ = page.update(cx, |p, cx| p.set_busy(busy, cx));
                 }
             });
-            ws._subscriptions.push(sub);
-            ws._subscriptions.push(watch);
-            ws.settings = Some(Modal::Troubleshoot(page));
+            ws.settings = Some(Modal::Troubleshoot(page, vec![sub, watch]));
             cx.notify();
         });
     }

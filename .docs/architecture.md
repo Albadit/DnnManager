@@ -34,7 +34,7 @@ The use cases (`dnnm-application`) know only traits; `dnnm-wiring` hands each on
 | Where | What |
 |---|---|
 | `crates/app/src/main.rs` | Elevation, restart hand-over (`--after`), single instance, number format, the store, the theme, the key bindings, the window |
-| `crates/app/src/workspace.rs` | The window: title bar, sidebar, page card, bottom panel, status bar, toasts, dialog host, IIS confirmation |
+| `crates/app/src/workspace.rs` | The window: title bar, activity bar, side bars, page card, bottom panel, status bar, toasts, dialog host, IIS confirmation |
 | `crates/app/src/workspace/` | `commands.rs` (the 78 palette commands), `actions.rs` (a project's edits: dialog, then operation), `modals.rs` (Settings and Troubleshoot over the page), `help.rs` (Help menu, guide, tour, What's new, at the start), `shortcuts.rs` (keyboard shortcuts from the settings), `updates.rs` (Check for Updates), `background.rs` (tray icon, hiding, quitting) |
 | `crates/app/src/store.rs` | The live state reads, operations, Output runs, questions, toasts, settings saves |
 | `crates/app/src/runner.rs` | An operation on its own thread: lines, facts and questions streamed to the store, Cancel and Stop undoing |

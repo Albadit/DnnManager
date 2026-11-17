@@ -246,17 +246,17 @@ fn an_automatic_setup_runs_every_stage_in_order_and_keeps_the_project() {
     assert_eq!(
         steps,
         vec![
-            "Step 1: DNN version",
-            "Step 2: Checking IIS",
-            "Step 3: Testing database connection",
-            "Step 4: Creating project directory",
-            "Step 5: Downloading DNN 10.0.1",
-            "Step 6: Creating IIS application pool and website",
-            "Step 7: Creating database",
-            "Step 8: Configuring DNN",
-            "Step 9: Running DNN installation",
-            "Step 10: Creating host account",
-            "Step 11: Starting website",
+            "DNN version",
+            "Checking IIS",
+            "Testing database connection",
+            "Creating project directory",
+            "Downloading DNN 10.0.1",
+            "Creating IIS application pool and website",
+            "Creating database",
+            "Configuring DNN",
+            "Running DNN installation",
+            "Creating host account",
+            "Starting website",
             "Setup complete",
         ]
     );

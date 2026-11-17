@@ -5,19 +5,17 @@
 //! What it shows comes from `dnnm_wiring::rename_project::dialog_facts` (IIS's sites, the host name and database to
 //! offer). The XAML selects the name when the dialog opens; here the cursor is put after it (Ctrl+A selects it).
 
+use dnnm_ui::px;
 use std::path::PathBuf;
 
-use gpui::{
-    App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, SharedString, Subscription,
-    Window, div, prelude::*, px,
-};
+use gpui::{App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, SharedString, Subscription, Window, div, prelude::*};
 
 use dnnm_application::use_cases::rename_project::{
     RenameDialogFacts, RenameProjectRequest, hostname_for, name_problem,
 };
 use dnnm_ui::dialog::{self, DialogEvent};
 use dnnm_ui::text_input::{TextChanged, TextInput};
-use dnnm_ui::{self as ui, Pad, Tooltip};
+use dnnm_ui::{self as ui, Tip};
 
 /// The dialog's first line.
 pub fn intro(site: &str) -> String {
@@ -157,31 +155,22 @@ impl Render for RenameProjectDialog {
             })
             .when_some(checked.database_text, |d, text| {
                 d.child(
-                    div()
-                        .w_full()
-                        .flex()
-                        .flex_col()
-                        .gap(px(4.0))
-                        .child(dialog::check("rename-database", self.rename_database, text, cx).on_click(cx.listener(
-                            |this, _: &ClickEvent, _, cx| {
-                                this.rename_database = !this.rename_database;
-                                cx.notify();
-                            },
-                        )))
-                        // Under the check box's text.
-                        .child(
-                            div()
-                                .w_full()
-                                .pad(px(0.0), px(22.0))
-                                .child(dialog::hint("The site is stopped while the database is renamed.", cx)),
-                        ),
+                    dialog::check("rename-database", self.rename_database, text, cx)
+                        .child(ui::info_tip(
+                            "rename-database-tip",
+                            "The site is stopped while the database is renamed.",
+                            cx,
+                        ))
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.rename_database = !this.rename_database;
+                            cx.notify();
+                        })),
                 )
             });
         let body = div()
             .flex()
             .flex_col()
             .gap(px(10.0))
-            .child(div().w_full().child(intro(&self.site)))
             .child(
                 div()
                     .w_full()
@@ -201,13 +190,13 @@ impl Render for RenameProjectDialog {
             .child(
                 ui::button("dialog-ok", "Rename", ui::ButtonKind::Primary, ok, cx)
                     .min_w(px(80.0))
-                    .tooltip(Tooltip::text("Rename (Enter)"))
+                    .tip("Rename (Enter)")
                     .when(ok, |b| b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.submit(cx)))),
             )
             .child(
                 ui::button("dialog-cancel", "Cancel", ui::ButtonKind::Secondary, true, cx)
                     .min_w(px(80.0))
-                    .tooltip(Tooltip::text("Cancel (Esc)"))
+                    .tip("Cancel (Esc)")
                     .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(DialogEvent::Cancelled))),
             );
 
@@ -217,7 +206,7 @@ impl Render for RenameProjectDialog {
                     this.submit(cx);
                 }
             }))
-            .child(dialog::frame("Rename project", 460.0, body, buttons, cx))
+            .child(dialog::frame_with_tip("Rename project", Some(intro(&self.site)), 460.0, body, buttons, cx))
     }
 }
 

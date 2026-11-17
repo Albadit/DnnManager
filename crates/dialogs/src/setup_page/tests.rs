@@ -53,11 +53,12 @@ fn versions_mark_the_latest_pre_releases_and_kept_packages() {
     assert_eq!(selected, Some(1), "the latest release, not the newer pre-release");
     assert_eq!(hint, "3 releases of dnnsoftware/Dnn.Platform, highest version first - the latest release is selected.");
 
-    let offline = DnnReleaseList { saved_at: Some("16-11-2026 10:00".into()), ..list };
+    // Saved as a round-trip time, shown to the minute.
+    let offline = DnnReleaseList { saved_at: Some("2026-11-16T10:00:52.0135567+01:00".into()), ..list };
     let (_, hint, _) = versions_for("a/b", &Ok(offline), &|_| false, true);
     assert_eq!(
         hint,
-        "GitHub can't be reached - the releases of a/b as of 16-11-2026 10:00. Without internet only a version marked \"kept, no download\" can be set up. GitHub is asked again when you come back to this page."
+        "GitHub can't be reached - the releases of a/b as of 2026-11-16 10:00. Without internet only a version marked \"kept, no download\" can be set up. GitHub is asked again when you come back to this page."
     );
 
     let (options, hint, selected) = versions_for("a/b", &Err("timed out".into()), &|_| false, false);

@@ -93,9 +93,11 @@ pub fn is_link(path: &Path) -> bool {
 }
 
 /// Whether `path` - or a folder on the way to it from `root`, the root included - is a link or junction. What doesn't
-/// exist yet isn't one; a path outside the root counts as one (`SafePath.HasLink`).
+/// exist yet isn't one; a path outside the root counts as one (`SafePath.HasLink`). Both are compared by their long
+/// names: `target` hands out long paths, and a root given by its short (8.3) name - `C:\Users\RUNNER~1\...`, as a TEMP
+/// folder can be - would otherwise look like another folder.
 pub fn has_link(root: &Path, path: &Path, checked: Option<&mut CheckedFolders>) -> bool {
-    let (Some(top), Some(mut at)) = (full(root), full(path)) else { return true };
+    let (Some(top), Some(mut at)) = (full(&long_path(root)), full(&long_path(path))) else { return true };
     if !same_or_inside(&at, &top) {
         return true;
     }
@@ -423,6 +425,34 @@ pub fn write_entry(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// A root written by its short (8.3) name - as GitHub's TEMP is - and the long paths `target` hands out are the same
+    /// folder, not one outside the other.
+    #[cfg(windows)]
+    #[test]
+    fn a_root_by_its_short_name_is_the_same_folder() {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        use windows::Win32::Storage::FileSystem::GetShortPathNameW;
+        use windows::core::PCWSTR;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("a site with a long name");
+        std::fs::create_dir_all(&root).unwrap();
+        let wide: Vec<u16> = root.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut buffer = vec![0u16; 32768];
+        // SAFETY: a NUL-terminated path in, a buffer of its stated length out.
+        let length = unsafe { GetShortPathNameW(PCWSTR(wide.as_ptr()), Some(&mut buffer)) } as usize;
+        let short = PathBuf::from(std::ffi::OsString::from_wide(&buffer[..length]));
+        if length == 0 || short == root {
+            eprintln!("8.3 names are off on this disk - nothing to compare");
+            return;
+        }
+        let mut checked = CheckedFolders::new();
+        let to = target(&short, "bin/a.dll", Some(&mut checked)).unwrap();
+        write(&short, &mut "new".as_bytes(), 3, &to, &mut checked).unwrap();
+        assert_eq!(std::fs::read_to_string(root.join("bin").join("a.dll")).unwrap(), "new");
+        assert!(!has_link(&short, &root.join("bin"), None));
+        assert!(!has_link(&root, &short.join("bin"), None));
+    }
 
     /// A zip with these entries, in a temporary folder of its own.
     pub fn zip(dir: &Path, entries: &[(&str, &str)]) -> PathBuf {

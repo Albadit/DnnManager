@@ -6,13 +6,12 @@
 //! Rename and Close terminal. The panel's header (the app's) carries [`TerminalPanelView::toolbar`]: + for a new
 //! terminal, the arrow beside it for another shell or an Administrator terminal.
 
+use crate::scale::px;
+use std::cell::Cell;
 use std::path::Path;
+use std::rc::Rc;
 
-use gpui::{
-    AnyElement, AnyView, App, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, Hsla, KeyDownEvent,
-    MouseButton, MouseDownEvent, Pixels, Point, SharedString, Subscription, Window, anchored, deferred, div,
-    prelude::*, px,
-};
+use gpui::{AnyElement, AnyView, App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, Hsla, KeyDownEvent, MouseButton, MouseDownEvent, Pixels, Point, SharedString, Subscription, Window, anchored, deferred, div, prelude::*};
 
 use crate::session::TerminalSession;
 use crate::shells::{Shells, TerminalShell};
@@ -20,6 +19,9 @@ use crate::view::{TerminalStyle, TerminalView, TerminalViewEvent};
 
 const LIST_WIDTH: f32 = 176.0;
 const MAX_TITLE: usize = 60;
+/// The icon sizes of dnnm-ui's `icons` (this crate doesn't depend on it): actions 13, chevrons 10.
+const ICON_SIZE: f32 = 13.0;
+const ICON_SIZE_SMALL: f32 = 10.0;
 // Segoe Fluent Icons (Themes/Icons.xaml): GlyphAdd, GlyphChevronDown, GlyphDelete, and CommandPrompt for a shell.
 const GLYPH_ADD: &str = "\u{E710}";
 const GLYPH_CHEVRON_DOWN: &str = "\u{E70D}";
@@ -70,11 +72,15 @@ struct Tab {
 }
 
 enum Menu {
-    Shells(Point<Pixels>),
+    /// Under the shells button, their right edges level (the corner of the menu at the point).
+    Shells(Point<Pixels>, gpui::Corner),
+    /// A terminal's right-click menu, where the mouse is.
     Tab(usize, Point<Pixels>),
 }
 
 pub struct TerminalPanelView {
+    /// Where the shells button was last drawn: its menu opens under it.
+    shells_button: std::rc::Rc<std::cell::Cell<Option<gpui::Bounds<Pixels>>>>,
     tabs: Vec<Tab>,
     selected: Option<usize>,
     next_id: usize,
@@ -108,6 +114,7 @@ impl TerminalPanelView {
             list_focus: cx.focus_handle(),
             renaming: None,
             menu: None,
+            shells_button: Default::default(),
             shells,
             default_shell: default_shell.into(),
             working_directory: working_directory.into(),
@@ -404,24 +411,44 @@ impl TerminalPanelView {
         let colors = panel.read(cx).colors.clone();
         let new_panel = panel.clone();
         let menu_panel = panel.clone();
+        let button = panel.read(cx).shells_button.clone();
+        let measured = button.clone();
+        // Its tip is left out while its list is open - it would cover the list.
+        let shells_open = matches!(panel.read(cx).menu, Some(Menu::Shells(..)));
         div()
             .flex()
             .items_center()
             .child(
-                panel_button("terminal-new", GLYPH_ADD, &colors, 28.0)
-                    .tooltip(tip(vec![Line::Plain("New terminal".into())], &colors))
+                panel_button("terminal-new", GLYPH_ADD, &colors, 26.0)
+                    .tip(vec![Line::Plain("New terminal".into())], &colors)
                     .on_click(move |_, window, cx| {
                         new_panel.update(cx, |panel, cx| panel.new_terminal(None, None, window, cx));
                     }),
             )
             .child(
                 panel_button("terminal-shells", GLYPH_CHEVRON_DOWN, &colors, 18.0)
-                    .text_size(px(9.))
-                    .tooltip(tip(vec![Line::Plain("Choose shell - or New Administrator terminal".into())], &colors))
+                    .text_size(px(ICON_SIZE_SMALL))
+                    .when(!shells_open, |d| {
+                        d.tip(vec![Line::Plain("Choose shell - or New Administrator terminal".into())], &colors)
+                    })
+                    .relative()
+                    // Its place, for the menu to open under it.
+                    .child(
+                        gpui::canvas(move |bounds, _, _| measured.set(Some(bounds)), |_, _, _, _| {})
+                            .absolute()
+                            .inset_0(),
+                    )
                     .on_click(move |event, _, cx| {
-                        let position = event.position();
+                        let (position, corner) = match button.get() {
+                            Some(b) => (gpui::point(b.right(), b.bottom() + px(4.)), gpui::Corner::TopRight),
+                            None => (event.position(), gpui::Corner::TopLeft),
+                        };
                         menu_panel.update(cx, |panel, cx| {
-                            panel.menu = Some(Menu::Shells(position));
+                            // A second click closes it.
+                            panel.menu = match panel.menu {
+                                Some(Menu::Shells(..)) => None,
+                                _ => Some(Menu::Shells(position, corner)),
+                            };
                             cx.notify();
                         });
                     }),
@@ -470,7 +497,9 @@ impl TerminalPanelView {
                     .border_color(colors.accent)
                     .text_color(colors.text_primary)
                     .child(format!("{text}|")),
-                None => div().flex_1().overflow_hidden().whitespace_nowrap().text_ellipsis().child(tab.title.clone()),
+                // Clamped to one line rather than `truncate()`: GPUI keeps the first size it measures for text that doesn't wrap,
+                // so that only clipped it in a narrow list (dnnm-ui's `one_line` does the same).
+                None => div().flex_1().min_w_0().overflow_hidden().line_clamp(1).text_ellipsis().child(tab.title.clone()),
             };
             let row = div()
                 .id(("terminal-tab", id))
@@ -487,7 +516,7 @@ impl TerminalPanelView {
                 .text_color(if shown { colors.log_header_fg } else { colors.log_muted })
                 .when(shown, |row| row.bg(if list_focused { colors.selection_bg } else { colors.hover_bg }))
                 .when(!shown, |row| row.hover(|style| style.bg(colors.hover_bg)))
-                .tooltip(tip(lines, colors))
+                .tip(lines, colors)
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |panel, event, window, cx| panel.tab_mouse_down(id, event, window, cx)),
@@ -506,15 +535,16 @@ impl TerminalPanelView {
                         .flex_1()
                         .min_w_0()
                         .gap(px(8.))
-                        .child(div().font_family(colors.icon_font.clone()).text_size(px(14.)).child(GLYPH_SHELL))
+                        .child(div().font_family(colors.icon_font.clone()).text_size(px(ICON_SIZE)).child(GLYPH_SHELL))
                         .child(name),
                 )
                 .child(
                     panel_button(("terminal-close", id), GLYPH_DELETE, colors, 22.0)
-                        .text_size(px(11.))
+                        // Inside the list's 22 px row.
+                        .h(px(22.))
                         .invisible()
                         .group_hover(group, |style| style.visible())
-                        .tooltip(tip(vec![Line::Plain("Close terminal (Del)".into())], colors))
+                        .tip(vec![Line::Plain("Close terminal (Del)".into())], colors)
                         .on_click(cx.listener(move |panel, _, _, cx| panel.close(id, cx))),
                 );
             list = list.child(row);
@@ -524,10 +554,10 @@ impl TerminalPanelView {
 
     fn render_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let colors = &self.colors;
-        let (position, items) = match self.menu.as_ref()? {
+        let (position, corner, items) = match self.menu.as_ref()? {
             // The installed shells, the default one marked - as you; then the same as Administrator, those that may
             // not run so greyed with why.
-            Menu::Shells(position) => {
+            Menu::Shells(position, corner) => {
                 let default = self.shells.default_shell(&self.default_shell).map(|s| s.key);
                 // The items 4 px in from the sides; the line across the menu 4 px from what is above and below it.
                 let mut user = div().flex().flex_col().pad(px(0.), px(4.));
@@ -545,19 +575,19 @@ impl TerminalPanelView {
                         .pad(px(4.), px(6.))
                         .text_color(colors.text_muted)
                         .child("New Administrator terminal")
-                        .tooltip(tip(
+                        .tip(
                             vec![Line::Plain(
                                 "Every command typed in it runs with DNN Manager's administrator rights - only for what needs them."
                                     .into(),
                             )],
                             colors,
-                        )),
+                        ),
                 );
                 for shell in &self.shells.administrator {
                     administrator = administrator.child(self.shell_item(shell, format!("    {}", shell.name), cx));
                 }
                 let line = div().h(px(1.)).bg(colors.card_border);
-                (*position, vec![user.into_any_element(), line.into_any_element(), administrator.into_any_element()])
+                (*position, *corner, vec![user.into_any_element(), line.into_any_element(), administrator.into_any_element()])
             }
             Menu::Tab(id, position) => {
                 let id = *id;
@@ -573,7 +603,11 @@ impl TerminalPanelView {
                         panel.close(id, cx);
                     }))
                     .into_any_element();
-                (*position, vec![div().flex().flex_col().pad(px(0.), px(4.)).child(rename).child(close).into_any_element()])
+                (
+                    *position,
+                    gpui::Corner::TopLeft,
+                    vec![div().flex().flex_col().pad(px(0.), px(4.)).child(rename).child(close).into_any_element()],
+                )
             }
         };
         let menu = div()
@@ -592,12 +626,19 @@ impl TerminalPanelView {
             .font_family(colors.font.clone())
             .text_size(colors.body_size)
             .text_color(colors.text_primary)
-            .on_mouse_down_out(cx.listener(|panel, _, _, cx| {
-                panel.menu = None;
-                cx.notify();
+            // A press outside closes it - not one on the shells button, whose own click does.
+            .on_mouse_down_out(cx.listener(|panel, e: &MouseDownEvent, _, cx| {
+                if !panel.shells_button.get().is_some_and(|b| b.contains(&e.position)) {
+                    panel.menu = None;
+                    cx.notify();
+                }
             }))
             .children(items);
-        Some(deferred(anchored().position(position).snap_to_window().child(menu)).with_priority(1).into_any_element())
+        Some(
+            deferred(anchored().anchor(corner).position(position).snap_to_window().child(menu))
+                .with_priority(2)
+                .into_any_element(),
+        )
     }
 
     fn shell_item(&self, shell: &TerminalShell, label: String, cx: &mut Context<Self>) -> AnyElement {
@@ -607,7 +648,7 @@ impl TerminalPanelView {
         let chosen = shell.clone();
         menu_item(id, &label, None, enabled, &self.colors)
             // Greyed, it still says why.
-            .tooltip(tip(vec![Line::Plain(tooltip)], &self.colors))
+            .tip(vec![Line::Plain(tooltip)], &self.colors)
             .when(enabled, |item| {
                 item.on_click(cx.listener(move |panel, _, window, cx| {
                     panel.menu = None;
@@ -696,12 +737,13 @@ fn panel_button(
         .items_center()
         .justify_center()
         .w(px(width))
-        .h(px(22.))
+        // The panel's buttons (`PanelButton`): 26 high, the glyph in LogMuted - as Clear, Find, Maximize and Hide.
+        .h(px(26.))
         .rounded(px(4.))
         .cursor_pointer()
         .font_family(colors.icon_font.clone())
-        .text_size(px(12.))
-        .text_color(colors.text_primary)
+        .text_size(px(ICON_SIZE))
+        .text_color(colors.log_muted)
         .hover(|style| style.bg(colors.hover_bg))
         .child(glyph)
 }
@@ -735,13 +777,19 @@ enum Line {
     Fact(&'static str, String),
 }
 
+/// A tooltip, lined up with its element as dnnm-ui's: under it and centred on it (above it without room below).
 struct Tip {
     lines: Vec<Line>,
     colors: PanelColors,
+    /// Where its element was drawn.
+    of: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Its card's size, learnt as it is first drawn (out of sight).
+    size: Rc<Cell<Option<gpui::Size<Pixels>>>>,
 }
 
 impl Render for Tip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let this = cx.entity().downgrade();
         let colors = &self.colors;
         let lines = self.lines.iter().map(|line| match line {
             Line::Plain(text) => div().child(text.clone()),
@@ -753,9 +801,9 @@ impl Render for Tip {
                 .child(div().w(px(84.)).flex_none().text_color(colors.text_muted).child(*name))
                 .child(div().flex_1().child(value.clone())),
         });
-        // 10 px below and 8 right of the pointer (and the same transparent room on the other two sides), as dnnm-ui's.
-        div().pad(px(10.), px(8.)).child(
-            div()
+        let measured = self.size.clone();
+        let card = div()
+                .relative()
                 .max_w(px(520.))
                 .pad(px(4.), px(8.))
                 .rounded(px(4.))
@@ -766,18 +814,57 @@ impl Render for Tip {
                 .text_size(colors.caption_size)
                 .text_color(colors.text_primary)
                 .font_family(colors.font.clone())
-                .children(lines),
+                .children(lines)
+                .child(
+                    gpui::canvas(
+                        move |b, _, cx| {
+                            if measured.get() != Some(b.size) {
+                                measured.set(Some(b.size));
+                                // Drawn again with it, once this frame is done (a refresh asked for while drawing is
+                                // dropped).
+                                let this = this.clone();
+                                cx.defer(move |cx| {
+                                    this.update(cx, |_, cx| cx.notify()).ok();
+                                });
+                            }
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .inset_0(),
+                );
+        let origin = match (self.of.get(), self.size.get()) {
+            (Some(of), Some(size)) => {
+                let (gap, window_size) = (px(4.), window.viewport_size());
+                let x = (of.center().x - size.width / 2.).min(window_size.width - size.width - gap).max(gap);
+                let below = of.bottom() + gap;
+                let y = if below + size.height <= window_size.height { below } else { of.top() - gap - size.height };
+                gpui::point(x, y.max(px(0.)))
+            }
+            _ => gpui::point(px(0.), px(0.)),
+        };
+        // Not seen until it knows its size (`anchored` keeps it inside the window, so off-screen showed it top left).
+        let card = if self.size.get().is_some() { card } else { card.invisible() };
+        anchored().position_mode(gpui::AnchoredPositionMode::Window).position(origin).child(card)
+    }
+}
+
+/// An element's tooltip of `lines`, lined up with it.
+trait WithTip: ParentElement + StatefulInteractiveElement + Sized {
+    fn tip(self, lines: Vec<Line>, colors: &PanelColors) -> Self {
+        let of: Rc<Cell<Option<Bounds<Pixels>>>> = Rc::default();
+        let measured = of.clone();
+        let colors = colors.clone();
+        self.child(gpui::canvas(move |b, _, _| measured.set(Some(b)), |_, _, _, _| {}).absolute().inset_0()).tooltip(
+            move |_, cx| -> AnyView {
+                let (lines, colors, of) = (lines.clone(), colors.clone(), of.clone());
+                cx.new(|_| Tip { lines, colors, of, size: Rc::default() }).into()
+            },
         )
     }
 }
 
-fn tip(lines: Vec<Line>, colors: &PanelColors) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
-    let colors = colors.clone();
-    move |_, cx| {
-        let (lines, colors) = (lines.clone(), colors.clone());
-        cx.new(|_| Tip { lines, colors }).into()
-    }
-}
+impl<E: ParentElement + StatefulInteractiveElement + Sized> WithTip for E {}
 
 /// Now, in the user's own short date and time format (off Windows, ISO).
 #[cfg(not(windows))]

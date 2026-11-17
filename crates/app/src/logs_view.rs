@@ -2,14 +2,12 @@
 //! one of its logs (DNN, IIS, Windows event logs, the hosts file, DNN Manager's daily log); the newest lines, followed
 //! as they come. What to read and how is `dnnm_logs`; this is the view.
 
+use dnnm_ui::px;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use gpui::{
-    ClickEvent, Context, Entity, FontWeight, SharedString, Task, UniformListScrollHandle, Window, div, prelude::*, px,
-    uniform_list,
-};
+use gpui::{ClickEvent, Context, Entity, FontWeight, ListHorizontalSizingBehavior, SharedString, Task, UniformListScrollHandle, Window, div, prelude::*, uniform_list};
 
 use dnnm_logs::catalog::{self, SiteLogSource};
 use dnnm_logs::tail::{LogTail, MAX_LINES};
@@ -17,7 +15,7 @@ use dnnm_logs::view::{self as logs, LogLineLevel, LogMenuItem};
 
 use crate::store::{Store, ToastKind};
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{self as ui, Pad, Tooltip, icons};
+use dnnm_ui::{self as ui, Pad, Tip, icons};
 
 /// Which website's logs: DNN Manager's own, or an IIS site's.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +33,7 @@ impl LogSite {
     }
 }
 
+#[derive(PartialEq, Eq)]
 enum Open {
     Sites,
     Logs,
@@ -42,20 +41,53 @@ enum Open {
 
 pub struct LogsView {
     store: Entity<Store>,
+    /// The open picker's list's scroll position (its scroll bar).
+    menu_scroll: gpui::ScrollHandle,
     site: Option<LogSite>,
     sources: Vec<SiteLogSource>,
     current: Option<usize>,
     lines: Vec<(SharedString, LogLineLevel)>,
     tail: Option<Arc<Mutex<Box<dyn LogTail>>>>,
+    /// The shown log file's size, read with its lines off the UI thread (render doesn't touch the disk).
+    file_size: Option<u64>,
     opened_at: Option<Instant>,
     menu: Option<Open>,
     scroll: UniformListScrollHandle,
     /// Polling only while the tab is on screen (`LogsView.Paused`).
     pub shown: bool,
+    /// Where the two pickers are: their lists open under them.
+    site_anchor: ui::Anchor,
+    source_anchor: ui::Anchor,
+    /// The panel's Find bar's matches, by line.
+    find_marks: Arc<std::collections::HashMap<usize, ui::LineMarks>>,
     _poll: Option<Task<()>>,
 }
 
 impl LogsView {
+    /// The lines shown - what the panel's Find bar searches.
+    pub fn find_lines(&self) -> Vec<SharedString> {
+        self.lines.iter().map(|(text, _)| text.clone()).collect()
+    }
+
+    /// The Find bar's matches to highlight (`current` the one it is on), and whether to scroll to that one.
+    pub fn set_find(
+        &mut self,
+        matches: &[dnnm_logs::search::Match],
+        current: Option<usize>,
+        reveal: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let marks = crate::workspace::marks_by_line(matches, current);
+        if *self.find_marks != marks {
+            self.find_marks = Arc::new(marks);
+            cx.notify();
+        }
+        if reveal && let Some(m) = current.and_then(|i| matches.get(i)) {
+            self.scroll.scroll_to_item(m.line, gpui::ScrollStrategy::Center);
+            cx.notify();
+        }
+    }
+
     pub fn new(store: Entity<Store>) -> Self {
         Self {
             store,
@@ -64,12 +96,22 @@ impl LogsView {
             current: None,
             lines: Vec::new(),
             tail: None,
+            file_size: None,
             opened_at: None,
             menu: None,
             scroll: UniformListScrollHandle::new(),
             shown: false,
+            find_marks: Arc::default(),
+            site_anchor: ui::Anchor::default(),
+            menu_scroll: gpui::ScrollHandle::new(),
+            source_anchor: ui::Anchor::default(),
             _poll: None,
         }
+    }
+
+    /// Whether it is on DNN Manager's own log.
+    pub fn showing_app_log(&self) -> bool {
+        matches!(self.site, Some(LogSite::App))
     }
 
     /// Shows a website's logs - its first log, or DNN Manager's newest log (`ShowSite`).
@@ -97,6 +139,7 @@ impl LogsView {
         self.current = index;
         self.lines.clear();
         self.tail = None;
+        self.file_size = None;
         self._poll = None;
         let Some(source) = index.and_then(|i| self.sources.get(i)).cloned() else {
             cx.notify();
@@ -104,17 +147,22 @@ impl LogsView {
         };
         let tail = Arc::new(Mutex::new(source.open()));
         self.tail = Some(tail.clone());
+        let path = source.file_path.clone();
+        let size_of = move || path.as_ref().and_then(|p| std::fs::metadata(p).ok()).map(|m| m.len());
         self.opened_at = Some(Instant::now());
         // The newest lines off the UI thread, then the new ones every second (two for the hosts file).
         self._poll = Some(cx.spawn(async move |this, cx| {
             let first = tail.clone();
+            let size = size_of.clone();
             let update = cx
                 .background_executor()
-                .spawn(async move { first.lock().map(|mut t| t.start(dnnm_logs::tail::INITIAL_LINES)).ok() })
+                .spawn(async move {
+                    first.lock().map(|mut t| t.start(dnnm_logs::tail::INITIAL_LINES)).ok().map(|u| (u, size()))
+                })
                 .await;
-            let Some(update) = update else { return };
+            let Some((update, size)) = update else { return };
             let every = tail.lock().map(|t| t.poll_every()).unwrap_or(std::time::Duration::from_secs(1));
-            if this.update(cx, |v, cx| v.add(update, cx)).is_err() {
+            if this.update(cx, |v, cx| v.add(update, size, cx)).is_err() {
                 return;
             }
             loop {
@@ -124,10 +172,13 @@ impl LogsView {
                     continue;
                 }
                 let next = tail.clone();
-                let update =
-                    cx.background_executor().spawn(async move { next.lock().map(|mut t| t.poll()).ok() }).await;
-                let Some(update) = update else { return };
-                if this.update(cx, |v, cx| v.add(update, cx)).is_err() {
+                let size = size_of.clone();
+                let update = cx
+                    .background_executor()
+                    .spawn(async move { next.lock().map(|mut t| t.poll()).ok().map(|u| (u, size())) })
+                    .await;
+                let Some((update, size)) = update else { return };
+                if this.update(cx, |v, cx| v.add(update, size, cx)).is_err() {
                     return;
                 }
             }
@@ -135,7 +186,8 @@ impl LogsView {
         cx.notify();
     }
 
-    fn add(&mut self, update: dnnm_logs::tail::TailUpdate, cx: &mut Context<Self>) {
+    fn add(&mut self, update: dnnm_logs::tail::TailUpdate, size: Option<u64>, cx: &mut Context<Self>) {
+        self.file_size = size;
         if update.replaced {
             self.lines.clear();
         }
@@ -170,7 +222,8 @@ impl LogsView {
     fn render_header(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
         let c = theme.colors;
-        let picker = |id: &'static str, text: String, tip: &'static str| {
+        // A picker's tip is left out while its list is open - it would cover the list.
+        let picker = |id: &'static str, text: String, tip: Option<&'static str>| {
             div()
                 .id(id)
                 .flex()
@@ -187,15 +240,14 @@ impl LogsView {
                 .bg(c.input_bg)
                 .cursor_pointer()
                 .text_size(theme.text.caption)
-                .tooltip(Tooltip::text(tip))
-                .child(div().overflow_hidden().whitespace_nowrap().text_ellipsis().child(text))
-                .child(ui::icon(icons::CHEVRON_DOWN, 9.0, c.text_primary, cx))
+                .when_some(tip, |d, tip| d.tip(tip))
+                .child(ui::one_line(text))
+                .child(ui::icon(icons::CHEVRON_DOWN, icons::SIZE_SMALL, c.text_primary, cx))
         };
         let site_text = self.site.as_ref().map(LogSite::label).unwrap_or_default();
         let log_text = self.current_source().map(|s| s.title.clone()).unwrap_or_default();
         let facts = self.current_source().and_then(|s| s.file_path.clone()).map(|path| {
-            let meta = std::fs::metadata(&path).ok();
-            let size = meta.as_ref().map(|m| dnnm_application::project::view::byte_size(m.len() as f64));
+            let size = self.file_size.map(|n| dnnm_application::project::view::byte_size(n as f64));
             format!("{}{}", path.display(), size.map(|s| format!("  ·  {s}")).unwrap_or_default())
         });
         let folder = self.folder();
@@ -203,14 +255,24 @@ impl LogsView {
             .flex()
             .items_center()
             .gap(px(8.0))
-            .child(picker("log-site", site_text, "Website").on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.menu = Some(Open::Sites);
-                cx.notify();
-            })))
-            .child(picker("log-source", log_text, "Log").on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.menu = Some(Open::Logs);
-                cx.notify();
-            })))
+            .child(
+                picker("log-site", site_text, (self.menu != Some(Open::Sites)).then_some("Website"))
+                    .relative()
+                    .child(self.site_anchor.measure())
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.menu = if this.menu == Some(Open::Sites) { None } else { Some(Open::Sites) };
+                        cx.notify();
+                    })),
+            )
+            .child(
+                picker("log-source", log_text, (self.menu != Some(Open::Logs)).then_some("Log"))
+                    .relative()
+                    .child(self.source_anchor.measure())
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                        this.menu = if this.menu == Some(Open::Logs) { None } else { Some(Open::Logs) };
+                        cx.notify();
+                    })),
+            )
             .when_some(facts, |d, facts| {
                 d.child(
                     div()
@@ -226,7 +288,7 @@ impl LogsView {
             .when_some(folder, |d, folder| {
                 d.child(
                     ui::icon_button("log-folder", icons::FOLDER, c.text_primary, true, cx)
-                        .tooltip(Tooltip::text("Open folder"))
+                        .tip("Open folder")
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             if let Err(e) = dnnm_infrastructure::shell::open_folder(&folder) {
                                 this.store.update(cx, |s, cx| s.toast(ToastKind::Error, e, false, cx));
@@ -290,7 +352,7 @@ impl LogsView {
                                     self.current == Some(index),
                                     true,
                                 )
-                                .tooltip(Tooltip::text(tip))
+                                .tip(tip)
                                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open(Some(index), cx))),
                             );
                         }
@@ -298,22 +360,23 @@ impl LogsView {
                 }
             }
         }
+        // Under its picker, their left edges level and at least as wide, over everything; a press anywhere else closes
+        // it - on its picker, the picker's own click does.
+        let anchor = if matches!(open, Open::Sites) { self.site_anchor.clone() } else { self.source_anchor.clone() };
+        let (position, corner) = anchor.below(false);
+        let width = anchor.bounds().map_or(px(220.0), |b| b.size.width.max(px(220.0)));
         Some(
-            div()
-                .id("logs-menu-backdrop")
-                .absolute()
-                .inset_0()
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.menu = None;
-                    cx.notify();
-                }))
-                .child(
+            gpui::deferred(
+                gpui::anchored().anchor(corner).position(position).snap_to_window().child(ui::with_scrollbar(
                     div()
                         .id("logs-menu")
-                        .absolute()
-                        .top(px(30.0))
-                        .left(px(if matches!(open, Open::Sites) { 8.0 } else { 176.0 }))
-                        .min_w(px(220.0))
+                        .on_mouse_down_out(cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                            if !anchor.contains(e.position) {
+                                this.menu = None;
+                                cx.notify();
+                            }
+                        }))
+                        .min_w(width)
                         .max_h(px(360.0))
                         .overflow_y_scroll()
                         .p(px(4.0))
@@ -327,7 +390,11 @@ impl LogsView {
                         .text_color(c.text_primary)
                         .on_click(|_, _, cx| cx.stop_propagation())
                         .child(list),
-                ),
+                    &self.menu_scroll,
+                    cx,
+                )),
+            )
+            .with_priority(2),
         )
     }
 }
@@ -351,8 +418,11 @@ impl Render for LogsView {
             _ => None,
         };
         let lines = self.lines.clone();
+        // A long line isn't cut: the list scrolls sideways, as wide as its longest line.
+        let longest = lines.iter().enumerate().max_by_key(|(_, (text, _))| text.chars().count()).map(|(i, _)| i);
         let colors = (c.log_fg, c.log_warn, c.log_fail, c.log_muted);
-        let list = uniform_list("log-lines", lines.len(), move |range, _, _| {
+        let marks = self.find_marks.clone();
+        let list = uniform_list("log-lines", lines.len(), move |range, _, cx| {
             range
                 .map(|i| {
                     let (text, level) = &lines[i];
@@ -362,11 +432,17 @@ impl Render for LogsView {
                         LogLineLevel::Error => colors.2,
                         LogLineLevel::Note => colors.3,
                     };
-                    div().pad(px(0.0), px(12.0)).whitespace_nowrap().text_color(color).child(text.clone())
+                    let line = div().pad(px(0.0), px(12.0)).whitespace_nowrap().text_color(color);
+                    match marks.get(&i) {
+                        Some(found) => line.child(ui::marked_text(text.clone(), found, cx)),
+                        None => line.child(text.clone()),
+                    }
                 })
                 .collect()
         })
         .track_scroll(self.scroll.clone())
+        .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
+        .with_width_from_item(longest)
         .size_full();
         let header = self.render_header(cx);
         div()

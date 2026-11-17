@@ -2,12 +2,10 @@
 //! database - with search, the columns menu, "Only show running", ticking rows for the bulk actions, expanding a row
 //! for its facts, and Start / Stop / Restart per row.
 
+use dnnm_ui::px;
 use std::collections::HashSet;
 
-use gpui::{KeyBinding, actions, 
-    ClickEvent, Context, Entity, FocusHandle, Focusable, FontWeight, Hsla, MouseButton, SharedString, Subscription,
-    TextRun, Window, div, prelude::*, px,
-};
+use gpui::{KeyBinding, actions, ClickEvent, Context, Entity, FocusHandle, Focusable, FontWeight, Hsla, MouseButton, SharedString, Subscription, TextRun, Window, div, prelude::*};
 
 use dnnm_application::iis::IisServerState;
 use dnnm_application::project::{NONE, ProjectState, SiteRunState, view};
@@ -19,7 +17,7 @@ use super::project_view::{ProjectView, ProjectViewAction, ProjectViewClosed, Pro
 use crate::store::{Connection, Store, ToastKind};
 use dnnm_ui::theme::Theme;
 use dnnm_ui::text_input::{TextChanged, TextInput};
-use dnnm_ui::{self as ui, Pad, Tooltip, icons};
+use dnnm_ui::{self as ui, Pad, Tip, icons};
 
 /// How the table's columns lie: which are shown, their widths, and how far the middle is scrolled sideways.
 #[derive(Clone, Copy)]
@@ -78,29 +76,53 @@ fn open_with_items(
 
 /// The keep-warm flame for a look (`KeepWarmFlame`): outline while off, filled in the flame colour while warm,
 /// greyed while paused, with a red dot when something is wrong.
-fn flame_icon(look: dnnm_keepwarm::view::KeepWarmLook, muted: Hsla, cx: &gpui::App) -> gpui::Div {
-    use dnnm_keepwarm::view::{FLAME_DOT_SIZE, FLAME_SIZE, FlameBrush, flame};
+/// Pulses while a ping is under way (`FLAME_PULSE`), with animations on.
+fn flame_icon(
+    id: impl Into<gpui::ElementId>,
+    look: dnnm_keepwarm::view::KeepWarmLook,
+    muted: Hsla,
+    cx: &gpui::App,
+) -> gpui::AnyElement {
+    use dnnm_keepwarm::view::{FLAME_DOT_OVERHANG, FLAME_DOT_SIZE, FLAME_PULSE, FLAME_SIZE, FlameBrush, flame, flame_width};
     let theme = Theme::get(cx);
     let style = flame(look);
     let color = match style.brush {
         FlameBrush::TextMuted => muted,
         FlameBrush::KeepWarmFg => theme.colors.keep_warm_fg,
     };
-    div()
+    // In the same box as a glyph of its size (`ui::icon`), centred - so it lines up with the icons beside it.
+    let icon = div()
         .relative()
-        .size(px(FLAME_SIZE))
-        .child(gpui::svg().path(crate::assets::flame_asset(style.path)).size(px(FLAME_SIZE)).text_color(color))
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_none()
+        .size(px(FLAME_SIZE + 2.0))
+        .child(
+            gpui::svg()
+                .path(crate::assets::flame_asset(style.path))
+                .w(px(flame_width(FLAME_SIZE)))
+                .h(px(FLAME_SIZE))
+                .text_color(color),
+        )
         .when(style.dot, |d| {
             d.child(
                 div()
                     .absolute()
-                    .top(px(-1.0))
-                    .right(px(-2.0))
+                    // At the bottom right, 2 px past the side and 1 px past the bottom (`FLAME_DOT_OVERHANG`).
+                    .bottom(px(-FLAME_DOT_OVERHANG.1))
+                    .right(px(-FLAME_DOT_OVERHANG.0))
                     .size(px(FLAME_DOT_SIZE))
                     .rounded_full()
                     .bg(theme.colors.error_text),
             )
-        })
+        });
+    if style.pulse {
+        let (high, low, half) = FLAME_PULSE;
+        ui::pulse(icon.opacity(high), id, low, half * 2, cx)
+    } else {
+        icon.into_any_element()
+    }
 }
 
 /// The Actions column: 56 for Start/Stop and Restart, 28 for keep warm, the divider and Remove, and padding.
@@ -232,6 +254,8 @@ pub struct ProjectsPage {
     /// None until a header is clicked: sorted by name, without an arrow (as the WPF table starts).
     sort: Option<(SortBy, bool)>,
     columns_open: bool,
+    /// Where the Columns button is: its popup opens under it.
+    columns_anchor: ui::Anchor,
     /// A project's Details, shown in place of the table.
     details: Option<Entity<ProjectView>>,
     /// Where the tour finds the table and the toolbar.
@@ -276,6 +300,7 @@ impl ProjectsPage {
             expanded: HashSet::new(),
             sort: None,
             columns_open: false,
+            columns_anchor: ui::Anchor::default(),
             details: None,
             tour_targets: None,
             selected: None,
@@ -333,6 +358,9 @@ impl ProjectsPage {
         let more = cx.subscribe(&view, |this, view, e: &ProjectViewMenu, cx| {
             let name = view.read(cx).name.clone();
             this.open_menu(&name, e.0, cx);
+            if let Some(menu) = this.menu.as_mut() {
+                menu.anchor = e.1;
+            }
         });
         self._subscriptions.push(more);
         let action = cx.subscribe(&view, |_, _, e: &ProjectViewAction, cx| {
@@ -343,8 +371,23 @@ impl ProjectsPage {
         cx.notify();
     }
 
-    /// Back to the table; false when the table was shown already (Esc goes on to what is around it).
+    /// Whether the Columns popup or a project's menu is open (Esc closes it).
+    pub fn columns_open(&self) -> bool {
+        self.columns_open || self.menu.is_some()
+    }
+
+    /// Esc on the page: the Columns popup closes first, then the Details go back to the table; false when neither was
+    /// open (Esc goes on to what is around it).
     pub fn close_details(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.menu.take().is_some() {
+            cx.notify();
+            return true;
+        }
+        if self.columns_open {
+            self.columns_open = false;
+            cx.notify();
+            return true;
+        }
         let open = self.details.take().is_some();
         cx.notify();
         open
@@ -765,18 +808,17 @@ impl Render for ProjectsPage {
                     .flex()
                     .flex_col()
                     .gap(px(4.0))
-                    .child(
+                    .child(ui::with_tip_sized(
                         div()
                             .text_size(theme.text.display)
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(c.text_primary)
                             .child("Projects"),
-                    )
-                    .child(
-                        div()
-                            .text_color(c.text_muted)
-                            .child("Every DNN website in IIS - its state, bindings, DNN install and database."),
-                    ),
+                        theme.text.display,
+                        "projects-about",
+                        "Every DNN website in IIS - its state, bindings, DNN install and database.",
+                        cx,
+                    )),
             )
             .when_some(
                 match &connection {
@@ -793,7 +835,7 @@ impl Render for ProjectsPage {
                             .pad(px(0.0), px(2.0))
                             .text_size(theme.text.caption)
                             .text_color(c.text_muted)
-                            .tooltip(Tooltip::text(reason))
+                            .tip(reason)
                             .child(ui::status_dot(c.log_warn, false, px(8.0)))
                             .child("Reconnecting…"),
                     )
@@ -816,8 +858,8 @@ impl Render for ProjectsPage {
                 .h(px(26.0))
                 .rounded(px(3.0))
                 .when(enabled, |d| d.cursor_pointer().hover(move |s| s.bg(c.hover_bg)))
-                .tooltip(Tooltip::text(tip))
-                .child(ui::icon(glyph, 13.0, color, cx).when(!enabled, |d| d.opacity(0.35)))
+                .tip(tip)
+                .child(ui::icon(glyph, icons::SIZE, color, cx).when(!enabled, |d| d.opacity(0.35)))
         };
         let bulk = (!checked_rows.is_empty()).then(|| {
             let start_names = bulk_names.clone();
@@ -877,12 +919,13 @@ impl Render for ProjectsPage {
                         .h(px(26.0))
                         .rounded(px(3.0))
                         .when(all_warm || with_url, |d| d.cursor_pointer().hover(move |s| s.bg(c.hover_bg)))
-                        .tooltip(Tooltip::text(dnnm_keepwarm::view::bulk_tooltip(all_warm)))
+                        .tip(dnnm_keepwarm::view::bulk_tooltip(all_warm))
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             let names = names.clone();
                             this.store.update(cx, |s, cx| s.set_keep_warm(&names, !all_warm, cx));
                         }))
                         .child(flame_icon(
+                            "bulk-flame",
                             if all_warm {
                                 dnnm_keepwarm::view::KeepWarmLook::Warm
                             } else {
@@ -932,7 +975,9 @@ impl Render for ProjectsPage {
             .cursor_pointer()
             .when(self.columns_open, |d| d.bg(c.selection_bg))
             .hover(move |s| s.bg(c.hover_bg))
-            .tooltip(Tooltip::text("Choose which columns the list shows"))
+            .tip("Choose which columns the list shows")
+            .relative()
+            .child(self.columns_anchor.measure())
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.columns_open = !this.columns_open;
                 cx.notify();
@@ -970,7 +1015,7 @@ impl Render for ProjectsPage {
                                     .border_color(c.field_border)
                                     .bg(c.input_bg)
                                     .text_color(c.text_primary)
-                                    .tooltip(Tooltip::text("Search projects"))
+                                    .tip("Search projects")
                                     .child(self.search.clone()),
                             )
                             .child(columns_button),
@@ -983,6 +1028,7 @@ impl Render for ProjectsPage {
                             this.only_running = *on;
                             cx.notify();
                         }),
+                        window,
                         cx,
                     ))),
             )
@@ -1010,7 +1056,7 @@ impl Render for ProjectsPage {
                     .pad(px(6.0), px(inset))
                     .when(by.is_some(), |d| d.cursor_pointer().hover(move |s| s.bg(c.hover_bg)))
                     .child(label)
-                    .when_some(by.and_then(sort_mark), |d, glyph| d.child(ui::icon(glyph, 8.0, c.text_muted, cx)))
+                    .when_some(by.and_then(sort_mark), |d, glyph| d.child(ui::icon(glyph, icons::SIZE_SMALL, c.text_muted, cx)))
             };
         let mut header_row = div()
             .flex()
@@ -1069,12 +1115,20 @@ impl Render for ProjectsPage {
         let measure = gpui::canvas(
             move |bounds, _, cx| {
                 let width = bounds.size.width / px(1.0);
-                let _ = page.update(cx, |this, cx| {
-                    if (this.view_width - width).abs() > 0.5 {
+                let changed = page
+                    .update(cx, |this, _| {
+                        let changed = (this.view_width - width).abs() > 0.5;
                         this.view_width = width;
-                        cx.notify();
-                    }
-                });
+                        changed
+                    })
+                    .unwrap_or(false);
+                // Drawn again with it once this frame is done - a notify while drawing is dropped.
+                if changed {
+                    let page = page.clone();
+                    cx.defer(move |cx| {
+                        page.update(cx, |_, cx| cx.notify()).ok();
+                    });
+                }
             },
             |_, _, _, _| {},
         )
@@ -1237,6 +1291,7 @@ impl Render for ProjectsPage {
                 let Some((start_x, start_offset)) = this.thumb_drag else { return };
                 if e.pressed_button != Some(MouseButton::Left) {
                     this.thumb_drag = None;
+                    cx.notify();
                     return;
                 }
                 let content = this.drag_content_width;
@@ -1246,7 +1301,15 @@ impl Render for ProjectsPage {
                     cx.notify();
                 }
             }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.thumb_drag = None))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    // The thumb's colour follows the drag: drawn again as it ends.
+                    if this.thumb_drag.take().is_some() {
+                        cx.notify();
+                    }
+                }),
+            )
             .track_focus(&self.focus)
             .relative()
             .size_full()
@@ -1268,7 +1331,7 @@ impl Render for ProjectsPage {
                     .child(table),
             )
             .child(footer)
-            .when(self.columns_open, |d| d.child(self.render_columns_menu(&columns, cx)))
+            .when(self.columns_open, |d| d.child(self.render_columns_menu(&columns, window, cx)))
             .children(self.render_row_menu(cx))
     }
 }
@@ -1326,14 +1389,14 @@ impl ProjectsPage {
             .rounded(theme.metrics.control_radius)
             .cursor_pointer()
             .hover(move |s| s.bg(c.hover_bg))
-            .tooltip(Tooltip::text("Show a few facts under the row"))
+            .tip("Show a few facts under the row")
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 if !this.expanded.remove(&n) {
                     this.expanded.insert(n.clone());
                 }
                 cx.notify();
             }))
-            .child(ui::icon(if expanded { icons::CHEVRON_DOWN } else { icons::CHEVRON_RIGHT }, 10.0, c.link_fg, cx));
+            .child(ui::icon(if expanded { icons::CHEVRON_DOWN } else { icons::CHEVRON_RIGHT }, icons::SIZE_SMALL, c.link_fg, cx));
 
         let mut line = div()
             .flex()
@@ -1350,7 +1413,7 @@ impl ProjectsPage {
                     .flex_none()
                     .justify_center()
                     .w(px(24.0))
-                    .tooltip(Tooltip::text(state_text.clone()))
+                    .tip(state_text.clone())
                     .child(ui::status_dot(dot_color, filled, px(9.0))),
             )
             .child(
@@ -1365,7 +1428,7 @@ impl ProjectsPage {
                         .text_ellipsis()
                         .cursor_pointer()
                         .hover(|s| s.underline())
-                        .tooltip(Tooltip::text("Show everything about this website"))
+                        .tip("Show everything about this website")
                         .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.open_details(&open, window, cx)))
                         .child(name.clone())
                 }),
@@ -1389,7 +1452,7 @@ impl ProjectsPage {
                     let url = p.site_url.clone();
                     cell.child(
                         ui::link(id("url"), text, cx)
-                            .tooltip(Tooltip::text("Open the website in your browser"))
+                            .tip("Open the website in your browser")
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_url(&url, cx))),
                     )
                 }
@@ -1398,7 +1461,7 @@ impl ProjectsPage {
                     let dir = p.directory.clone();
                     cell.child(
                         ui::link(id("path"), text, cx)
-                            .tooltip(Tooltip::text("Open the website's files in File Explorer"))
+                            .tip("Open the website's files in File Explorer")
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_folder(&dir, cx))),
                     )
                 }
@@ -1409,12 +1472,12 @@ impl ProjectsPage {
                         _ => c.text_primary,
                     };
                     let tip = view::sql_tip(p).unwrap_or_default();
-                    cell.child(div().id(id("sql")).text_color(color).tooltip(Tooltip::text(tip)).child(text))
+                    cell.child(div().id(id("sql")).text_color(color).tip(tip).child(text))
                 }
                 Column::Database => {
                     let color = if p.database_problem.is_some() { c.log_warn } else { c.text_primary };
                     let tip = view::database_tip(p).unwrap_or_default();
-                    cell.child(div().id(id("db")).text_color(color).tooltip(Tooltip::text(tip)).child(text))
+                    cell.child(div().id(id("db")).text_color(color).tip(tip).child(text))
                 }
                 Column::Status => cell.text_color(c.text_muted).child(state_text.clone()),
                 Column::Id => cell.text_color(c.text_muted).child(text),
@@ -1447,7 +1510,7 @@ impl ProjectsPage {
                     .when(show_start, |d| {
                         d.child(
                             ui::icon_button(id("start"), icons::PLAY, c.link_fg, can_start, cx)
-                                .tooltip(Tooltip::text("Start - turn the website on so it can be opened"))
+                                .tip("Start - turn the website on so it can be opened")
                                 .when(can_start, |b| {
                                     b.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                         this.control(vec![n1.clone()], SiteAction::Start, cx)
@@ -1458,9 +1521,9 @@ impl ProjectsPage {
                     .when(show_stop, |d| {
                         d.child(
                             ui::icon_button(id("stop"), icons::STOP, c.link_fg, can_stop, cx)
-                                .tooltip(Tooltip::text(
+                                .tip(
                                     "Stop - turn the website off until you start it again; nothing is deleted",
-                                ))
+                                )
                                 .when(can_stop, |b| {
                                     b.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                         this.control(vec![n2.clone()], SiteAction::Stop, cx)
@@ -1469,9 +1532,9 @@ impl ProjectsPage {
                         )
                         .child(
                             ui::icon_button(id("restart"), icons::REFRESH, c.link_fg, can_stop, cx)
-                                .tooltip(Tooltip::text(
+                                .tip(
                                     "Restart the website's background process - can fix problems; it is unavailable for a few seconds",
-                                ))
+                                )
                                 .when(can_stop, |b| {
                                     b.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                         this.control(vec![n3.clone()], SiteAction::Restart, cx)
@@ -1504,20 +1567,20 @@ impl ProjectsPage {
                             .rounded(theme.metrics.control_radius)
                             .when(can, |d| d.cursor_pointer().hover(move |s| s.bg(c.hover_bg)))
                             .when(!can, |d| d.opacity(0.35))
-                            .tooltip(Tooltip::text(tip))
+                            .tip(tip)
                             .when(can, |d| {
                                 d.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                     let site = site.clone();
                                     this.store.update(cx, |s, cx| s.set_keep_warm(&[site], !on, cx));
                                 }))
                             })
-                            .child(flame_icon(dnnm_keepwarm::view::look(&status), c.text_muted, cx))
+                            .child(flame_icon(id("flame"), dnnm_keepwarm::view::look(&status), c.text_muted, cx))
                     })
                     .child(div().w(px(1.0)).h(px(18.0)).bg(c.card_border))
                     .child({
                         let site = name.clone();
                         ui::icon_button(id("remove"), icons::DELETE, c.error_text, idle, cx)
-                            .tooltip(Tooltip::text(dnnm_wiring::remove_project::REMOVE_ROW_TOOLTIP))
+                            .tip(dnnm_wiring::remove_project::REMOVE_ROW_TOOLTIP)
                             .when(idle, |b| {
                                 b.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                     let site = site.clone();
@@ -1727,7 +1790,7 @@ impl ProjectsPage {
     }
 
     /// The Columns popup: a switch per column, then Hide all / Default / Show all.
-    fn render_columns_menu(&self, shown: &[Column], cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_columns_menu(&self, shown: &[Column], window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
         let c = theme.colors;
         // The switches 8 px apart, 4 px in from the top and bottom of the list.
@@ -1748,24 +1811,24 @@ impl ProjectsPage {
                     }
                     this.set_columns(next, cx);
                 }),
+                window,
                 cx,
             )));
         }
-        div()
-            .id("columns-backdrop")
-            .absolute()
-            .inset_0()
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                this.columns_open = false;
-                cx.notify();
-            }))
-            .child(
+        // Under the Columns button, its left edge level with the button's, over everything (the panel too); a press
+        // anywhere else closes it - on the button itself its own click does.
+        let (position, corner) = self.columns_anchor.below(false);
+        let anchor = self.columns_anchor.clone();
+        gpui::deferred(
+            gpui::anchored().anchor(corner).position(position).snap_to_window().child(
                 div()
                     .id("columns-menu")
-                    .absolute()
-                    // Under the Columns button: page padding + title block + the toolbar's search.
-                    .top(px(24.0 + 56.0 + 16.0 + 36.0))
-                    .left(px(28.0 + 280.0 + 8.0))
+                    .on_mouse_down_out(cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                        if !anchor.contains(e.position) {
+                            this.columns_open = false;
+                            cx.notify();
+                        }
+                    }))
                     .min_w(px(220.0))
                     .flex()
                     .flex_col()
@@ -1801,6 +1864,8 @@ impl ProjectsPage {
                                 cx.listener(|this, _: &ClickEvent, _, cx| this.set_columns(Column::ALL.to_vec(), cx)),
                             )),
                     ),
-            )
+            ),
+        )
+        .with_priority(2)
     }
 }

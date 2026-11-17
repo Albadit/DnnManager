@@ -12,11 +12,18 @@ pub struct WindowState {
     pub width: Option<f32>,
     pub height: Option<f32>,
     pub maximized: bool,
+    /// The activity bar (the page entries) hidden.
     pub sidebar_hidden: bool,
+    /// The primary side bar's width (the key the wide sidebar had).
     pub sidebar_width: Option<f32>,
+    pub primary_open: bool,
+    pub secondary_open: bool,
+    pub secondary_width: Option<f32>,
     pub panel_open: bool,
     pub panel_height: Option<f32>,
     pub panel_maximized: bool,
+    /// The Output's stage list's width, as dragged.
+    pub output_stages_width: Option<f32>,
 }
 
 /// The Projects table's part of the `workspace` area (`ProjectsTableState`, under `projects.`).
@@ -105,9 +112,13 @@ impl WindowState {
             maximized: flag(db, WINDOW, "maximized"),
             sidebar_hidden: flag(db, WINDOW, "sidebarHidden"),
             sidebar_width: number(db, WINDOW, "sidebarWidth"),
+            primary_open: flag(db, WINDOW, "primarySideBarOpen"),
+            secondary_open: flag(db, WINDOW, "secondarySideBarOpen"),
+            secondary_width: number(db, WINDOW, "secondarySideBarWidth"),
             panel_open: flag(db, WINDOW, "panelOpen"),
             panel_height: number(db, WINDOW, "panelHeight"),
             panel_maximized: flag(db, WINDOW, "panelMaximized"),
+            output_stages_width: number(db, WINDOW, "outputStagesWidth"),
         }
     }
 
@@ -119,9 +130,13 @@ impl WindowState {
         put_flag(db, WINDOW, "maximized", self.maximized);
         put_flag(db, WINDOW, "sidebarHidden", self.sidebar_hidden);
         put_number(db, WINDOW, "sidebarWidth", self.sidebar_width);
+        put_flag(db, WINDOW, "primarySideBarOpen", self.primary_open);
+        put_flag(db, WINDOW, "secondarySideBarOpen", self.secondary_open);
+        put_number(db, WINDOW, "secondarySideBarWidth", self.secondary_width);
         put_flag(db, WINDOW, "panelOpen", self.panel_open);
         put_number(db, WINDOW, "panelHeight", self.panel_height);
         put_flag(db, WINDOW, "panelMaximized", self.panel_maximized);
+        put_number(db, WINDOW, "outputStagesWidth", self.output_stages_width);
     }
 }
 

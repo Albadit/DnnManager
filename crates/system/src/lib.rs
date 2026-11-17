@@ -10,6 +10,9 @@ pub mod acl;
 #[cfg(windows)]
 pub mod files;
 pub mod hosts;
+pub mod motion;
+#[cfg(windows)]
+pub mod move_pointer;
 #[cfg(windows)]
 pub mod power;
 pub mod prereq;

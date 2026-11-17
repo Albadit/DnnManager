@@ -7,18 +7,15 @@
 //! records the part's bounds every frame into the shared [`TourTargets`]), and the overlay - over the whole window -
 //! reads them in the same frame.
 
+use dnnm_ui::px;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use gpui::{
-    App, BorderStyle, Bounds, ClickEvent, Context, Corners, EventEmitter, FocusHandle, Focusable, FontWeight, Hsla,
-    KeyBinding, Pixels, Point, SharedString, Size, Window, actions, canvas, div, fill, point, prelude::*, px, quad,
-    rgba, size,
-};
+use gpui::{App, BorderStyle, Bounds, ClickEvent, Context, Corners, EventEmitter, FocusHandle, Focusable, FontWeight, Hsla, KeyBinding, Pixels, Point, SharedString, Size, Window, actions, canvas, div, fill, point, prelude::*, quad, rgba, size};
 
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{ButtonKind, Pad, Tooltip, button, link};
+use dnnm_ui::{ButtonKind, Pad, Tip, button, link};
 
 use crate::markdown::bold_text;
 
@@ -344,11 +341,15 @@ impl GuidedTour {
             .child(
                 // Measures the card as laid out: a taller card than guessed is placed again.
                 canvas(
-                    move |bounds, window, _| {
+                    move |bounds, window, cx| {
                         let h = f32::from(bounds.size.height);
                         if (h - card_height.get()).abs() > 0.5 {
                             card_height.set(h);
-                            window.refresh();
+                            // Once this frame is done: a refresh asked for while drawing is dropped.
+                            let handle = window.window_handle();
+                            cx.defer(move |cx| {
+                                handle.update(cx, |_, window, _| window.refresh()).ok();
+                            });
                         }
                     },
                     |_, _, _, _| {},
@@ -396,7 +397,7 @@ impl GuidedTour {
                     .child(div().when(!last, |d| {
                         d.child(
                             link("tour-skip", "Skip tour", cx)
-                                .tooltip(Tooltip::text("End the tour (Esc) - Help opens it again"))
+                                .tip("End the tour (Esc) - Help opens it again")
                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.skip(cx))),
                         )
                     }))
@@ -407,7 +408,7 @@ impl GuidedTour {
                             .child(
                                 button("tour-back", "Back", ButtonKind::Secondary, can_back, cx)
                                     .min_w(px(70.0))
-                                    .tooltip(Tooltip::text("The previous part (←)"))
+                                    .tip("The previous part (←)")
                                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.back(cx))),
                             )
                             .child(
@@ -419,7 +420,7 @@ impl GuidedTour {
                                     cx,
                                 )
                                 .min_w(px(70.0))
-                                .tooltip(Tooltip::text(if last { "End the tour" } else { "The next part (→)" }))
+                                .tip(if last { "End the tour" } else { "The next part (→)" })
                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.next(cx))),
                             ),
                     ),

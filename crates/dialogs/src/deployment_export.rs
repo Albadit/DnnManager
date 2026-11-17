@@ -4,17 +4,15 @@
 //! the next one. Emits `DialogEvent::Done(ExportForDeploymentRequest)`; the app runs
 //! `dnnm_wiring::export_for_deployment::export_for_deployment` with it.
 
+use dnnm_ui::px;
 use std::path::{Path, PathBuf};
 
-use gpui::{
-    App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, PathPromptOptions,
-    SharedString, Subscription, Window, div, prelude::*, px,
-};
+use gpui::{App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, PathPromptOptions, SharedString, Subscription, Window, div, prelude::*};
 
 use dnnm_application::use_cases::export_for_deployment::{ExportForDeploymentRequest, folder_problem, parse_domains};
 use dnnm_ui::dialog::{self, DialogEvent};
 use dnnm_ui::text_input::{TextChanged, TextInput};
-use dnnm_ui::{self as ui, Tooltip};
+use dnnm_ui::{self as ui, Tip};
 
 /// The text at the top.
 pub fn intro(site: &str) -> String {
@@ -167,29 +165,37 @@ impl Render for DeploymentExportDialog {
 
         // Fields under their labels 4 apart, the sections 14 apart; a check box (4 above and under it built in) 10 under
         // the field before it.
+        // What a field or check box takes is in the info tip beside its label or text.
         let stack = |gap: f32| div().w_full().flex().flex_col().gap(px(gap));
+        let label = |text: &'static str, id: &'static str, tip: SharedString, cx: &App| {
+            ui::with_tip(dialog::label(text, cx), id, tip, cx)
+        };
         let domains = stack(4.0)
-            .child(dialog::label("Live domain(s)", cx))
-            .child(dialog::text_field(&self.domains, window, cx))
-            .child(dialog::hint(
-                "Comma- or space-separated host names, e.g. www.example.com, example.com - the first is the primary portal alias. Left empty, the portal aliases stay as they are.",
+            .child(label(
+                "Live domain(s)",
+                "domains-tip",
+                "Comma- or space-separated host names, e.g. www.example.com, example.com - the first is the primary portal alias. Left empty, the portal aliases stay as they are.".into(),
                 cx,
-            ));
-        let https = stack(4.0)
-            .child(dialog::check("https", self.https, "The live site uses HTTPS", cx).on_click(cx.listener(
-                |this, _: &ClickEvent, _, cx| {
-                    this.https = !this.https;
-                    cx.notify();
-                },
-            )))
-            .child(dialog::hint(
+            ))
+            .child(dialog::text_field(&self.domains, window, cx));
+        let https = dialog::check("https", self.https, "The live site uses HTTPS", cx)
+            .child(ui::info_tip(
+                "https-tip",
                 "Switches DNN's SSL setting on, and turns the HTTPS redirect rules DNN Manager switched off back on.",
                 cx,
-            ));
+            ))
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                this.https = !this.https;
+                cx.notify();
+            }));
         let connection = stack(4.0)
-            .child(dialog::label("Live database connection string (optional)", cx))
-            .child(dialog::text_field(&self.connection, window, cx))
-            .child(dialog::hint("Left empty, web.config gets a placeholder to fill in on the server.", cx));
+            .child(label(
+                "Live database connection string (optional)",
+                "connection-tip",
+                "Left empty, web.config gets a placeholder to fill in on the server.".into(),
+                cx,
+            ))
+            .child(dialog::text_field(&self.connection, window, cx));
         let database = stack(4.0)
             .child(
                 dialog::check("include-database", self.include_database, "Include the database (.bacpac)", cx)
@@ -201,11 +207,12 @@ impl Render for DeploymentExportDialog {
                         }))
                     }),
             )
+            // Why the check box is off stays visible.
             .when(!self.has_database, |d| {
                 d.child(dialog::hint("The site's web.config names no database that can be exported.", cx))
             });
         let folder = stack(4.0)
-            .child(dialog::label("Folder", cx))
+            .child(label("Folder", "folder-tip", format!("Gets {site}.zip, {site}.bacpac and DEPLOY.txt.").into(), cx))
             .child(
                 div()
                     .flex()
@@ -215,18 +222,15 @@ impl Render for DeploymentExportDialog {
                     .child(
                         ui::button("browse", "Browse…", ui::ButtonKind::Secondary, true, cx)
                             .min_w(px(80.0))
-                            .tooltip(Tooltip::text("Browse…"))
+                            .tip("Browse…")
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.browse(cx))),
                     ),
-            )
-            .child(dialog::hint(format!("Gets {site}.zip, {site}.bacpac and DEPLOY.txt."), cx));
+            );
 
-        let body = div().flex().flex_col().gap(px(12.0)).child(div().w_full().child(intro(&site))).child(
-            stack(14.0)
-                .child(stack(10.0).child(domains).child(https))
-                .child(stack(10.0).child(connection).child(database))
-                .child(stack(10.0).child(folder).children(dialog::field_error(problem.map(SharedString::from), cx))),
-        );
+        let body = stack(14.0)
+            .child(stack(10.0).child(domains).child(https))
+            .child(stack(10.0).child(connection).child(database))
+            .child(stack(10.0).child(folder).children(dialog::field_error(problem.map(SharedString::from), cx)));
 
         let buttons = div()
             .flex()
@@ -234,13 +238,13 @@ impl Render for DeploymentExportDialog {
             .child(
                 ui::button("dialog-ok", "Export", ui::ButtonKind::Primary, ok, cx)
                     .min_w(px(80.0))
-                    .tooltip(Tooltip::text("Export (Enter)"))
+                    .tip("Export (Enter)")
                     .when(ok, |b| b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.submit(cx)))),
             )
             .child(
                 ui::button("dialog-cancel", "Cancel", ui::ButtonKind::Secondary, true, cx)
                     .min_w(px(80.0))
-                    .tooltip(Tooltip::text("Cancel (Esc)"))
+                    .tip("Cancel (Esc)")
                     .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(DialogEvent::Cancelled))),
             );
 
@@ -251,7 +255,7 @@ impl Render for DeploymentExportDialog {
                     this.submit(cx);
                 }
             }))
-            .child(dialog::frame("Export for deployment", 520.0, body, buttons, cx))
+            .child(dialog::frame_with_tip("Export for deployment", Some(intro(&site)), 520.0, body, buttons, cx))
     }
 }
 

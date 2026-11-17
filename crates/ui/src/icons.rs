@@ -1,7 +1,24 @@
 //! The icons of `Themes/Icons.xaml`: Segoe Fluent Icons glyphs by their code points, and the layout icons as the
 //! same 16 × 16 path data, drawn with GPUI's path builder.
 
-use gpui::{Bounds, Hsla, IntoElement, PathBuilder, Pixels, Point, Styled, canvas, point, px};
+use crate::px;
+use gpui::{Bounds, Hsla, IntoElement, PathBuilder, Pixels, Point, Styled, canvas, point};
+
+// --- Sizes: one per role, so icons doing the same job look the same everywhere ---
+
+/// Chevrons, check marks, sort arrows, the window's buttons, the Output pill.
+pub const SIZE_SMALL: f32 = 10.0;
+/// Every action and state icon - alone (icon buttons, 28 x 28, as the C# app's `IconButton`) or beside text.
+pub const SIZE: f32 = 13.0;
+/// A ✕ that closes something (the panel, a bar, a list): Segoe's close glyph is drawn larger than the others, so a
+/// size smaller (the C# app's 11).
+pub const SIZE_CLOSE: f32 = 11.0;
+/// The page entries: the sidebar and Settings' categories.
+pub const SIZE_NAV: f32 = 16.0;
+/// A dialog's own large icon (the prompt).
+pub const SIZE_LARGE: f32 = 26.0;
+/// Between an icon and its label.
+pub const LABEL_GAP: f32 = 8.0;
 
 pub const MINIMIZE: &str = "\u{E921}";
 pub const MAXIMIZE: &str = "\u{E922}";

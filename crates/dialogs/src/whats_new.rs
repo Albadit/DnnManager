@@ -3,17 +3,15 @@
 //! embeds them), drawn with the [`markdown`](crate::markdown) renderer. Shown by the first start of a newer version
 //! ([`between`] the version before the update and this one) and by Help → What's New in This Version ([`latest`]).
 
+use dnnm_ui::px;
 use std::cmp::Ordering;
 use std::fmt;
 use std::rc::Rc;
 
-use gpui::{
-    App, ClickEvent, Context, EventEmitter, FocusHandle, Focusable, KeyBinding, SharedString, Window, actions, div,
-    prelude::*, px,
-};
+use gpui::{App, ClickEvent, Context, EventEmitter, FocusHandle, Focusable, KeyBinding, SharedString, Window, actions, div, prelude::*};
 
 use dnnm_ui::dialog::{self, DialogEvent};
-use dnnm_ui::{ButtonKind, Tooltip, button, link};
+use dnnm_ui::{ButtonKind, Tip, button, link};
 
 use crate::help_menu::{RELEASES_URL, REPOSITORY};
 use crate::markdown::{self, Block, OnLink};
@@ -262,7 +260,7 @@ impl Render for WhatsNewDialog {
             .child(
                 button("whats-new-close", "Close", ButtonKind::Primary, true, cx)
                     .min_w(px(80.0))
-                    .tooltip(Tooltip::text("Close (Esc)"))
+                    .tip("Close (Esc)")
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.close(cx))),
             );
         div()

@@ -3,13 +3,10 @@
 //! uses the text field's own key bindings (`dnnm_ui::text_input`, context "TextInput"), so it needs nothing bound of
 //! its own. The cursor stays at the end - a password is typed again, not edited in the middle.
 
+use dnnm_ui::px;
 use std::ops::Range;
 
-use gpui::{
-    App, Bounds, Context, CursorStyle, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter,
-    FocusHandle, Focusable, GlobalElementId, LayoutId, Pixels, ShapedLine, Style, TextRun, UTF16Selection, Window, div,
-    fill, point, prelude::*, px, relative, size,
-};
+use gpui::{App, Bounds, Context, CursorStyle, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, LayoutId, Pixels, ShapedLine, Style, TextRun, UTF16Selection, Window, div, fill, point, prelude::*, relative, size};
 
 use dnnm_ui::text_input::{Backspace, Clear, Delete, Paste, SelectAll};
 use dnnm_ui::theme::Theme;

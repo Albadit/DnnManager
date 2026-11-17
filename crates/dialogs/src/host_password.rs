@@ -6,17 +6,15 @@
 //! connection uses too: dots in [`crate::password_input::PasswordInput`], the text itself in a `TextInput` while it is
 //! shown, the two kept alike.
 
+use dnnm_ui::px;
 use std::fmt;
 
-use gpui::{
-    App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, SharedString, Subscription,
-    Window, div, prelude::*, px,
-};
+use gpui::{App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, SharedString, Subscription, Window, div, prelude::*};
 
 use dnnm_ui::dialog::{self, DialogEvent};
 use dnnm_ui::text_input::{TextChanged, TextInput};
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{self as ui, Pad, Tooltip};
+use dnnm_ui::{self as ui, Pad, Tip};
 
 use crate::password_input::{PasswordChanged, PasswordInput};
 
@@ -189,7 +187,7 @@ impl Render for HostPasswordDialog {
                         div().flex().items_center().justify_between().child("New password").child(
                             ui::link("generate-password", "Generate", cx)
                                 .text_size(theme.text.caption)
-                                .tooltip(Tooltip::text("Generate password"))
+                                .tip("Generate password")
                                 .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.generate(window, cx))),
                         ),
                     )
@@ -203,12 +201,12 @@ impl Render for HostPasswordDialog {
             .gap(px(8.0))
             .child(
                 ui::button("dialog-ok", "Change password", ui::ButtonKind::Primary, ok, cx)
-                    .tooltip(Tooltip::text("Change password (Enter)"))
+                    .tip("Change password (Enter)")
                     .when(ok, |b| b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.submit(cx)))),
             )
             .child(
                 ui::button("dialog-cancel", "Cancel", ui::ButtonKind::Secondary, true, cx)
-                    .tooltip(Tooltip::text("Cancel (Esc)"))
+                    .tip("Cancel (Esc)")
                     .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(DialogEvent::Cancelled))),
             );
 
@@ -336,7 +334,7 @@ impl Render for PasswordField {
                     .cursor_pointer()
                     .text_color(muted)
                     .hover(move |s| s.bg(hover).text_color(primary))
-                    .tooltip(Tooltip::text(tip))
+                    .tip(tip)
                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.toggle(window, cx)))
                     .child(div().font_family(theme.icon_font.clone()).text_size(px(14.0)).child(if self.revealed {
                         HIDE

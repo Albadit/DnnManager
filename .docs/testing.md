@@ -35,7 +35,7 @@ are run by hand.
 
 Reading IIS needs administrator rights, so the UI is checked against a stand-in IIS
 ([`iis_fixture.rs`](../crates/infrastructure/src/iis_fixture.rs)): `DNNMANAGER_GPUI_FIXTURE` names a file
-of appcmd's site XML, the app shows those sites, and Start / Stop change only its in-memory copy. Point the sites'
+of appcmd's site XML, the app shows those sites, and Start / Stop change only its in-memory copy - taking two seconds each, as a real IIS does, so the Output's Running state (the spinner, the clock) can be seen. Point the sites'
 `physicalPath` at real DNN folders and the DNN version and database come from them - the folders are only read.
 
 ```xml

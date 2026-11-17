@@ -2,7 +2,7 @@
 
 ## Skills
 
-This repository has sixteen skills in `.claude/skills/`. For every prompt, decide which of them the request needs, use
+This repository has seventeen skills in `.claude/skills/`. For every prompt, decide which of them the request needs, use
 each one that applies, and name them in the first line of the reply (e.g. "Skills: functionality, documentation" or
 "Skills: none"). **orchestrator** does that choosing: at the start of a task it matches the task against every
 skill's description and loads only the ones that fit; `#<skill-name>` in a message (e.g. `#security`) loads that
@@ -20,6 +20,7 @@ skill as well.
 | **reliability** | is about failure and recovery: undo/rollback, timeouts, retries, cancel and quit, partial state |
 | **performance** | is about speed or resource use: UI-thread work, the monitor, logs, copies, memory, queries |
 | **usability** | changes the window (GPUI) or its wording: flows, error messages, keyboard, contrast, screen readers, spacing |
+| **gpui** | writes or reviews GPUI code - views, elements, popups, tooltips, hover, cursors, redraws - checked against docs.rs/gpui/0.2.2 and GPUI's source |
 | **frontend** | builds or changes a web page (HTML/CSS/JS) - not DNN Manager's window, which is GPUI: use usability for that |
 | **maintainability** | refactors or cleans up: duplication, long methods, naming, warnings, dependencies, tech debt |
 | **architecture** | changes structure: crates and layers, abstractions, module boundaries, ADRs |

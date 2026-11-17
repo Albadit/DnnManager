@@ -2,9 +2,8 @@
 //! Start / Stop / Restart / Open site / Open folder, and the tabs General, IIS, DNN, Database and Advanced - each a
 //! list of sections (`InspectorPanel`) from `dnnm_diagnostics`, read off the UI thread.
 
-use gpui::{
-    ClickEvent, Context, Entity, EventEmitter, FontWeight, Hsla, SharedString, Task, Window, div, prelude::*, px,
-};
+use dnnm_ui::px;
+use gpui::{ClickEvent, Context, Entity, EventEmitter, FontWeight, Hsla, SharedString, Task, Window, div, prelude::*};
 
 use dnnm_application::project::{SiteRunState, view};
 use dnnm_application::use_cases::SiteAction;
@@ -12,7 +11,7 @@ use dnnm_diagnostics::{Health, ProjectSnapshot, Section, TabKind};
 
 use crate::store::{Store, ToastKind};
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{self as ui, Pad, Tooltip, icons};
+use dnnm_ui::{self as ui, Pad, Tip, icons};
 
 /// The view asks to go back to the table (← or Esc).
 pub struct ProjectViewClosed;
@@ -22,8 +21,9 @@ pub struct ProjectViewAction(pub crate::workspace::ProjectAction, pub String);
 
 impl EventEmitter<ProjectViewAction> for ProjectView {}
 
-/// "More actions": the project's menu, at this point - the same as right-clicking its row.
-pub struct ProjectViewMenu(pub gpui::Point<gpui::Pixels>);
+/// "More actions": the project's menu, at this point and with this corner of it there - under the ⋮ button, their right
+/// edges level; the same menu as right-clicking its row.
+pub struct ProjectViewMenu(pub gpui::Point<gpui::Pixels>, pub gpui::Corner);
 
 impl EventEmitter<ProjectViewMenu> for ProjectView {}
 
@@ -34,6 +34,8 @@ pub struct ProjectView {
     tab: TabKind,
     snapshot: Option<ProjectSnapshot>,
     issues: Vec<dnnm_diagnostics::DetectedIssue>,
+    /// Where the ⋮ button is: its menu opens under it.
+    more_anchor: ui::Anchor,
     _read: Option<Task<()>>,
 }
 
@@ -41,7 +43,7 @@ impl EventEmitter<ProjectViewClosed> for ProjectView {}
 
 impl ProjectView {
     pub fn new(store: Entity<Store>, name: String, cx: &mut Context<Self>) -> Self {
-        let mut view = Self { store, name, tab: TabKind::General, snapshot: None, issues: Vec::new(), _read: None };
+        let mut view = Self { store, name, tab: TabKind::General, snapshot: None, issues: Vec::new(), more_anchor: ui::Anchor::default(), _read: None };
         view.read(cx);
         view
     }
@@ -123,13 +125,12 @@ impl ProjectView {
         let c = theme.colors;
         // Title, then the rows (3 px above and below each), then the table, then the note. With no rows the table sits
         // 14 px under the title.
-        let header = div()
-            .flex()
-            .justify_between()
-            .child(div().text_size(theme.text.heading).font_weight(FontWeight::SEMIBOLD).child(section.title.clone()))
-            .when_some(section.source.clone(), |d, source| {
-                d.child(div().text_size(theme.text.small).text_color(c.text_muted).child(source))
-            });
+        // Where it was read from: an info icon beside the title.
+        let title = div().text_size(theme.text.heading).font_weight(FontWeight::SEMIBOLD).child(section.title.clone());
+        let header = match section.source.clone() {
+            Some(source) => ui::with_tip(title, SharedString::from(format!("source-{index}")), source, cx),
+            None => div().flex().child(title),
+        };
         let mut rows = div().flex().flex_col().gap(px(6.0)).pad(px(3.0), px(0.0));
         for (r, row) in section.rows.iter().enumerate() {
             let color = Self::health_color(row.health, &c);
@@ -150,12 +151,19 @@ impl ProjectView {
                     .child(row.value.clone())
                     .into_any_element(),
             };
+            // A detail that explains goes in an info icon beside the label; one that says what is wrong stays in view.
+            let problem = matches!(row.health, Health::Warning | Health::Bad);
+            let tip = row.detail.clone().filter(|_| !problem);
+            let label = div().text_color(c.text_muted).child(row.label.clone());
             rows = rows.child(
                 div()
                     .flex()
                     .items_start()
                     .gap(px(12.0))
-                    .child(div().flex_none().w(px(198.0)).text_color(c.text_muted).child(row.label.clone()))
+                    .child(div().flex_none().w(px(198.0)).child(match tip {
+                        Some(tip) => ui::with_tip(label, SharedString::from(format!("detail-{index}-{r}")), tip, cx),
+                        None => label,
+                    }))
                     .child(
                         div()
                             .flex()
@@ -172,7 +180,7 @@ impl ProjectView {
                                     .flex()
                                     .flex_col()
                                     .child(value)
-                                    .when_some(row.detail.clone(), |d, detail| {
+                                    .when_some(row.detail.clone().filter(|_| problem), |d, detail| {
                                         d.child(div().text_size(theme.text.hint).text_color(c.text_muted).child(detail))
                                     }),
                             ),
@@ -235,7 +243,7 @@ impl ProjectView {
                         .child(text.clone())
                         .when(last, |d| d.flex_1().min_w(px(56.0)))
                         .when(!last, |d| d.flex_shrink().min_w(px(32.0)).w(widths.get(i).copied().unwrap_or(px(180.0)) - px(8.0)))
-                        .when_some(row.detail.clone().filter(|_| last), |d, tip| d.tooltip(Tooltip::text(tip)));
+                        .when_some(row.detail.clone().filter(|_| last), |d, tip| d.tip(tip));
                     cells = cells.child(cell);
                 }
                 grid = grid.child(line.child(cells));
@@ -282,9 +290,9 @@ impl Render for ProjectView {
         let state_text: SharedString = pending.unwrap_or_else(|| view::state_text(&p.site).into());
         let header_button = |id: &'static str, glyph: &'static str, label: &'static str, tip: &'static str, on: bool| {
             ui::button(id, "", ui::ButtonKind::Secondary, on, cx)
-                .gap(px(6.0))
-                .tooltip(Tooltip::text(tip))
-                .child(ui::icon(glyph, 12.0, c.text_primary, cx))
+                .gap(px(icons::LABEL_GAP))
+                .tip(tip)
+                .child(ui::icon(glyph, icons::SIZE, c.text_primary, cx))
                 .child(label)
         };
         let name = self.name.clone();
@@ -308,7 +316,7 @@ impl Render for ProjectView {
                         div().flex_none().pad(px(2.0), px(0.0)).child(
                             ui::icon_button("details-back", icons::BACK, c.text_primary, true, cx)
                                 .size(px(32.0))
-                                .tooltip(Tooltip::text("Back (Esc)"))
+                                .tip("Back (Esc)")
                                 .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(ProjectViewClosed))),
                         ),
                     )
@@ -329,7 +337,7 @@ impl Render for ProjectView {
                                     .child(state_text)
                                     .when(!url.is_empty(), |d| {
                                         let url = url.clone();
-                                        d.child(ui::link("details-url", url.clone(), cx).tooltip(Tooltip::text("Open site")).on_click(
+                                        d.child(ui::link("details-url", url.clone(), cx).tip("Open site").on_click(
                                             cx.listener(move |this, _: &ClickEvent, _, cx| {
                                                 if let Err(e) = dnnm_infrastructure::shell::open_url(&url) {
                                                     this.store.update(cx, |s, cx| s.toast(ToastKind::Error, e, false, cx));
@@ -403,13 +411,18 @@ impl Render for ProjectView {
                     // WPF turns its "more" glyph upright; GPUI draws it as it is.
                     .child(
                         ui::button("details-more", "", ui::ButtonKind::Secondary, true, cx)
-                            .tooltip(Tooltip::text("More actions: logs, clear cache, export, backups, upgrade"))
-                            .child(ui::icon("\u{E712}", 12.0, c.text_primary, cx))
-                            .on_click(cx.listener(|_, e: &ClickEvent, _, cx| cx.emit(ProjectViewMenu(e.position())))),
+                            .tip("More actions: logs, clear cache, export, backups, upgrade")
+                            .child(ui::icon("\u{E712}", icons::SIZE, c.text_primary, cx))
+                            .relative()
+                            .child(self.more_anchor.measure())
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                let (position, corner) = this.more_anchor.below(true);
+                                cx.emit(ProjectViewMenu(position, corner));
+                            })),
                     ),
             );
 
-        let mut tabs = div().flex().gap(px(22.0)).border_b_1().border_color(c.card_border);
+        let mut tabs = div().flex().gap(px(22.0));
         for kind in TabKind::ALL {
             let chosen = kind == self.tab;
             tabs = tabs.child(
@@ -438,23 +451,33 @@ impl Render for ProjectView {
             _ => &[],
         };
         let can_edit = dnnm_wiring::rename_project::can_edit(busy, &p.directory);
-        let mut buttons = div().flex().gap(px(8.0));
+        let mut buttons = div().flex().items_center().gap(px(8.0));
         for action in edits.iter().copied() {
             let name = self.name.clone();
             buttons = buttons.child(
                 ui::button(SharedString::from(format!("edit-{}", action.label())), action.label(), ui::ButtonKind::Secondary, can_edit, cx)
-                    .tooltip(Tooltip::text(action.tooltip()))
+                    .tip(action.tooltip())
                     .when(can_edit, |b| {
                         b.on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(ProjectViewAction(action, name.clone()))))
                     }),
             );
         }
-        // The edit buttons 12 px above the cards, the cards 14 px apart.
+        // The tabs on the left, the tab's edit buttons on the right of the same line - over the line under them.
+        let tab_bar = div()
+            .flex()
+            .items_end()
+            .justify_between()
+            .gap(px(12.0))
+            .border_b_1()
+            .border_color(c.card_border)
+            .child(tabs)
+            .when(!edits.is_empty(), |d| d.child(div().pad(px(4.0), px(0.0)).child(buttons)));
+        // The cards 14 px apart.
         let mut cards = div().flex().flex_col().gap(px(14.0));
         for (i, section) in self.sections(cx).iter().enumerate() {
             cards = cards.child(self.render_section(i, section, cx));
         }
-        let content = div().flex().flex_col().gap(px(12.0)).when(!edits.is_empty(), |d| d.child(buttons)).child(cards);
+        let content = cards;
         div()
             .key_context("Details")
             .size_full()
@@ -469,7 +492,7 @@ impl Render for ProjectView {
                     .max_w(px(1100.0))
                     .gap(px(14.0))
                     .pad(px(12.0), px(28.0))
-                    .child(div().flex().flex_col().gap(px(10.0)).child(header).child(tabs))
+                    .child(div().flex().flex_col().gap(px(10.0)).child(header).child(tab_bar))
                     .child(div().id("details-content").flex_1().min_h_0().overflow_y_scroll().child(content)),
             )
     }

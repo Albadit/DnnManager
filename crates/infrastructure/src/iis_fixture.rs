@@ -74,6 +74,8 @@ impl FixtureIis {
     }
 
     fn set_state(&self, site: &str, state: &str) -> Result<(), IisError> {
+        // As long as a real IIS takes, so the window's Running state (the spinner, the clock) can be seen and checked.
+        std::thread::sleep(CHANGE_TAKES);
         let mut sites = lock(&self.sites)?;
         let name = Self::name_of(&sites, site)?;
         let entry = sites.get_mut(&name).expect("found");
@@ -90,6 +92,12 @@ impl FixtureIis {
         sites.iter().any(|(name, s)| !name.eq_ignore_ascii_case(site) && s.app_pool.eq_ignore_ascii_case(pool))
     }
 }
+
+/// How long a site's start or stop takes in the stand-in - none in its tests.
+#[cfg(not(test))]
+const CHANGE_TAKES: Duration = Duration::from_secs(2);
+#[cfg(test)]
+const CHANGE_TAKES: Duration = Duration::ZERO;
 
 impl IisManager for FixtureIis {
     fn is_available(&self) -> bool {

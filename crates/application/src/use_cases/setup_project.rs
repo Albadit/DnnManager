@@ -488,14 +488,14 @@ fn run(
         ]);
     }
 
-    op.report.step("Step 1: DNN version");
+    op.report.step("DNN version");
     let release = system
         .get_release(&request.release_api_url, request.version.as_deref(), &op.cancel)
         .map_err(|e| if e.is_empty() { "Could not resolve a DNN release.".to_string() } else { e })?;
     op.report.success(&format!("Using DNN {} ({})", release.version, release.download_url));
     op.cancel.check()?;
 
-    op.report.step("Step 2: Checking IIS");
+    op.report.step("Checking IIS");
     let iis_available = iis.is_available();
     if iis_available {
         // Before anything is downloaded: a second site with the same address wouldn't start, and DNN's installer would
@@ -522,7 +522,7 @@ fn run(
     }
     op.cancel.check()?;
 
-    op.report.step("Step 3: Testing database connection");
+    op.report.step("Testing database connection");
     let database_ready = check_database(deps, &project.name, &database, &release, automatic, op);
     if let Err(e) = &database_ready {
         if e == CANCELLED {
@@ -541,14 +541,14 @@ fn run(
     }
     op.cancel.check()?;
 
-    op.report.step("Step 4: Creating project directory");
+    op.report.step("Creating project directory");
     // A cancel takes the new project away again - its folder goes last, once nothing uses it any more.
     op.undo.delete_folder_on_undo(directory);
     std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
     op.report.success(&format!("Project directory ready: {}", directory.display()));
     op.cancel.check()?;
 
-    op.report.step(&format!("Step 5: Downloading DNN {}", release.version));
+    op.report.step(&format!("Downloading DNN {}", release.version));
     system.download_and_extract(&release, directory, op.report, &op.cancel)?;
     // Drop a DNN-tuned .gitignore next to the freshly extracted site so the project is ready to commit without
     // dragging in runtime data, caches, logs or portal uploads.
@@ -565,7 +565,7 @@ fn run(
     }
     op.cancel.check()?;
 
-    op.report.step("Step 6: Creating IIS application pool and website");
+    op.report.step("Creating IIS application pool and website");
     let mut site_created = false;
     if iis_available {
         op.report.info(&format!("Creating IIS application pool and website '{}' for {url}…", project.name));
@@ -584,7 +584,7 @@ fn run(
     }
     op.cancel.check()?;
 
-    op.report.step("Step 7: Creating database");
+    op.report.step("Creating database");
     if database_reachable {
         let created = provision_database(deps, project, &database, create_database, site_created, op);
         if let Err(e) = created
@@ -602,7 +602,7 @@ fn run(
     }
 
     let account = request.account.clone().expect("checked above");
-    op.report.step("Step 8: Configuring DNN");
+    op.report.step("Configuring DNN");
     // On the local container the site signs in with a login of its own, owner of its database only - not sa.
     if database.kind == DatabaseKind::Container && create_database {
         let (login, password) = system.grant_site_login(&project.name, &database.database, &op.cancel)?;
@@ -619,7 +619,7 @@ fn run(
     op.report.success(&format!("web.config connects to {}.", database.describe()));
     op.cancel.check()?;
 
-    op.report.step("Step 9: Running DNN installation");
+    op.report.step("Running DNN installation");
     let site = SiteAddress { directory: directory.clone(), alias: alias.clone(), port };
     let install_started = SystemTime::now();
     if let Err(e) = system.install(&site, &account, &database, op.report, &op.cancel) {
@@ -634,7 +634,7 @@ fn run(
         ));
     }
 
-    op.report.step("Step 10: Creating host account");
+    op.report.step("Creating host account");
     // A LocalDB file database is only opened by DNN Manager while the site doesn't use it.
     if database.kind == DatabaseKind::LocalDbFile {
         let _ = iis.stop_site(&project.name);
@@ -662,7 +662,7 @@ fn run(
         account.user_name
     ));
 
-    op.report.step("Step 11: Starting website");
+    op.report.step("Starting website");
     let warm_up = system.warm_up(&site, install_started, op.report, &op.cancel);
     system.clean_up(directory, true);
     system.save_record(&ProjectRecord {

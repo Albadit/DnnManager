@@ -1,7 +1,8 @@
 //! The design tokens of `Themes/LightTheme.xaml`, `Themes/DarkTheme.xaml` and `Themes/Tokens.xaml`, one for one -
 //! VS Code's Light Modern and Dark Modern. Every view takes its colours and sizes from here, never inline.
 
-use gpui::{App, Global, Hsla, Pixels, SharedString, WindowAppearance, px, rgb, rgba};
+use crate::px;
+use gpui::{App, Global, Hsla, Pixels, SharedString, WindowAppearance, rgb, rgba};
 
 use dnnm_application::settings::{Density, ThemeChoice};
 
@@ -278,13 +279,15 @@ impl Metrics {
             card_radius: px(6.0),
             control_height: px(30.0),
             search_height: px(26.0),
-            title_bar_height: px(30.0),
+            title_bar_height: px(36.0),
             caption_button_width: px(46.0),
             layout_button_width: px(28.0),
-            layout_button_height: px(24.0),
-            status_bar_height: px(24.0),
+            layout_button_height: px(26.0),
+            status_bar_height: px(28.0),
             sidebar_width: px(if compact { 190.0 } else { 230.0 }),
-            sidebar_compact_width: px(if compact { 40.0 } else { 48.0 }),
+            // A 32 px entry with as much room beside it as above it: 8 px (Default, 1 px border each side), 4 px (Compact,
+            // its one edge line).
+            sidebar_compact_width: px(if compact { 41.0 } else { 50.0 }),
             card_gap: px(if compact { 0.0 } else { 5.0 }),
             panel_height: px(230.0),
             table_row_height: px(38.0),
@@ -305,6 +308,8 @@ pub struct Theme {
     /// The icon font of `Themes/Icons.xaml`: Segoe Fluent Icons, with Segoe MDL2 Assets on Windows 10.
     pub icon_font: SharedString,
     pub mono_font: SharedString,
+    /// Slides, fades and pulses play: the setting "Play animations", and Windows' animation effects on.
+    pub animations: bool,
 }
 
 impl Global for Theme {}
@@ -325,7 +330,14 @@ impl Theme {
             font: "Segoe UI".into(),
             icon_font: icon_font().into(),
             mono_font: "Cascadia Mono".into(),
+            animations: true,
         }
+    }
+
+    /// The same theme, with animations on or off.
+    pub fn with_animations(mut self, on: bool) -> Self {
+        self.animations = on;
+        self
     }
 
     pub fn get(cx: &App) -> &Self {

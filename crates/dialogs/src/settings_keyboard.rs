@@ -1,7 +1,8 @@
 //! Settings → Keyboard shortcuts' model (`Pages/SettingsPage.Keyboard.cs`, `Services/Shortcut.cs` and the shortcut
 //! part of `Services/AppCommands.cs`): a shortcut written as VS Code writes it (`Ctrl+Shift+P`), its rules, the rows
 //! with their conflicts and warnings, and the changes - kept as the `keyboard.shortcuts` rows (only what differs from
-//! the defaults; "" takes a command's shortcut away).
+//! the defaults; "" takes a command's shortcuts away). A command may have several shortcuts: written one after the
+//! other, ", " between them (`Ctrl+J, Ctrl+Shift+J` - "Ctrl+," stays one, the comma key).
 //!
 //! The commands themselves are the app's: it passes each one's id, title, area and default shortcut.
 
@@ -216,11 +217,30 @@ impl fmt::Display for Shortcut {
     }
 }
 
-/// A command's row: its shortcut now, its default, whether it was changed, and what is wrong with it.
+/// Reads a command's shortcuts as kept: `Ctrl+J, Ctrl+Shift+J` → both; "" → none. What isn't a shortcut is left out.
+pub fn parse_list(text: &str) -> Vec<Shortcut> {
+    let mut list: Vec<Shortcut> = Vec::new();
+    for part in text.split(", ") {
+        if let Some(shortcut) = Shortcut::parse(part)
+            && !list.contains(&shortcut)
+        {
+            list.push(shortcut);
+        }
+    }
+    list
+}
+
+/// Writes shortcuts as they are kept: `Ctrl+J, Ctrl+Shift+J`.
+pub fn write_list(shortcuts: &[Shortcut]) -> String {
+    shortcuts.iter().map(Shortcut::to_string).collect::<Vec<_>>().join(", ")
+}
+
+/// A command's row: its shortcuts now, its default, whether it was changed, and what is wrong with it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShortcutRow {
     pub command: ShortcutCommand,
-    pub shortcut: Option<Shortcut>,
+    /// Every shortcut that runs it, in the order chosen; empty for none.
+    pub shortcuts: Vec<Shortcut>,
     pub default: Option<Shortcut>,
     pub is_custom: bool,
     pub warning: String,
@@ -240,16 +260,17 @@ impl ShortcutRow {
         }
     }
 
-    pub fn shortcut_text(&self, recording: bool) -> String {
-        if recording {
-            "Press the keys…".into()
-        } else {
-            self.shortcut.as_ref().map_or_else(|| "-".to_string(), Shortcut::to_string)
-        }
+    /// Its shortcuts as one line: "Ctrl+J, Ctrl+Shift+J", or "-" for none.
+    pub fn shortcuts_text(&self) -> String {
+        if self.shortcuts.is_empty() { "-".to_string() } else { write_list(&self.shortcuts) }
     }
 
     pub fn shortcut_tip(recording: bool) -> &'static str {
-        if recording { "Press the new shortcut - Esc cancels, Backspace removes it" } else { "Change the shortcut" }
+        if recording { "Press the new shortcut - Esc cancels, Backspace removes it" } else { "Change this shortcut" }
+    }
+
+    pub fn add_tip(recording: bool) -> &'static str {
+        if recording { "Press the new shortcut - Esc cancels" } else { "Add another shortcut" }
     }
 
     pub fn reset_tip(&self) -> String {
@@ -266,18 +287,18 @@ impl ShortcutRow {
             "{} {} {}",
             self.command.title,
             self.command.area,
-            self.shortcut.as_ref().map(Shortcut::to_string).unwrap_or_default()
+            write_list(&self.shortcuts)
         )
         .to_lowercase();
         search.split_whitespace().all(|w| text.contains(&w.to_lowercase()))
     }
 }
 
-/// The command's shortcut now: the one chosen (`custom`, "" = none), or its default.
-pub fn shortcut_of(command: &ShortcutCommand, custom: &BTreeMap<String, String>) -> Option<Shortcut> {
+/// The command's shortcuts now: the ones chosen (`custom`, "" = none), or its default.
+pub fn shortcuts_of(command: &ShortcutCommand, custom: &BTreeMap<String, String>) -> Vec<Shortcut> {
     match custom.get(&command.id) {
-        Some(chosen) => Shortcut::parse(chosen),
-        None => command.default_shortcut.as_deref().and_then(Shortcut::parse),
+        Some(chosen) => parse_list(chosen),
+        None => command.default_shortcut.as_deref().and_then(Shortcut::parse).into_iter().collect(),
     }
 }
 
@@ -287,7 +308,7 @@ pub fn rows(commands: &[ShortcutCommand], custom: &BTreeMap<String, String>) -> 
         .iter()
         .map(|c| ShortcutRow {
             command: c.clone(),
-            shortcut: shortcut_of(c, custom),
+            shortcuts: shortcuts_of(c, custom),
             default: c.default_shortcut.as_deref().and_then(Shortcut::parse),
             is_custom: custom.contains_key(&c.id),
             warning: String::new(),
@@ -297,28 +318,32 @@ pub fn rows(commands: &[ShortcutCommand], custom: &BTreeMap<String, String>) -> 
         .iter()
         .enumerate()
         .map(|(i, row)| {
-            let Some(shortcut) = &row.shortcut else { return String::new() };
-            let sharing: Vec<usize> = rows
-                .iter()
-                .enumerate()
-                .filter(|(_, r)| r.shortcut.as_ref() == Some(shortcut))
-                .map(|(j, _)| j)
-                .collect();
-            if sharing.len() > 1 {
-                let others: Vec<String> =
-                    sharing.iter().filter(|j| **j != i).map(|j| rows[*j].command.label()).collect();
-                // The first listed runs (AppCommands.Match).
-                let runs = sharing[0] == i;
-                format!(
-                    "{shortcut} is also the shortcut of {}{}",
-                    others.join(", "),
-                    if runs { " - this one runs." } else { " - that one runs, not this." }
-                )
-            } else if shortcut.is_editing_key() {
-                format!("{shortcut} copies, pastes or undoes in text boxes - it won't do that there any more.")
-            } else {
-                String::new()
+            // One line for each of its shortcuts that another command shares, or that is a text box's editing key.
+            let mut lines = Vec::new();
+            for shortcut in &row.shortcuts {
+                let sharing: Vec<usize> = rows
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| r.shortcuts.contains(shortcut))
+                    .map(|(j, _)| j)
+                    .collect();
+                if sharing.len() > 1 {
+                    let others: Vec<String> =
+                        sharing.iter().filter(|j| **j != i).map(|j| rows[*j].command.label()).collect();
+                    // The first listed runs (AppCommands.Match).
+                    let runs = sharing[0] == i;
+                    lines.push(format!(
+                        "{shortcut} is also the shortcut of {}{}",
+                        others.join(", "),
+                        if runs { " - this one runs." } else { " - that one runs, not this." }
+                    ));
+                } else if shortcut.is_editing_key() {
+                    lines.push(format!(
+                        "{shortcut} copies, pastes or undoes in text boxes - it won't do that there any more."
+                    ));
+                }
             }
+            lines.join(" ")
         })
         .collect();
     for (row, warning) in rows.iter_mut().zip(warnings) {
@@ -327,21 +352,46 @@ pub fn rows(commands: &[ShortcutCommand], custom: &BTreeMap<String, String>) -> 
     rows
 }
 
-/// `custom` with `command` given `shortcut` (None: none) - Err with why it can't be (`AppCommands.Set`).
+/// Which of a command's shortcuts a recording changes: one of them (by its place), or a new one after them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Slot {
+    At(usize),
+    New,
+}
+
+/// `custom` with `command`'s shortcut in `slot` set to `shortcut` - None takes that one away - the others kept;
+/// Err with why it can't be (`AppCommands.Set`).
 pub fn with_shortcut(
     custom: &BTreeMap<String, String>,
     command: &ShortcutCommand,
+    slot: Slot,
     shortcut: Option<&Shortcut>,
 ) -> Result<BTreeMap<String, String>, &'static str> {
     if let Some(problem) = shortcut.and_then(Shortcut::problem) {
         return Err(problem);
     }
+    let mut list = shortcuts_of(command, custom);
+    match (slot, shortcut) {
+        (Slot::At(i), Some(s)) if i < list.len() => list[i] = s.clone(),
+        (Slot::At(i), None) if i < list.len() => {
+            list.remove(i);
+        }
+        (_, Some(s)) => list.push(s.clone()),
+        (Slot::New, None) | (Slot::At(_), None) => {}
+    }
+    // The same shortcut twice is once.
+    let mut unique: Vec<Shortcut> = Vec::new();
+    for s in list {
+        if !unique.contains(&s) {
+            unique.push(s);
+        }
+    }
     let mut next = custom.clone();
-    let default = command.default_shortcut.as_deref().and_then(Shortcut::parse);
-    if shortcut.cloned() == default {
+    let default: Vec<Shortcut> = command.default_shortcut.as_deref().and_then(Shortcut::parse).into_iter().collect();
+    if unique == default {
         next.remove(&command.id);
     } else {
-        next.insert(command.id.clone(), shortcut.map(Shortcut::to_string).unwrap_or_default());
+        next.insert(command.id.clone(), write_list(&unique));
     }
     Ok(next)
 }
@@ -427,8 +477,7 @@ mod tests {
         assert_eq!(rows[1].reset_tip(), "Back to the default: Shift+F5");
         assert_eq!(rows[0].detail(), "Project");
         assert_eq!(rows[0].reset_tip(), "It has its default");
-        assert_eq!(rows[3].shortcut_text(false), "-");
-        assert_eq!(rows[3].shortcut_text(true), "Press the keys…");
+        assert_eq!(rows[3].shortcuts_text(), "-");
         assert!(rows[2].matches("application ctrl+shift"));
         assert!(!rows[2].matches("project"));
     }
@@ -446,16 +495,44 @@ mod tests {
     fn changes_keep_only_what_differs_from_the_default() {
         let c = commands();
         let empty = BTreeMap::new();
-        let next = with_shortcut(&empty, &c[0], Shortcut::parse("Ctrl+F5").as_ref()).unwrap();
+        let next = with_shortcut(&empty, &c[0], Slot::At(0), Shortcut::parse("Ctrl+F5").as_ref()).unwrap();
         assert_eq!(next.get("project.start").map(String::as_str), Some("Ctrl+F5"));
-        let back = with_shortcut(&next, &c[0], Shortcut::parse("F5").as_ref()).unwrap();
+        let back = with_shortcut(&next, &c[0], Slot::At(0), Shortcut::parse("F5").as_ref()).unwrap();
         assert!(back.is_empty(), "the default again is no change");
-        let removed = with_shortcut(&empty, &c[0], None).unwrap();
+        let removed = with_shortcut(&empty, &c[0], Slot::At(0), None).unwrap();
         assert_eq!(removed.get("project.start").map(String::as_str), Some(""));
-        assert_eq!(shortcut_of(&c[0], &removed), None);
+        assert!(shortcuts_of(&c[0], &removed).is_empty());
         assert_eq!(
-            with_shortcut(&empty, &c[0], Shortcut::parse("P").as_ref()).unwrap_err(),
+            with_shortcut(&empty, &c[0], Slot::New, Shortcut::parse("P").as_ref()).unwrap_err(),
             "Use Ctrl or Alt with it, or a function key (F1-F24) - plain keys are for typing and moving around."
         );
+    }
+
+    #[test]
+    fn a_command_can_have_several_shortcuts() {
+        let c = commands();
+        let empty = BTreeMap::new();
+        // Another next to the default, then a third; the same one again isn't added twice.
+        let two = with_shortcut(&empty, &c[0], Slot::New, Shortcut::parse("Ctrl+F5").as_ref()).unwrap();
+        assert_eq!(two.get("project.start").map(String::as_str), Some("F5, Ctrl+F5"));
+        let three = with_shortcut(&two, &c[0], Slot::New, Shortcut::parse("Ctrl+,").as_ref()).unwrap();
+        assert_eq!(three.get("project.start").map(String::as_str), Some("F5, Ctrl+F5, Ctrl+,"));
+        assert_eq!(with_shortcut(&three, &c[0], Slot::New, Shortcut::parse("F5").as_ref()).unwrap(), three);
+        assert_eq!(shortcuts_of(&c[0], &three).len(), 3, "Ctrl+, is one shortcut, the comma key");
+        // Changing one keeps the others; taking all but the default away is the default again.
+        let changed = with_shortcut(&three, &c[0], Slot::At(1), Shortcut::parse("Alt+S").as_ref()).unwrap();
+        assert_eq!(changed.get("project.start").map(String::as_str), Some("F5, Alt+S, Ctrl+,"));
+        let fewer = with_shortcut(&changed, &c[0], Slot::At(2), None).unwrap();
+        let back = with_shortcut(&fewer, &c[0], Slot::At(1), None).unwrap();
+        assert!(back.is_empty());
+        // Each shared one is warned about.
+        let shared = BTreeMap::from([("view.none".to_string(), "Shift+F5, Ctrl+V".to_string())]);
+        let rows = rows(&c, &shared);
+        assert_eq!(rows[3].shortcuts_text(), "Shift+F5, Ctrl+V");
+        assert!(rows[3].warning.contains("Shift+F5 is also the shortcut of Project: Stop project"));
+        assert!(rows[3].warning.contains("Ctrl+V copies, pastes or undoes"));
+        assert!(rows[3].matches("ctrl+v"));
+        assert_eq!(parse_list(""), Vec::<Shortcut>::new());
+        assert_eq!(write_list(&parse_list("Ctrl+J,  Ctrl+J, F2")), "Ctrl+J, F2");
     }
 }

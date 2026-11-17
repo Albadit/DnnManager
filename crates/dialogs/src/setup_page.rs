@@ -11,15 +11,13 @@
 //! (the settings, IIS's sites) it is given with [`SetupPage::set_settings`] and [`SetupPage::set_sites`]. Its draft is
 //! kept in the WPF app's `forms` state rows (passwords never), restored once when the page is made.
 
+use dnnm_ui::px;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{
-    AnyElement, App, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle, Focusable, FontWeight,
-    PathPromptOptions, SharedString, Subscription, Task, Window, div, prelude::*, px,
-};
+use gpui::{AnyElement, App, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, MouseButton, MouseDownEvent, PathPromptOptions, SharedString, Subscription, Task, Window, div, prelude::*};
 
 use dnnm_application::iis::IisSiteRuntime;
 use dnnm_application::operation::CancelToken;
@@ -33,7 +31,7 @@ use dnnm_domain::{DnnRelease, DnnReleaseList, validate_project_name};
 use dnnm_ui::dialog::{self, option, radio, select};
 use dnnm_ui::text_input::{TextChanged, TextInput};
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{self as ui, ButtonKind, Pad, Tooltip};
+use dnnm_ui::{self as ui, ButtonKind, Pad, Tip as _};
 
 use crate::host_password::{PasswordField, PasswordFieldChanged};
 
@@ -146,7 +144,8 @@ pub fn versions_for(
         .collect();
     let hint = match &list.saved_at {
         Some(saved_at) => format!(
-            "GitHub can't be reached - the releases of {source_label} as of {saved_at}. Without internet only a version marked \"kept, no download\" can be set up. GitHub is asked again when you come back to this page."
+            "GitHub can't be reached - the releases of {source_label} as of {}. Without internet only a version marked \"kept, no download\" can be set up. GitHub is asked again when you come back to this page.",
+            crate::upgrade_dnn::saved_at_shown(saved_at)
         ),
         None => format!(
             "{} releases of {source_label}, highest version first - the latest release is selected.",
@@ -424,18 +423,7 @@ pub fn database_texts(
         }
         _ => None,
     };
-    let said = if problem.is_some() {
-        String::new()
-    } else {
-        match answer {
-            DbAnswer::Asking => format!("Checking whether database {database} is free… "),
-            DbAnswer::Free => format!("Database {database} is free. "),
-            DbAnswer::Exists if !automatic => {
-                format!("Database {database} already exists - the setup asks whether to drop it or install into it. ")
-            }
-            _ => String::new(),
-        }
-    };
+    let said = database_said(fields, answer, automatic);
     let file = if fields.db_type == DbType::LocalDb {
         format!("The site's own App_Data\\{}. ", DatabaseConnection::LOCAL_DB_FILE_NAME)
     } else {
@@ -443,6 +431,23 @@ pub fn database_texts(
     };
     let hint = format!("{said}{file}{}", if edited { "For this project only." } else { "" }).trim().to_string();
     (error, tooltip, hint)
+}
+
+/// What the server answered about the database, for the hint - empty when there is nothing to say (the fields aren't
+/// right yet, or the answer is an error line). The page shows the hint as text while it says this, otherwise as a tip.
+pub fn database_said(fields: &DbFields, answer: &DbAnswer, automatic: bool) -> String {
+    if fields.problem().is_some() {
+        return String::new();
+    }
+    let database = format!("[{}] on {}", fields.name.trim(), fields.server.trim());
+    match answer {
+        DbAnswer::Asking => format!("Checking whether database {database} is free… "),
+        DbAnswer::Free => format!("Database {database} is free. "),
+        DbAnswer::Exists if !automatic => {
+            format!("Database {database} already exists - the setup asks whether to drop it or install into it. ")
+        }
+        _ => String::new(),
+    }
 }
 
 /// The account card's hint (`AccountHint`).
@@ -698,6 +703,8 @@ pub struct SetupPage {
     versions: Vec<VersionOption>,
     version: Option<usize>,
     version_hint: String,
+    /// The hint only explains the list (an info tip beside Version) - false while it says what GitHub answered.
+    version_hint_explains: bool,
     /// Which source's versions the list shows now - an answer for another source that arrives late is dropped.
     versions_for: Option<String>,
     /// GitHub's answers by source, asked again for one that failed (`DnnReleaseCatalog`).
@@ -779,6 +786,7 @@ impl SetupPage {
             versions: Vec::new(),
             version: None,
             version_hint: "The repository's DNN releases, highest version first - the latest is selected.".into(),
+            version_hint_explains: true,
             versions_for: None,
             catalog: BTreeMap::new(),
             language: 0,
@@ -1056,6 +1064,7 @@ impl SetupPage {
         self.versions = vec![VersionOption { release: None, label: "Loading versions…".into(), ready: false }];
         self.version = Some(0);
         self.version_hint = format!("Asking GitHub for the releases of {label}…");
+        self.version_hint_explains = false;
         self.update_state(cx);
         let lookups = Arc::clone(&self.lookups);
         cx.spawn(async move |this, cx| {
@@ -1080,6 +1089,8 @@ impl SetupPage {
         let chosen = self.version.and_then(|i| self.versions.get(i)).filter(|v| v.ready).map(|v| v.label.clone());
         self.versions = options;
         self.version_hint = hint;
+        // A list from GitHub just now: the hint explains it. Otherwise it says what went wrong, or that it's offline.
+        self.version_hint_explains = matches!(answer, Ok(list) if list.saved_at.is_none() && !list.releases.is_empty());
         // The draft's version - or the one chosen before the list was refreshed - when it is still there.
         let wanted = self.pending_version.take().or(chosen);
         self.version = wanted.and_then(|w| self.versions.iter().position(|v| v.label == w)).or(selected);
@@ -1414,9 +1425,20 @@ fn card_frame(gap: f32, cx: &App) -> Div {
         .bg(theme.colors.card_bg)
 }
 
-/// A card with its title, `body` 10 under it (`title_gap` when the body wants more).
-fn card(title: &'static str, title_gap: f32, body: impl IntoElement, cx: &App) -> Div {
-    card_frame(title_gap, cx).child(card_title(title, cx)).child(body)
+/// What a title explains, shown in an info tip beside it: the tip's element id and its text.
+type Tip = Option<(&'static str, SharedString)>;
+
+/// `title` with an info tip beside it when there is one.
+fn tipped(title: Div, tip: Tip, cx: &App) -> Div {
+    match tip {
+        Some((id, text)) => ui::with_tip(title, id, text, cx),
+        None => title,
+    }
+}
+
+/// A card with its title (and the tip beside it), `body` 10 under it.
+fn card(title: &'static str, tip: Tip, body: impl IntoElement, cx: &App) -> Div {
+    card_frame(10.0, cx).child(tipped(card_title(title, cx), tip, cx)).child(body)
 }
 
 /// `CardTitle`: heading size, semibold.
@@ -1432,12 +1454,16 @@ fn stack(gap: f32) -> Div {
 
 /// A field: its label (`FieldLabel`, muted) 4 above its box.
 fn field(label: impl Into<SharedString>, control: impl IntoElement, cx: &App) -> Div {
-    stack(4.0).child(field_label(label, cx)).child(control)
+    stack(4.0).child(field_label(label, None, cx)).child(control)
 }
 
-/// `FieldLabel`: muted.
-fn field_label(text: impl Into<SharedString>, cx: &App) -> Div {
-    div().w_full().text_color(Theme::get(cx).colors.text_muted).child(text.into())
+/// `FieldLabel`: muted - with the info tip beside it when there is one.
+fn field_label(text: impl Into<SharedString>, tip: Tip, cx: &App) -> Div {
+    let label = div().text_color(Theme::get(cx).colors.text_muted).child(text.into());
+    match tip {
+        Some(_) => tipped(label, tip, cx),
+        None => label.w_full(),
+    }
 }
 
 /// `Hint`: muted, caption size.
@@ -1483,9 +1509,10 @@ impl SetupPage {
             .into_iter()
             .enumerate()
             .map(|(i, (label, chosen))| {
+                // On the press: the list is an overlay outside the box, and a press outside the box closes the list
+                // before a click could arrive.
                 option((id, i), label, chosen, cx)
-                    .on_click(cx.listener(move |page, _: &ClickEvent, _, cx| {
-                        // Not the list's own click too, which would open it again.
+                    .on_mouse_down(MouseButton::Left, cx.listener(move |page, _: &MouseDownEvent, _, cx| {
                         cx.stop_propagation();
                         page.open = None;
                         page.choose(list, i, cx);
@@ -1592,44 +1619,51 @@ impl Render for SetupPage {
             .text_size(theme.text.body)
             .text_color(c.text_primary)
             .font_family(theme.font.clone());
-        // The page's title and its text 4 apart, the cards 16 under them and 14 apart.
-        let header = stack(4.0)
-            .child(div().w_full().text_size(theme.text.display).font_weight(FontWeight::SEMIBOLD).child("New project"))
-            .child(div().w_full().text_color(c.text_muted).child(
-                "Creates a project from a fresh DNN download - installed for you, so the first visit shows your new site - or from a .zip of an existing site (with its .bacpac / .bak), with its IIS website, hostname and database.",
-            ));
+        // The page's title with what it does in the tip beside it, the cards 16 under it and 14 apart.
+        let header = ui::with_tip_sized(
+            div().text_size(theme.text.display).font_weight(FontWeight::SEMIBOLD).child("New project"),
+            theme.text.display,
+            "new-project-tip",
+            "Creates a project from a fresh DNN download - installed for you, so the first visit shows your new site - or from a .zip of an existing site (with its .bacpac / .bak), with its IIS website, hostname and database.",
+            cx,
+        );
         let mut cards = stack(14.0);
 
-        // Project.
+        // Project: the name's rules in the tip beside its label, why it can't be used under its box.
         cards = cards.child(card(
             "Project",
-            10.0,
+            None,
             stack(4.0)
-                .child(field_label("Project name", cx))
+                .child(field_label(
+                    "Project name",
+                    Some(("project-name-tip", name_hint(importing, &container_server(&self.settings)).into())),
+                    cx,
+                ))
                 .child(self.text_field(Field::Name, window, cx))
-                .children(error_line(&name_error, cx))
-                .child(hint(name_hint(importing, &container_server(&self.settings)), cx)),
+                .children(error_line(&name_error, cx)),
             cx,
         ));
 
-        // IIS - right under the name it follows, for a new site and an imported one alike.
+        // IIS - right under the name it follows, for a new site and an imported one alike. Where the site answers in
+        // the tip beside the title; what's wrong with the host name or port in red under the fields.
+        let iis_tip = (!iis_bad).then(|| ("iis-tip", SharedString::from(iis_hint.clone())));
         cards = cards.child(card(
             "IIS",
-            10.0,
+            iis_tip,
             stack(4.0)
                 .child(two_columns(
                     field("Host name", self.text_field(Field::HostName, window, cx), cx),
                     field("Port", self.text_field(Field::Port, window, cx), cx),
                     Some(120.0),
                 ))
-                .child(hint(iis_hint, cx).when(iis_bad, |d| d.text_color(c.error_text))),
+                .when(iis_bad, |d| d.child(hint(iis_hint, cx).text_color(c.error_text))),
             cx,
         ));
 
         // Start from: the radio buttons keep 4 above and under them.
         cards = cards.child(card(
             "Start from",
-            10.0,
+            None,
             stack(0.0)
                 .child(radio("from-scratch", !importing, "A new site - download a DNN release", cx).on_click(
                     cx.listener(|page, _: &ClickEvent, _, cx| {
@@ -1647,7 +1681,7 @@ impl Render for SetupPage {
             cx,
         ));
 
-        // Import: each field with its hint, 8 apart.
+        // Import: the fields 8 apart, what each takes in the tip beside its label.
         if importing {
             let mut import = stack(8.0);
             // Only when a project has a backup to start from.
@@ -1676,42 +1710,56 @@ impl Render for SetupPage {
                 let backups_enabled = !backups.is_empty();
                 import = import.child(
                     stack(4.0)
-                        .child(field_label("From a project backup", cx))
+                        .child(field_label(
+                            "From a project backup",
+                            Some((
+                                "project-backup-tip",
+                                "A project and one of its backups (Documents\\DnnManager\\backups) - or choose the files anywhere on this PC below.".into(),
+                            )),
+                            cx,
+                        ))
                         .child(two_columns(
                             self.list(List::BackupProject, "backup-project", project_value, true, projects, cx),
                             self.list(List::ProjectBackup, "project-backup", backup_value, backups_enabled, backups, cx),
                             None,
-                        ))
-                        .child(hint(
-                            "A project and one of its backups (Documents\\DnnManager\\backups) - or choose the files anywhere on this PC below.",
-                            cx,
                         )),
                 );
             }
             let browse = |id: &'static str, zip: bool, cx: &mut Context<Self>| {
                 ui::button(id, "Browse…", ButtonKind::Secondary, true, cx)
-                    .tooltip(Tooltip::text("Browse"))
+                    .tip("Browse")
                     .on_click(cx.listener(move |page, _: &ClickEvent, _, cx| page.browse(zip, cx)))
             };
             import = import
                 .child(
                     stack(4.0)
-                        .child(field_label("Site .zip", cx))
+                        .child(field_label(
+                            "Site .zip",
+                            Some((
+                                "site-zip-tip",
+                                "The site's files - web.config at the top of the zip or in one folder inside it."
+                                    .into(),
+                            )),
+                            cx,
+                        ))
                         .child(
                             div()
                                 .flex()
                                 .gap(px(8.0))
                                 .child(self.text_field(Field::Zip, window, cx).flex_1())
                                 .child(browse("browse-zip", true, cx)),
-                        )
-                        .child(hint(
-                            "The site's files - web.config at the top of the zip or in one folder inside it.",
-                            cx,
-                        )),
+                        ),
                 )
                 .child(
                     stack(4.0)
-                        .child(field_label("Database .bacpac", cx))
+                        .child(field_label(
+                            "Database .bacpac",
+                            Some((
+                                "database-backup-tip",
+                                "The site's database - restored into the project's database. A .bak works too.".into(),
+                            )),
+                            cx,
+                        ))
                         .child(
                             div()
                                 .flex()
@@ -1719,13 +1767,9 @@ impl Render for SetupPage {
                                 .child(self.text_field(Field::Backup, window, cx).flex_1())
                                 .child(browse("browse-backup", false, cx)),
                         )
-                        .child(hint(
-                            "The site's database - restored into the project's database. A .bak works too.",
-                            cx,
-                        ))
                         .children(error_line(&import_error, cx)),
                 );
-            cards = cards.child(card("Import", 10.0, import, cx));
+            cards = cards.child(card("Import", None, import, cx));
         }
 
         if fresh {
@@ -1739,42 +1783,53 @@ impl Render for SetupPage {
             let version_value =
                 self.version.and_then(|i| self.versions.get(i)).map(|v| v.label.clone()).unwrap_or_default();
             let versions_enabled = self.versions.first().is_some_and(|v| v.ready);
+            // The list explained in the tip beside Version; what GitHub answered (asking, offline, failed) under it.
+            let version_tip =
+                self.version_hint_explains.then(|| ("version-tip", SharedString::from(self.version_hint.clone())));
+            let version_status = (!self.version_hint_explains).then(|| hint(self.version_hint.clone(), cx));
             cards = cards.child(card(
                 "DNN package",
-                10.0,
+                None,
                 stack(4.0)
                     .child(two_columns(
                         field("Repository", self.list(List::Source, "source", source_value, true, sources, cx), cx),
-                        field(
-                            "Version",
-                            self.list(List::Version, "version", version_value, versions_enabled, versions, cx),
+                        stack(4.0).child(field_label("Version", version_tip, cx)).child(self.list(
+                            List::Version,
+                            "version",
+                            version_value,
+                            versions_enabled,
+                            versions,
                             cx,
-                        ),
+                        )),
                         None,
                     ))
-                    .child(hint(self.version_hint.clone(), cx)),
+                    .children(version_status),
                 cx,
             ));
 
-            // DNN installation: each choice's text 6 under its title, in line with the title's text; the choices 12
-            // apart (the radio buttons keep 4 above and under them).
-            let install_choice =
-                |id: &'static str, chosen: bool, title: &'static str, text: &'static str, cx: &mut Context<Self>| {
-                    stack(2.0)
-                        .child(radio(id, chosen, title, cx).font_weight(FontWeight::SEMIBOLD).on_click(cx.listener(
-                            move |page, _: &ClickEvent, _, cx| {
-                                page.automatic = id == "automatic-install";
-                                page.update_state(cx);
-                            },
-                        )))
-                        .child(div().w_full().pad(px(0.0), px(24.0)).child(hint(text, cx)))
-                };
+            // DNN installation: each choice with what it does in the tip right after its text; the choices stacked as
+            // Start from's (the radio buttons keep 4 above and under them).
+            let install_choice = |id: &'static str,
+                                  tip_id: &'static str,
+                                  chosen: bool,
+                                  title: &'static str,
+                                  text: &'static str,
+                                  cx: &mut Context<Self>| {
+                radio(id, chosen, title, cx)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(ui::info_tip(tip_id, text, cx))
+                    .on_click(cx.listener(move |page, _: &ClickEvent, _, cx| {
+                        page.automatic = id == "automatic-install";
+                        page.update_state(cx);
+                    }))
+            };
             cards = cards.child(card(
                 "DNN installation",
-                10.0,
-                stack(8.0)
+                None,
+                stack(0.0)
                     .child(install_choice(
                         "automatic-install",
+                        "automatic-install-tip",
                         automatic,
                         "Automatic setup (recommended)",
                         "DNN Manager installs DNN with the account and website below - the first visit shows your new site, not DNN's installation wizard.",
@@ -1782,6 +1837,7 @@ impl Render for SetupPage {
                     ))
                     .child(install_choice(
                         "manual-install",
+                        "manual-install-tip",
                         !automatic,
                         "Manual DNN setup",
                         "DNN's own installation wizard opens on the first visit, for you to fill in.",
@@ -1799,7 +1855,7 @@ impl Render for SetupPage {
                 TEMPLATES.iter().enumerate().map(|(i, t)| (t.to_string(), i == self.template)).collect();
             let generate = ui::link("generate-password", "Generate", cx)
                 .text_size(theme.text.caption)
-                .tooltip(Tooltip::text("Generate password"))
+                .tip("Generate password")
                 .on_click(cx.listener(|page, _: &ClickEvent, window, cx| page.generate_password(window, cx)));
             let language =
                 self.list(List::Language, "language", language_name(LANGUAGES[self.language]), true, languages, cx);
@@ -1829,11 +1885,8 @@ impl Render for SetupPage {
                 .child(two_columns(field("Language", language, cx), field("Site template", template, cx), None));
             cards = cards.child(card(
                 "DNN account and website",
-                10.0,
-                stack(4.0)
-                    .child(account_fields)
-                    .children(error_line(&account_error, cx))
-                    .child(hint(account_hint(LANGUAGES[self.language]), cx)),
+                Some(("account-tip", account_hint(LANGUAGES[self.language]).into())),
+                stack(4.0).child(account_fields).children(error_line(&account_error, cx)),
                 cx,
             ));
         }
@@ -1846,19 +1899,27 @@ impl Render for SetupPage {
                 radio(id, db_type == t, text, cx)
                     .on_click(cx.listener(move |page, _: &ClickEvent, _, cx| page.choose_db_type(t, cx)))
             };
-            let title = div().w_full().flex().justify_between().items_start().child(card_title("Database", cx)).when(
-                self.db_edited || self.db_name_edited,
-                |d| {
+            // What the server answered stays under the fields; the hint that only explains (the LocalDB file, "for this
+            // project only") is the tip beside the title.
+            let db_status = !database_said(&fields, &self.db_answer, automatic).is_empty();
+            let db_tip =
+                (!db_status && !db_hint.is_empty()).then(|| ("database-tip", SharedString::from(db_hint.clone())));
+            let title = div()
+                .w_full()
+                .flex()
+                .justify_between()
+                .items_start()
+                .child(tipped(card_title("Database", cx), db_tip, cx))
+                .when(self.db_edited || self.db_name_edited, |d| {
                     d.child(
                         ui::link("use-the-settings", "Use the settings", cx)
                             .text_size(theme.text.caption)
-                            .tooltip(Tooltip::text("Use the settings"))
+                            .tip("Use the settings")
                             .on_click(cx.listener(|page, _: &ClickEvent, _, cx| page.use_the_settings(cx))),
                     )
-                },
-            );
+                });
             // The connection type: its label, the radio buttons 8 under it (they keep 4 above and under them).
-            let connection_type = stack(4.0).child(field_label("Connection type", cx)).child(
+            let connection_type = stack(4.0).child(field_label("Connection type", None, cx)).child(
                 div()
                     .w_full()
                     .flex()
@@ -1904,11 +1965,11 @@ impl Render for SetupPage {
             let mut notes = Vec::new();
             if let Some(line) = error_line(&db_error, cx) {
                 notes.push(match db_tooltip {
-                    Some(tip) => div().id("database-error").tooltip(Tooltip::text(tip)).child(line).into_any_element(),
+                    Some(tip) => div().id("database-error").tip(tip).child(line).into_any_element(),
                     None => line.into_any_element(),
                 });
             }
-            if !db_hint.is_empty() {
+            if db_status {
                 notes.push(hint(db_hint, cx).into_any_element());
             }
             // The error and the hint 4 under the fields.
@@ -1927,9 +1988,9 @@ impl Render for SetupPage {
                 .gap(px(12.0))
                 .child(
                     ui::button("run", run_label, ButtonKind::Primary, can_run, cx)
-                        .tooltip(Tooltip::text(
+                        .tip(
                             "Create the website with these choices - the panel at the bottom shows each step, Cancel undoes it",
-                        ))
+                        )
                         .when(can_run, |b| b.on_click(cx.listener(|page, _: &ClickEvent, _, cx| page.run(cx)))),
                 )
                 .when(!still_needed.is_empty(), |d| d.child(div().max_w(px(520.0)).child(hint(still_needed, cx)))),

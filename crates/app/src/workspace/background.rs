@@ -21,6 +21,24 @@ fn hwnd(window: &Window) -> Option<isize> {
     }
 }
 
+/// Windows' Move pointer for the sash corner (`dnnm_system::move_pointer`): its subclass on this window, at the start.
+pub(super) fn install_move_pointer(window: &Window) {
+    #[cfg(windows)]
+    if let Some(hwnd) = hwnd(window) {
+        dnnm_system::move_pointer::install(hwnd);
+    }
+    #[cfg(not(windows))]
+    let _ = window;
+}
+
+/// The Move pointer on (over the sash corner, or while it is dragged) or off.
+pub(super) fn move_pointer(on: bool) {
+    #[cfg(windows)]
+    dnnm_system::move_pointer::set(on);
+    #[cfg(not(windows))]
+    let _ = on;
+}
+
 impl Workspace {
     /// The icon there while the setting is on - from the start, and as soon as it is saved.
     pub(crate) fn follow_keep_running(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -70,7 +88,7 @@ impl Workspace {
     /// Quits - from the icon's menu or the palette; the window comes back first when there is a question to ask.
     pub(crate) fn quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let unsaved_password =
-            matches!(&self.settings, Some(Modal::Settings(page)) if page.read(cx).has_unsaved_password());
+            matches!(&self.settings, Some(Modal::Settings(page, _)) if page.read(cx).has_unsaved_password());
         if self.store.read(cx).is_busy() || unsaved_password {
             self.show_from_background(window, cx);
         }
@@ -94,7 +112,7 @@ impl Workspace {
         self.quitting = false;
         // Unsaved settings are kept for the next start - all but a password, so only that is asked about.
         let unsaved_password =
-            matches!(&self.settings, Some(Modal::Settings(page)) if page.read(cx).has_unsaved_password());
+            matches!(&self.settings, Some(Modal::Settings(page, _)) if page.read(cx).has_unsaved_password());
         if unsaved_password && !self.password_may_go {
             self.ask(
                 "You changed a password in the settings and didn't save it. The other unsaved settings are kept for the next start, but passwords aren't. Quit anyway?",

@@ -615,7 +615,7 @@ fn run_step<S: UpgradeSystem>(
     let app_pool = c.site.pool.as_ref().map(|p| p.name.clone()).unwrap_or_else(|| req.site_name.clone());
 
     // ─── Backup, and what the site was like ───
-    op.report.step(&format!("Step {}: {step} - backing up DNN {}", c.number, step.from.short()));
+    op.report.step(&format!("{step} - backing up DNN {}", step.from.short()));
     let folder = backups::new_folder(&system.backup_directory(&req.site_name), &req.site_name, system.now());
     let backup = StepRestore {
         site_name: req.site_name.clone(),
@@ -698,7 +698,7 @@ fn change_and_check<S: UpgradeSystem>(
     } else {
         " (its upgrade package)"
     };
-    op.report.step(&format!("Step {n}: putting in DNN {to}'s files{how}"));
+    op.report.step(&format!("Putting in DNN {to}'s files{how}"));
     if let Err(e) = stop_and_free(deps.iis.as_ref(), &req.site_name, &req.directory, op.report) {
         return Ok(fail(deps, c, stage, &format!("Could not stop the site for the new files: {e}"), &[], op));
     }
@@ -716,7 +716,7 @@ fn change_and_check<S: UpgradeSystem>(
     }
 
     // ─── DNN's upgrade ───
-    op.report.step(&format!("Step {n}: running DNN's upgrade to {to}"));
+    op.report.step(&format!("Running DNN's upgrade to {to}"));
     let output = stage.folder.join(format!("dnn-upgrade-output-{to}.html"));
     let upgraded = system.upgrade(c.address, &output, op.report, &op.cancel);
     if upgraded.as_ref().is_err_and(|e| e == CANCELLED) {
@@ -728,7 +728,7 @@ fn change_and_check<S: UpgradeSystem>(
     }
 
     // ─── Restart - DNN leaves its lock behind, held open by its worker process, then the checks ───
-    op.report.step(&format!("Step {n}: restarting the site"));
+    op.report.step("Restarting the site");
     if let Err(e) = stop_and_free(deps.iis.as_ref(), &req.site_name, &req.directory, op.report) {
         return Ok(fail(deps, c, stage, &e, &[], op));
     }
@@ -741,7 +741,7 @@ fn change_and_check<S: UpgradeSystem>(
         Err(e) => return Ok(fail(deps, c, stage, &e, &[], op)),
     }
 
-    op.report.step(&format!("Step {n}: checking DNN {to}"));
+    op.report.step(&format!("Checking DNN {to}"));
     let found = system.validate(c.address, before, step.to, stage.since, &stage.app_pool, op.report, &op.cancel)?;
     let blocking: Vec<&Finding> = found.iter().filter(|f| f.severity == Severity::Blocking).collect();
     if !blocking.is_empty() {
@@ -1458,8 +1458,8 @@ mod tests {
             "a site that ran is left running"
         );
         assert_eq!(setup.records.find("shop").unwrap().dnn_version.as_deref(), Some("10.3.3"));
-        assert!(lines.contains(&"## Step 1: 09.13.09 → 10.02.05 - backing up DNN 9.13.9".to_string()));
-        assert!(lines.contains(&"## Step 2: putting in DNN 10.3.3's files (its upgrade package)".to_string()));
+        assert!(lines.contains(&"## 09.13.09 → 10.02.05 - backing up DNN 9.13.9".to_string()));
+        assert!(lines.contains(&"## Putting in DNN 10.3.3's files (its upgrade package)".to_string()));
         assert!(lines.contains(&"Current: DNN 09.13.09".to_string()));
         assert!(lines.contains(&"ok The plan holds: 2 step(s), nothing blocking.".to_string()));
         assert!(

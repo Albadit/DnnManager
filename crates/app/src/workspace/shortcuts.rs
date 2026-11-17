@@ -7,7 +7,7 @@ use gpui::{App, KeyBinding, NoAction};
 
 use dnnm_application::settings::Settings;
 use dnnm_dialogs::setting_rules::custom_shortcuts;
-use dnnm_dialogs::settings_keyboard::Shortcut;
+use dnnm_dialogs::settings_keyboard::{Shortcut, parse_list};
 
 /// Runs a command of the palette by its id - what a changed shortcut is bound to.
 #[derive(Clone, PartialEq, Debug, serde::Deserialize, schemars::JsonSchema, gpui::Action)]
@@ -21,7 +21,7 @@ fn default_context(id: &str) -> Option<&'static str> {
     matches!(id, "project.start" | "project.stop" | "project.restart").then_some("ProjectsTable")
 }
 
-/// The shortcut a command has now: the user's, else its default; None without one.
+/// The shortcuts a command has now, as one line ("Ctrl+J, Ctrl+Shift+J"): the user's, else its default; None without.
 pub(crate) fn shortcut_text(id: &str, settings: &Settings) -> Option<String> {
     let custom = custom_shortcuts(settings);
     match custom.get(id) {
@@ -46,10 +46,11 @@ fn bind_changes(custom: &BTreeMap<String, String>, cx: &mut App) {
         if let Some(default) = super::commands::default_shortcut(id).and_then(Shortcut::parse) {
             bindings.push(KeyBinding::new(&default.to_gpui(), NoAction, default_context(id)));
         }
-        if let Some(shortcut) = Shortcut::parse(text)
-            && taken.insert(shortcut.to_gpui())
-        {
-            bindings.push(KeyBinding::new(&shortcut.to_gpui(), RunCommand { id: id.clone() }, None));
+        // Each of its shortcuts runs it - the first command to take a key keeps it.
+        for shortcut in parse_list(text) {
+            if taken.insert(shortcut.to_gpui()) {
+                bindings.push(KeyBinding::new(&shortcut.to_gpui(), RunCommand { id: id.clone() }, None));
+            }
         }
     }
     cx.bind_keys(bindings);

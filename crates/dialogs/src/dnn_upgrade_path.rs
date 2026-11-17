@@ -9,10 +9,8 @@
 //! error dialog and a toast. Import… and Export… ask for the file through GPUI's own Windows file dialogs (the app's
 //! OS dialog): they have no file-type filter, so the title says it is a `.json` and the export suggests its name.
 
-use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent,
-    PathPromptOptions, SharedString, Subscription, Window, div, prelude::*, px,
-};
+use dnnm_ui::px;
+use gpui::{AnyElement, App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, PathPromptOptions, SharedString, Subscription, Window, div, prelude::*};
 
 use dnnm_application::settings::Settings;
 use dnnm_dnn::upgrades::{
@@ -24,7 +22,7 @@ use dnnm_dnn::version::Version;
 use dnnm_ui::dialog::{self, DialogEvent};
 use dnnm_ui::text_input::{TextChanged, TextInput};
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{self as ui, Pad, Tooltip, icons};
+use dnnm_ui::{self as ui, Pad, Tip, icons};
 
 /// "No new minimum".
 const NO_NEW_MINIMUM: i32 = 0;
@@ -672,7 +670,7 @@ impl DnnUpgradePathDialog {
                 this.open = if this.open == Some((at, which)) { None } else { Some((at, which)) };
                 cx.notify();
             }))
-            .when_some(tip.clone(), |d, tip| d.tooltip(Tooltip::text(tip)))
+            .when_some(tip.clone(), |d, tip| d.tip(tip))
             .child(dialog::select(SharedString::from(format!("{key}-{id}-box")), shown, open, options, cx))
             .into_any_element()
     }
@@ -694,16 +692,16 @@ impl DnnUpgradePathDialog {
                 .pad(px(0.0), px(6.0))
                 .font_family("Cascadia Mono")
                 .child(DnnUpgradeStep::name(&listed))
-                .tooltip(Tooltip::text(if is_manual(listed) {
+                .tip(if is_manual(listed) {
                     "On DNN's path. Done by hand: GitHub has no packages of it."
                 } else {
                     "On DNN's path, as DNN Manager knows it"
-                }))
+                })
                 .into_any_element(),
             None => div()
                 .id(SharedString::from(format!("version-{id}")))
                 .font_family("Cascadia Mono")
-                .tooltip(Tooltip::text("A version you added - three numbers, e.g. 10.4.2"))
+                .tip("A version you added - three numbers, e.g. 10.4.2")
                 .child(dialog::text_field(&row.version, window, cx))
                 .into_any_element(),
         };
@@ -735,7 +733,7 @@ impl DnnUpgradePathDialog {
                                 true,
                                 cx,
                             )
-                            .tooltip(Tooltip::text(remove_tip))
+                            .tip(remove_tip)
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 if let Some(at) = this.ids.iter().position(|x| *x == id) {
                                     this.remove(at, cx);
@@ -769,18 +767,20 @@ impl Render for DnnUpgradePathDialog {
         };
 
         let stack = |gap: f32| div().w_full().flex().flex_col().gap(px(gap));
-        let source = stack(4.0).child(div().w_full().child(INTRO)).child(div().child(
-            ui::link("upgrade-path-source", "Open DNN's suggested upgrade path", cx).on_click(cx.listener(
-                |_, _: &ClickEvent, _, cx| {
-                    if let Err(e) = dnnm_infrastructure::shell::open_url(SOURCE) {
-                        cx.emit(PathDialogEvent::Error(e));
-                    }
-                },
-            )),
+        let source = div().child(ui::link("upgrade-path-source", "Open DNN's suggested upgrade path", cx).on_click(
+            cx.listener(|_, _: &ClickEvent, _, cx| {
+                if let Err(e) = dnnm_infrastructure::shell::open_url(SOURCE) {
+                    cx.emit(PathDialogEvent::Error(e));
+                }
+            }),
         ));
-        let heading = stack(4.0)
-            .child(dialog::label("The path", cx).font_weight(gpui::FontWeight::SEMIBOLD))
-            .child(dialog::hint(known_text(), cx));
+        // What DNN Manager knows of the path in the tip beside its heading.
+        let heading = ui::with_tip(
+            dialog::label("The path", cx).font_weight(gpui::FontWeight::SEMIBOLD),
+            "path-tip",
+            known_text(),
+            cx,
+        );
         // The labels 4 above the rows, the rows 6 apart.
         let table = stack(4.0)
             .child(
@@ -812,9 +812,9 @@ impl Render for DnnUpgradePathDialog {
                     )
                     .child(
                         ui::link("reset-path", "Reset to DNN Manager's path", cx)
-                            .tooltip(Tooltip::text(
+                            .tip(
                                 "The path as DNN Manager came with it - every change made here undone",
-                            ))
+                            )
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.fill(&path_with(&[]), cx))),
                     ),
             );
@@ -840,13 +840,13 @@ impl Render for DnnUpgradePathDialog {
                     .child(
                         ui::button("path-import", "Import…", ui::ButtonKind::Secondary, true, cx)
                             .min_w(px(80.0))
-                            .tooltip(Tooltip::text("Fill the path from a file exported before - Save keeps it"))
+                            .tip("Fill the path from a file exported before - Save keeps it")
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.import(cx))),
                     )
                     .child(
                         ui::button("path-export", "Export…", ui::ButtonKind::Secondary, can_export, cx)
                             .min_w(px(80.0))
-                            .tooltip(Tooltip::text("Save the path as it is here to a file"))
+                            .tip("Save the path as it is here to a file")
                             .when(can_export, |b| {
                                 b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.export(cx)))
                             }),
@@ -859,13 +859,13 @@ impl Render for DnnUpgradePathDialog {
                     .child(
                         ui::button("dialog-ok", "Save", ui::ButtonKind::Primary, can_save, cx)
                             .min_w(px(80.0))
-                            .tooltip(Tooltip::text("Save (Enter)"))
+                            .tip("Save (Enter)")
                             .when(can_save, |b| b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.save(cx)))),
                     )
                     .child(
                         ui::button("dialog-cancel", "Cancel", ui::ButtonKind::Secondary, true, cx)
                             .min_w(px(80.0))
-                            .tooltip(Tooltip::text("Cancel (Esc)"))
+                            .tip("Cancel (Esc)")
                             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(DialogEvent::Cancelled))),
                     ),
             );
@@ -877,7 +877,7 @@ impl Render for DnnUpgradePathDialog {
                     this.save(cx);
                 }
             }))
-            .child(dialog::frame("Edit DNN upgrade path", 860.0, body, buttons, cx))
+            .child(dialog::frame_with_tip("Edit DNN upgrade path", Some(INTRO), 860.0, body, buttons, cx))
     }
 }
 

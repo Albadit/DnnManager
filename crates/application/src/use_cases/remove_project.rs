@@ -387,7 +387,7 @@ fn is_own_database(project: &Project, database: &str, server: &str, op: &mut Ope
 
 fn remove_one(deps: &RemoveDeps, project: &Project, op: &mut Operation) -> Result<(), String> {
     let name = project.name;
-    op.report.step("Step 1: Remove IIS site & pool");
+    op.report.step("Remove IIS site & pool");
     if let Err(e) = deps.iis.remove_site(name) {
         op.report.fail(&format!(
             "Could not remove the IIS site/pool: {e}. Its worker process may still be holding the project files, so the \
@@ -403,7 +403,7 @@ fn remove_one(deps: &RemoveDeps, project: &Project, op: &mut Operation) -> Resul
 
     // The app pool's identity got a Windows user profile at C:\Users\<project>; the worker exited during
     // remove_site, so the profile is unloaded and removable.
-    op.report.step("Step 2: Remove app pool user profile");
+    op.report.step("Remove app pool user profile");
     match deps.iis.remove_app_pool_profile(name) {
         Ok(()) => op.report.success(&format!(r"Removed app pool profile (C:\Users\{name}) if present.")),
         Err(e) => op.report.info(&format!("App pool profile cleanup skipped: {e}")),
@@ -412,7 +412,7 @@ fn remove_one(deps: &RemoveDeps, project: &Project, op: &mut Operation) -> Resul
 
     // The database goes with the project - unless another site uses it too. One that couldn't be dropped is named in
     // the result: the project's folder (and web.config, which says which database it was) goes all the same.
-    op.report.step("Step 3: Drop project database");
+    op.report.step("Drop project database");
     let leftover = drop_database(deps, project, op)?;
 
     // What DNN Manager remembered about it (how DNN was installed) goes with the site.
@@ -428,7 +428,7 @@ fn remove_one(deps: &RemoveDeps, project: &Project, op: &mut Operation) -> Resul
         return done(leftover);
     }
 
-    op.report.step("Step 4: Delete project directory");
+    op.report.step("Delete project directory");
     op.undo.cannot_undo(format!("whatever was already deleted from {}.", project.directory.display()));
     delete_project_folder(deps, project.directory, op)?;
 
@@ -436,7 +436,7 @@ fn remove_one(deps: &RemoveDeps, project: &Project, op: &mut Operation) -> Resul
     done(leftover)
 }
 
-/// Step 3: the database, where it is - or why it is kept. Ok(Some(what is left)) when a drop failed; Err only for a
+/// The third stage: the database, where it is - or why it is kept. Ok(Some(what is left)) when a drop failed; Err only for a
 /// cancel.
 fn drop_database(deps: &RemoveDeps, project: &Project, op: &mut Operation) -> Result<Option<String>, String> {
     let databases = deps.databases;
@@ -821,14 +821,14 @@ mod tests {
         assert_eq!(
             r.lines,
             vec![
-                "## Step 1: Remove IIS site & pool",
+                "## Remove IIS site & pool",
                 "ok IIS site and app pool 'shop' removed (if they existed).",
-                "## Step 2: Remove app pool user profile",
+                "## Remove app pool user profile",
                 r"ok Removed app pool profile (C:\Users\shop) if present.",
-                "## Step 3: Drop project database",
+                "## Drop project database",
                 "ok Database [shop] dropped (if it existed).",
                 "ok Its login dnn_shop dropped.",
-                "## Step 4: Delete project directory",
+                "## Delete project directory",
                 r"ok Deleted C:\DNN\shop",
                 "## Removal complete",
             ]

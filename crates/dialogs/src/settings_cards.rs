@@ -8,18 +8,17 @@
 //! it got no answer for as not enabled - so a feature shows Missing where the WPF app says Unknown, and the summary
 //! never says the features couldn't be read.
 
+use dnnm_ui::px;
 use std::collections::BTreeMap;
 
-use gpui::{
-    AnyElement, App, ClickEvent, ClipboardItem, Context, Div, FontWeight, Hsla, SharedString, div, prelude::*, px,
-};
+use gpui::{AnyElement, App, ClickEvent, ClipboardItem, Context, Div, FontWeight, Hsla, SharedString, div, prelude::*};
 
 use dnnm_application::settings::Settings;
 use dnnm_sql::{CheckOutcome, DatabaseCheckReport, DockerStatus};
 use dnnm_system::prereq::IisFeature;
 use dnnm_system::secrets::names;
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{self as ui, ButtonKind, Pad, Tooltip, icons};
+use dnnm_ui::{self as ui, ButtonKind, Pad, Tip, icons};
 
 use crate::setting_rules::{iis_features, value};
 use crate::settings_form::{CONTAINER, LOCAL_DB_FILE, container_user, database_on_server, docker_options, uses_login};
@@ -300,9 +299,8 @@ impl SettingsPage {
                     div()
                         .flex()
                         .items_start()
-                        .child(
-                            div().w(px(20.0)).flex_none().pad(px(2.0), px(0.0)).child(ui::icon(glyph, 12.0, color, cx)),
-                        )
+                        .gap(px(icons::LABEL_GAP))
+                        .child(ui::line_icon(glyph, icons::SIZE, color, cx))
                         .child(
                             div()
                                 .flex_1()
@@ -341,7 +339,7 @@ impl SettingsPage {
                             cx,
                         )
                         .min_w(px(80.0))
-                        .tooltip(Tooltip::text("Test"))
+                        .tip("Test")
                         .when(test_enabled, |b| {
                             b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.test_sql(cx)))
                         }),
@@ -525,7 +523,7 @@ impl SettingsPage {
                                 on,
                                 cx,
                             )
-                            .tooltip(Tooltip::text(label))
+                            .tip(label)
                             .when(on, |b| {
                                 b.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                     if i == 0 {
@@ -558,7 +556,7 @@ impl SettingsPage {
                         cx,
                     )
                     .min_w(px(80.0))
-                    .tooltip(Tooltip::text("Test"))
+                    .tip("Test")
                     .when(test_enabled, |b| {
                         b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.test_docker(cx)))
                     }),
@@ -586,7 +584,7 @@ impl SettingsPage {
                     .gap(px(8.0))
                     .child(
                         ui::button("setup-compose", "Set up docker-compose", ButtonKind::Primary, setup, cx)
-                            .tooltip(Tooltip::text(setup_tip))
+                            .tip(setup_tip)
                             .when(setup, |b| {
                                 b.on_click(
                                     cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(SettingsEvent::SetUpContainer)),
@@ -596,7 +594,7 @@ impl SettingsPage {
                     .child({
                         let label = if yaml_shown { "Hide docker-compose.yml" } else { "Show docker-compose.yml" };
                         ui::button("show-yaml", label, ButtonKind::Secondary, true, cx)
-                            .tooltip(Tooltip::text(label))
+                            .tip(label)
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_yaml(cx)))
                     })
                     .when_some(state.setup_hint.clone(), |d, text| d.child(hint(text, &theme))),
@@ -630,7 +628,7 @@ impl SettingsPage {
                                     .id("copy-yaml")
                                     .flex()
                                     .items_center()
-                                    .gap(px(6.0))
+                                    .gap(px(icons::LABEL_GAP))
                                     .pad(px(3.0), px(10.0))
                                     .rounded(theme.metrics.control_radius)
                                     .border_1()
@@ -638,9 +636,9 @@ impl SettingsPage {
                                     .bg(c.card_bg)
                                     .cursor_pointer()
                                     .hover(move |s| s.bg(c.hover_bg))
-                                    .tooltip(Tooltip::text("Copy"))
+                                    .tip("Copy")
                                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.copy_yaml(cx)))
-                                    .child(ui::icon("\u{E8C8}", 12.0, c.text_primary, cx))
+                                    .child(ui::icon("\u{E8C8}", icons::SIZE, c.text_primary, cx))
                                     .child(if copied { "Copied" } else { "Copy" }),
                             ),
                         ),
@@ -730,7 +728,7 @@ impl SettingsPage {
                     .child(
                         ui::button("iis-edit", "Edit…", ButtonKind::Secondary, true, cx)
                             .min_w(px(80.0))
-                            .tooltip(Tooltip::text("Add or remove Windows features"))
+                            .tip("Add or remove Windows features")
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                 cx.emit(SettingsEvent::EditIisFeatures(iis_features(&this.saved)))
                             })),
@@ -744,7 +742,7 @@ impl SettingsPage {
                             cx,
                         )
                         .min_w(px(80.0))
-                        .tooltip(Tooltip::text("Test"))
+                        .tip("Test")
                         .when(!testing, |b| b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.test_iis(cx)))),
                     ),
             )
@@ -752,7 +750,7 @@ impl SettingsPage {
                 div().flex().flex_col().gap(px(10.0)).child(table).child(
                     div().flex().child(
                         ui::button("iis-setup", "Set up IIS", ButtonKind::Primary, true, cx)
-                            .tooltip(Tooltip::text("Set up IIS"))
+                            .tip("Set up IIS")
                             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(SettingsEvent::SetUpIis))),
                     ),
                 ),

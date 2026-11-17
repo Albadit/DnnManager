@@ -14,16 +14,13 @@
 //! text box; Browse… opens Windows' folder picker without starting in the typed folder; About's Docker line waits for
 //! Docker's own time limit (30 s) rather than 10 s.
 
+use dnnm_ui::px;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{
-    AnyElement, App, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyDownEvent,
-    MouseButton, MouseDownEvent, PathPromptOptions, SharedString, Stateful, Subscription, Window, anchored, deferred,
-    div, prelude::*, px,
-};
+use gpui::{AnyElement, App, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent, PathPromptOptions, SharedString, Stateful, Subscription, Window, anchored, deferred, div, prelude::*};
 
 use dnnm_application::settings::Settings;
 use dnnm_sql::{DatabaseCheckOptions, DatabaseCheckReport, DatabaseConnection, DockerOptions, DockerStatus};
@@ -32,14 +29,14 @@ use dnnm_system::secrets::{self, names};
 use dnnm_ui::dialog;
 use dnnm_ui::text_input::{TextChanged, TextInput};
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{self as ui, ButtonKind, Pad, Tooltip, icons};
+use dnnm_ui::{self as ui, ButtonKind, Pad, Tip, icons};
 
 use crate::about::{self, Health, MachineFacts, UpdateStatus};
 use crate::password_input::{PasswordChanged, PasswordInput};
 use crate::setting_rules::{self as rules, Category};
 use crate::settings_cards::{DockerCardState, IisCardState, SqlCardState};
 use crate::settings_form::{CONTAINER, Field, Form, LOCAL_DB_FILE, SQL_SERVER, Secret, uses_login};
-use crate::settings_keyboard::{self as keyboard, Recorded, ShortcutCommand, ShortcutRow};
+use crate::settings_keyboard::{self as keyboard, Recorded, ShortcutCommand, ShortcutRow, Slot};
 
 // ─── What the page needs from the app ────────────────────────────────────────
 
@@ -236,6 +233,8 @@ pub struct SettingsPage {
     release_inputs: Vec<Entity<TextInput>>,
     release_subscriptions: Vec<Subscription>,
     open_select: Option<&'static str>,
+    /// The open select's list's scroll position (its scroll bar).
+    select_scroll: gpui::ScrollHandle,
     error: Option<String>,
     env_warning: Option<String>,
     // Start at sign-in: whether the task is there (None until read), the box, and what is said under it.
@@ -249,7 +248,8 @@ pub struct SettingsPage {
     // Keyboard shortcuts.
     commands: Vec<ShortcutCommand>,
     shortcut_search: Entity<TextInput>,
-    recording: Option<String>,
+    /// The command whose shortcut is being recorded, and which of its shortcuts (or a new one).
+    recording: Option<(String, Slot)>,
     interceptor: Option<Subscription>,
     shortcut_status: Option<String>,
     // Help and About.
@@ -352,12 +352,13 @@ impl SettingsPage {
             release_inputs: Vec::new(),
             release_subscriptions: Vec::new(),
             open_select: None,
+            select_scroll: gpui::ScrollHandle::new(),
             error: None,
             env_warning,
             starts_at_sign_in: None,
             start_at_sign_in: false,
             sign_in_enabled: false,
-            sign_in_hint: "As Administrator, without a prompt at every sign-in (a scheduled task).".into(),
+            sign_in_hint: SIGN_IN_TASK.into(),
             sign_in_tip: None,
             shells: None,
             fonts,
@@ -728,8 +729,7 @@ impl SettingsPage {
                     Ok(()) => {
                         page.starts_at_sign_in = Some(enable);
                         if enable {
-                            page.sign_in_hint =
-                                "As Administrator, without a prompt at every sign-in (a scheduled task).".into();
+                            page.sign_in_hint = SIGN_IN_TASK.into();
                         }
                     }
                     Err(e) => {
@@ -843,8 +843,8 @@ impl SettingsPage {
     }
 
     /// Every key goes to the shortcut being recorded now - not to the window's shortcuts.
-    fn start_recording(&mut self, id: String, cx: &mut Context<Self>) {
-        self.recording = Some(id);
+    fn start_recording(&mut self, id: String, slot: Slot, cx: &mut Context<Self>) {
+        self.recording = Some((id, slot));
         self.shortcut_status = None;
         let page = cx.entity().downgrade();
         self.interceptor = Some(cx.intercept_keystrokes(move |event, _, cx| {
@@ -863,7 +863,7 @@ impl SettingsPage {
 
     /// A key pressed while recording; true when it was taken.
     fn record(&mut self, keystroke: &gpui::Keystroke, cx: &mut Context<Self>) -> bool {
-        let Some(id) = self.recording.clone() else { return false };
+        let Some((id, slot)) = self.recording.clone() else { return false };
         let Some(command) = self.commands.iter().find(|c| c.id == id).cloned() else {
             self.stop_recording();
             return false;
@@ -886,7 +886,7 @@ impl SettingsPage {
             }
         };
         self.stop_recording();
-        match keyboard::with_shortcut(&rules::custom_shortcuts(&self.saved), &command, chosen.as_ref()) {
+        match keyboard::with_shortcut(&rules::custom_shortcuts(&self.saved), &command, slot, chosen.as_ref()) {
             Ok(next) => self.save_shortcuts(next, cx),
             Err(problem) => self.shortcut_status = Some(problem.into()),
         }
@@ -990,6 +990,9 @@ fn decrypt(settings: &Settings) -> Result<String, String> {
 
 // ─── Drawing ──────────────────────────────────────────────────────────────
 
+/// Start at sign-in's usual explanation (a tip beside the box); any other text under it is a problem.
+const SIGN_IN_TASK: &str = "As Administrator, without a prompt at every sign-in (a scheduled task).";
+
 /// A category's title. No spacing of its own: each page's flex column puts the gap under it.
 pub(crate) fn category_title(text: &'static str, theme: &Theme) -> Div {
     div().text_size(theme.text.title).font_weight(FontWeight::SEMIBOLD).child(text)
@@ -1005,11 +1008,6 @@ pub(crate) fn hint(text: impl Into<SharedString>, theme: &Theme) -> Div {
     div().text_size(theme.text.hint).text_color(theme.colors.text_muted).child(text.into())
 }
 
-/// A hint under a check box, indented to its text.
-fn indented_hint(text: impl Into<SharedString>, theme: &Theme) -> Div {
-    indented(hint(text, theme))
-}
-
 /// `child` indented 22 px - under a check box's text.
 fn indented(child: impl IntoElement) -> Div {
     div().pad(px(0.0), px(22.0)).child(child)
@@ -1018,6 +1016,12 @@ fn indented(child: impl IntoElement) -> Div {
 /// A group: its label, then `body` `gap` under it.
 fn group(text: impl Into<SharedString>, gap: f32, theme: &Theme) -> Div {
     div().flex().flex_col().gap(px(gap)).child(group_label(text, theme))
+}
+
+/// A group whose label has its explanation as a tip beside it.
+fn group_tip(text: &'static str, id: &'static str, tip: impl Into<SharedString>, gap: f32, cx: &App) -> Div {
+    let theme = Theme::get(cx);
+    column(gap).child(ui::with_tip(group_label(text, theme), id, tip, cx))
 }
 
 /// A flex column with `gap` between its children.
@@ -1091,7 +1095,7 @@ impl SettingsPage {
             .border_1()
             .border_color(if focused { c.focus_border } else { c.field_border })
             .bg(c.input_bg)
-            .child(ui::icon(icons::SEARCH, 12.0, c.text_muted, cx))
+            .child(ui::icon(icons::SEARCH, icons::SIZE, c.text_muted, cx))
             .child(div().flex_1().child(input.clone()))
     }
 
@@ -1138,8 +1142,8 @@ impl SettingsPage {
                     cx.notify();
                 }),
             )
-            .child(div().overflow_hidden().whitespace_nowrap().text_ellipsis().child(label))
-            .child(ui::icon(icons::CHEVRON_DOWN, 10.0, c.text_primary, cx));
+            .child(ui::one_line(label))
+            .child(ui::icon(icons::CHEVRON_DOWN, icons::SIZE_SMALL, c.text_primary, cx));
         let mut root = div().relative().when_some(width, |d, w| d.w(px(w))).when(width.is_none(), |d| d.w_full());
         root = root.child(trigger);
         if open {
@@ -1175,7 +1179,10 @@ impl SettingsPage {
                     .absolute()
                     .top(theme.metrics.control_height + px(2.0))
                     .left_0()
-                    .child(deferred(anchored().snap_to_window().child(menu)).with_priority(1)),
+                    .child(
+                        deferred(anchored().snap_to_window().child(ui::with_scrollbar(menu, &self.select_scroll, cx)))
+                            .with_priority(2),
+                    ),
             );
         }
         root.into_any_element()
@@ -1234,20 +1241,15 @@ impl Render for SettingsPage {
                     .id(SharedString::from(format!("settings-category-{}", category.tag())))
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
-                    .p(px(8.0))
+                    .gap(px(icons::LABEL_GAP))
+                    .pad(px(8.0), px(14.0))
                     .rounded(theme.metrics.control_radius)
                     .cursor_pointer()
                     .text_color(c.text_primary)
                     .when(selected, |d| d.bg(c.selection_bg))
                     .when(!selected, |d| d.hover(move |s| s.bg(c.hover_bg)))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.select_category(category, cx)))
-                    .child(div().flex().justify_center().w(px(30.0)).child(ui::icon(
-                        glyph(category),
-                        16.0,
-                        c.text_muted,
-                        cx,
-                    )))
+                    .child(ui::icon(glyph(category), icons::SIZE_NAV, c.text_muted, cx))
                     .child(div().min_w_0().child(category.label())),
             );
         }
@@ -1297,9 +1299,9 @@ impl Render for SettingsPage {
                         div()
                             .flex()
                             .items_start()
-                            .gap(px(6.0))
+                            .gap(px(icons::LABEL_GAP))
                             .text_color(c.error_text)
-                            .child(ui::icon(icons::ERROR, 12.0, c.error_text, cx))
+                            .child(ui::line_icon(icons::ERROR, icons::SIZE, c.error_text, cx))
                             .child(error),
                     )
                 })
@@ -1347,7 +1349,7 @@ impl Render for SettingsPage {
                     )
                     .child(
                         ui::icon_button("settings-close", icons::CLOSE, c.link_fg, true, cx)
-                            .tooltip(Tooltip::text("Close (Esc)"))
+                            .tip("Close (Esc)")
                             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(SettingsEvent::Close))),
                     ),
             )
@@ -1372,20 +1374,20 @@ impl Render for SettingsPage {
                             .when(dirty, |d| {
                                 d.child(
                                     ui::button("settings-discard", "Discard changes", ButtonKind::Secondary, true, cx)
-                                        .tooltip(Tooltip::text("Discard changes"))
+                                        .tip("Discard changes")
                                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.load(cx))),
                                 )
                             })
                             .child(
                                 ui::button("settings-close-button", "Close", ButtonKind::Secondary, true, cx)
                                     .min_w(px(84.0))
-                                    .tooltip(Tooltip::text("Close (Esc)"))
+                                    .tip("Close (Esc)")
                                     .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(SettingsEvent::Close))),
                             )
                             .child(
                                 ui::button("settings-save", "Save", ButtonKind::Primary, dirty, cx)
                                     .min_w(px(84.0))
-                                    .tooltip(Tooltip::text("Save"))
+                                    .tip("Save")
                                     .when(dirty, |b| {
                                         b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.save(cx)))
                                     }),
@@ -1463,90 +1465,104 @@ impl SettingsPage {
                         this.edited(cx);
                     }))
                 });
+        // The usual explanation is a tip beside the box; a problem (not installed for all users, set up for another
+        // copy) stays under it, to be seen.
+        let explained = self.sign_in_hint == SIGN_IN_TASK;
+        let sign_in = if explained {
+            ui::with_tip(sign_in, "start-at-sign-in-tip", SIGN_IN_TASK, cx)
+        } else {
+            div().flex().child(sign_in)
+        };
         let mut sign_in_hint = div()
             .id("start-at-sign-in-hint")
             .text_size(theme.text.hint)
             .text_color(theme.colors.text_muted)
             .child(self.sign_in_hint.clone());
         if let Some(tip) = self.sign_in_tip.clone() {
-            sign_in_hint = sign_in_hint.tooltip(Tooltip::text(tip));
+            sign_in_hint = sign_in_hint.tip(tip);
         }
 
         let startup = column(8.0)
-            .child(column(2.0).child(sign_in).child(indented(sign_in_hint)))
-            .child(self.check_box(
-                "keep-running",
-                keep_running,
-                "Keep DNN Manager running when you close the window",
-                |f, on| f.keep_running = on,
+            .child(column(2.0).child(sign_in).when(!explained, |d| d.child(indented(sign_in_hint))))
+            .child(ui::with_tip(
+                self.check_box(
+                    "keep-running",
+                    keep_running,
+                    "Keep DNN Manager running when you close the window",
+                    |f, on| f.keep_running = on,
+                    cx,
+                ),
+                "keep-running-tip",
+                "Closing hides it by the clock; operations and keep warm go on. Right-click its icon to quit.",
                 cx,
             ))
-            .child(
-                column(2.0)
-                    .child(self.check_box(
-                        "check-updates",
-                        check_updates,
-                        "Look for a newer DNN Manager when it starts",
-                        |f, on| f.check_updates = on,
-                        cx,
-                    ))
-                    .child(indented_hint(
-                        "Asks GitHub once at start. Off: only when you check for updates yourself.",
-                        &theme,
-                    ))
-                    .child(indented_hint(
-                        "Closing hides it by the clock; operations and keep warm go on. Right-click its icon to quit.",
-                        &theme,
-                    )),
-            );
+            .child(ui::with_tip(
+                self.check_box(
+                    "check-updates",
+                    check_updates,
+                    "Look for a newer DNN Manager when it starts",
+                    |f, on| f.check_updates = on,
+                    cx,
+                ),
+                "check-updates-tip",
+                "Asks GitHub once at start. Off: only when you check for updates yourself.",
+                cx,
+            ));
 
-        let scale = group("Scale and font size", 8.0, &theme).child(
-            column(4.0)
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(12.0))
-                        .child(column(4.0).child(dialog::label("UI scale", cx)).child(self.combo(
-                            "ui-scale",
-                            Some(160.0),
-                            &ui_scale,
-                            ui_scales,
-                            |p, v, cx| {
-                                p.form.ui_scale = v.parse().unwrap_or(100);
-                                p.edited(cx);
-                            },
-                            cx,
-                        )))
-                        .child(column(4.0).child(dialog::label("Font size", cx)).child(self.combo(
-                            "app-font-size",
-                            Some(160.0),
-                            &font_size,
-                            font_sizes,
-                            |p, v, cx| {
-                                p.form.font_size = v.parse().unwrap_or(13.0);
-                                p.edited(cx);
-                            },
-                            cx,
-                        ))),
-                )
-                .child(hint(
-                    "UI scale zooms everything; font size changes only the text. Applies when you save.",
-                    &theme,
-                )),
+        let scale = group_tip(
+            "Scale and font size",
+            "scale-tip",
+            "UI scale zooms everything; font size changes only the text. Applies when you save.",
+            8.0,
+            cx,
+        )
+        .child(
+            div()
+                .flex()
+                .gap(px(12.0))
+                .child(column(4.0).child(dialog::label("UI scale", cx)).child(self.combo(
+                    "ui-scale",
+                    Some(160.0),
+                    &ui_scale,
+                    ui_scales,
+                    |p, v, cx| {
+                        p.form.ui_scale = v.parse().unwrap_or(100);
+                        p.edited(cx);
+                    },
+                    cx,
+                )))
+                .child(column(4.0).child(dialog::label("Font size", cx)).child(self.combo(
+                    "app-font-size",
+                    Some(160.0),
+                    &font_size,
+                    font_sizes,
+                    |p, v, cx| {
+                        p.form.font_size = v.parse().unwrap_or(13.0);
+                        p.edited(cx);
+                    },
+                    cx,
+                ))),
         );
 
-        let animation = group("Animations", 8.0, &theme).child(
-            column(2.0)
-                .child(self.check_box("animations", animations, "Play animations", |f, on| f.animations = on, cx))
-                .child(indented_hint("Slides and fades. Also off while Windows' animation effects are off.", &theme)),
-        );
+        let animation = group("Animations", 8.0, &theme).child(ui::with_tip(
+            self.check_box("animations", animations, "Play animations", |f, on| f.animations = on, cx),
+            "animations-tip",
+            "Slides and fades. Also off while Windows' animation effects are off.",
+            cx,
+        ));
 
-        let terminal = group("Terminal", 8.0, &theme).child(
+        let terminal = group_tip(
+            "Terminal",
+            "terminal-tip",
+            "Terminals run as you. The arrow beside + opens an Administrator one.",
+            8.0,
+            cx,
+        )
+        .child(
             column(14.0)
-                .child(hint("Terminals run as you. The arrow beside + opens an Administrator one.", &theme))
                 .child(
                     column(4.0)
-                        .child(dialog::label("Default shell", cx))
+                        .child(ui::with_tip(dialog::label("Default shell", cx), "shell-tip", "What + opens.", cx))
                         .child(self.combo(
                             "default-shell",
                             Some(240.0),
@@ -1557,16 +1573,21 @@ impl SettingsPage {
                                 p.edited(cx);
                             },
                             cx,
-                        ))
-                        .child(hint("What + opens.", &theme)),
+                        )),
                 )
                 .child(
-                    column(4.0)
+                    div()
+                        .flex()
+                        .gap(px(12.0))
                         .child(
-                            div()
-                                .flex()
-                                .gap(px(12.0))
-                                .child(column(4.0).child(dialog::label("Font family", cx)).child(self.combo(
+                            column(4.0)
+                                .child(ui::with_tip(
+                                    dialog::label("Font family", cx),
+                                    "terminal-font-tip",
+                                    "Also the font of the Output and Logs tabs.",
+                                    cx,
+                                ))
+                                .child(self.combo(
                                     "terminal-font",
                                     Some(240.0),
                                     &terminal_font,
@@ -1576,20 +1597,19 @@ impl SettingsPage {
                                         p.edited(cx);
                                     },
                                     cx,
-                                )))
-                                .child(column(4.0).child(dialog::label("Font size", cx)).child(self.combo(
-                                    "terminal-font-size",
-                                    Some(90.0),
-                                    &terminal_size,
-                                    terminal_sizes,
-                                    |p, v, cx| {
-                                        p.form.terminal_font_size = v.parse().unwrap_or(13);
-                                        p.edited(cx);
-                                    },
-                                    cx,
-                                ))),
+                                )),
                         )
-                        .child(hint("Also the font of the Output and Logs tabs.", &theme)),
+                        .child(column(4.0).child(dialog::label("Font size", cx)).child(self.combo(
+                            "terminal-font-size",
+                            Some(90.0),
+                            &terminal_size,
+                            terminal_sizes,
+                            |p, v, cx| {
+                                p.form.terminal_font_size = v.parse().unwrap_or(13);
+                                p.edited(cx);
+                            },
+                            cx,
+                        ))),
                 ),
         );
 
@@ -1630,22 +1650,19 @@ impl SettingsPage {
                 }))
             };
 
-        let folder = group("Projects folder", 8.0, &theme).child(
-            column(4.0)
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .child(div().flex_1().child(self.text_box(Field::BaseDirectory, window, cx)))
-                        .child(
-                            ui::button("browse-projects-folder", "Browse…", ButtonKind::Secondary, true, cx)
-                                .tooltip(Tooltip::text("Browse"))
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.browse_projects_folder(cx))),
-                        ),
-                )
-                .child(hint("Every project is a folder in here.", &theme)),
-        );
+        let folder = group_tip("Projects folder", "projects-folder-tip", "Every project is a folder in here.", 8.0, cx)
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(div().flex_1().child(self.text_box(Field::BaseDirectory, window, cx)))
+                    .child(
+                        ui::button("browse-projects-folder", "Browse…", ButtonKind::Secondary, true, cx)
+                            .tip("Browse")
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.browse_projects_folder(cx))),
+                    ),
+            );
 
         let address = group("Site address", 8.0, &theme).child(
             column(4.0)
@@ -1709,69 +1726,74 @@ impl SettingsPage {
                         cx,
                     ))),
             );
-        let defaults = group("DNN defaults", 8.0, &theme).child(
-            column(4.0)
-                .child(hint(
-                    "What a new project starts with - New project lets you change each of them for that project.",
-                    &theme,
-                ))
+        let defaults = group_tip(
+            "DNN defaults",
+            "dnn-defaults-tip",
+            format!(
+                "What a new project starts with - New project lets you change each of them for that project.\n{}",
+                f.defaults_hint()
+            ),
+            8.0,
+            cx,
+        )
+        .child(
+            column(16.0)
                 .child(
-                    column(16.0)
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .child(install_radio(
-                                    "install-automatic",
-                                    automatic,
-                                    "Automatic setup (recommended) - DNN Manager installs DNN, the first visit shows the new site",
-                                    true,
-                                    cx,
-                                ))
-                                .child(install_radio(
-                                    "install-manual",
-                                    !automatic,
-                                    "Manual DNN setup - DNN's installation wizard on the first visit",
-                                    false,
-                                    cx,
-                                )),
-                        )
-                        .child(fields),
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(install_radio(
+                            "install-automatic",
+                            automatic,
+                            "Automatic setup (recommended) - DNN Manager installs DNN, the first visit shows the new site",
+                            true,
+                            cx,
+                        ))
+                        .child(install_radio(
+                            "install-manual",
+                            !automatic,
+                            "Manual DNN setup - DNN's installation wizard on the first visit",
+                            false,
+                            cx,
+                        )),
                 )
-                .child(hint(f.defaults_hint(), &theme)),
+                .child(fields),
         );
 
-        let keep_warm = group("Keep warm", 8.0, &theme).child(
-            column(14.0)
-                .child(hint(
-                    "Sites with the flame on are requested before IIS idles them, so their next page opens at once.",
-                    &theme,
-                ))
+        let keep_warm = group_tip(
+            "Keep warm",
+            "keep-warm-tip",
+            "Sites with the flame on are requested before IIS idles them, so their next page opens at once.",
+            8.0,
+            cx,
+        )
+        .child(
+            div()
+                .flex()
+                .gap(px(12.0))
                 .child(
                     column(4.0)
-                        .child(
-                            div()
-                                .flex()
-                                .gap(px(12.0))
-                                .child(column(4.0).w(px(180.0)).child(dialog::label("Interval", cx)).child(self.combo(
-                                    "keep-warm-interval",
-                                    Some(180.0),
-                                    &f.ping_minutes.to_string(),
-                                    intervals,
-                                    |p, v, cx| {
-                                        p.form.ping_minutes = v.parse().unwrap_or(5);
-                                        p.edited(cx);
-                                    },
-                                    cx,
-                                )))
-                                .child(self.labelled("Keep-alive page", Field::PingPath, window, cx))
-                                .child(self.labelled("Warm-up page", Field::WarmUpPath, window, cx)),
-                        )
-                        .child(hint(
+                        .w(px(180.0))
+                        .child(ui::with_tip(
+                            dialog::label("Interval", cx),
+                            "keep-warm-interval-tip",
                             "Keep-alive is requested every interval; warm-up after a recycle or an IIS start.",
-                            &theme,
+                            cx,
+                        ))
+                        .child(self.combo(
+                            "keep-warm-interval",
+                            Some(180.0),
+                            &f.ping_minutes.to_string(),
+                            intervals,
+                            |p, v, cx| {
+                                p.form.ping_minutes = v.parse().unwrap_or(5);
+                                p.edited(cx);
+                            },
+                            cx,
                         )),
-                ),
+                )
+                .child(self.labelled("Keep-alive page", Field::PingPath, window, cx))
+                .child(self.labelled("Warm-up page", Field::WarmUpPath, window, cx)),
         );
 
         let backups = group("Backups", 8.0, &theme).child(
@@ -1791,7 +1813,7 @@ impl SettingsPage {
                 .child(
                     div()
                         .id("backups-hint")
-                        .tooltip(Tooltip::text(backups_tip))
+                        .tip(backups_tip)
                         .child(hint("Older ones are deleted at each start - they can't be brought back.", &theme)),
                 ),
         );
@@ -1810,34 +1832,39 @@ impl SettingsPage {
         for input in &self.release_inputs {
             repositories = repositories.child(dialog::text_field(input, window, cx));
         }
-        let repositories = group("Repositories", 8.0, &theme).child(column(4.0).child(repositories).child(hint(
+        let repositories = group_tip(
+            "Repositories",
+            "repositories-tip",
             "GitHub releases API URLs, one per line - the repositories New project offers, with their versions.",
-            &theme,
-        )));
-        let install = group("Install packages", 8.0, &theme).child(
-            column(2.0)
-                .child(self.check_box(
-                    "keep-dnn-packages",
-                    keep,
-                    "Keep downloaded DNN install packages for next time",
-                    |f, on| f.keep_packages = on,
-                    cx,
-                ))
-                .child(
-                    div()
-                        .id("keep-dnn-packages-hint")
-                        .tooltip(Tooltip::text(packages))
-                        .child(indented_hint("Installs the same version again without downloading it.", &theme)),
-                ),
+            8.0,
+            cx,
+        )
+        .child(repositories);
+        let install = group("Install packages", 8.0, &theme).child(ui::with_tip(
+            self.check_box(
+                "keep-dnn-packages",
+                keep,
+                "Keep downloaded DNN install packages for next time",
+                |f, on| f.keep_packages = on,
+                cx,
+            ),
+            "keep-dnn-packages-tip",
+            format!("Installs the same version again without downloading it.\n{packages}"),
+            cx,
+        ));
+        let upgrade_path = group_tip(
+            "Upgrade path",
+            "upgrade-path-tip",
+            rules::upgrade_path_hint(&rules::upgrade_stops(&self.saved)),
+            8.0,
+            cx,
+        )
+        .child(
+            div().flex().child(
+                ui::button("edit-upgrade-path", "Edit upgrade path…", ButtonKind::Secondary, true, cx)
+                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(SettingsEvent::EditUpgradePath))),
+            ),
         );
-        let upgrade_path = group("Upgrade path", 8.0, &theme)
-            .child(hint(rules::upgrade_path_hint(&rules::upgrade_stops(&self.saved)), &theme))
-            .child(
-                div().flex().child(
-                    ui::button("edit-upgrade-path", "Edit upgrade path…", ButtonKind::Secondary, true, cx)
-                        .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(SettingsEvent::EditUpgradePath))),
-                ),
-            );
         column(28.0)
             .child(category_title("DNN releases", &theme))
             .child(column(22.0).child(repositories).child(install).child(upgrade_path))
@@ -1852,7 +1879,6 @@ impl SettingsPage {
         text: &'static str,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let theme = Theme::get(cx).clone();
         let chosen = self.form.server_type == server_type;
         div()
             .id(id)
@@ -1868,13 +1894,12 @@ impl SettingsPage {
                 }
             }))
             .child(radio_dot(chosen, cx))
-            .child(
-                column(2.0)
-                    .flex_1()
-                    .min_w_0()
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
-                    .child(hint(text, &theme)),
-            )
+            .child(ui::with_tip(
+                div().font_weight(FontWeight::SEMIBOLD).child(title),
+                SharedString::from(format!("{id}-tip")),
+                text,
+                cx,
+            ))
     }
 
     fn render_sql(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
@@ -1890,78 +1915,83 @@ impl SettingsPage {
             }))
         };
 
-        let container_fields = group("Local SQL container", 18.0, &theme).child(
-            column(4.0)
+        let container_fields = group_tip(
+            "Local SQL container",
+            "local-sql-container-tip",
+            "Set up docker-compose makes the container with this port and sa password.",
+            18.0,
+            cx,
+        )
+        .child(
+            column(10.0)
                 .child(
-                    column(10.0)
-                        .child(
-                            div()
-                                .flex()
-                                .gap(px(12.0))
-                                .child(self.labelled("Server host", Field::ContainerHost, window, cx))
-                                .child(self.labelled("Port", Field::ContainerPort, window, cx)),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .gap(px(12.0))
-                                .child(self.labelled("Username", Field::ContainerUser, window, cx))
-                                .child(self.labelled_password("Password", Secret::Sa, window, cx)),
-                        ),
+                    div()
+                        .flex()
+                        .gap(px(12.0))
+                        .child(self.labelled("Server host", Field::ContainerHost, window, cx))
+                        .child(self.labelled("Port", Field::ContainerPort, window, cx)),
                 )
-                .child(hint("Set up docker-compose makes the container with this port and sa password.", &theme)),
+                .child(
+                    div()
+                        .flex()
+                        .gap(px(12.0))
+                        .child(self.labelled("Username", Field::ContainerUser, window, cx))
+                        .child(self.labelled_password("Password", Secret::Sa, window, cx)),
+                ),
         );
 
         let server_fields = group(if sql_server { "SQL Server" } else { "LocalDB" }, 8.0, &theme).child(
             column(10.0)
                 .child(
                     column(4.0)
-                        .child(dialog::label(if sql_server { "Server" } else { "LocalDB instance" }, cx))
-                        .child(self.text_box(Field::ServerName, window, cx))
-                        .child(hint(f.server_hint(), &theme)),
+                        .child(ui::with_tip(
+                            dialog::label(if sql_server { "Server" } else { "LocalDB instance" }, cx),
+                            "server-name-tip",
+                            f.server_hint(),
+                            cx,
+                        ))
+                        .child(self.text_box(Field::ServerName, window, cx)),
                 )
                 .when(sql_server, |d| {
                     d.child(
-                        column(4.0).child(dialog::label("Authentication", cx)).child(
-                            column(if f.sql_auth { 10.0 } else { 4.0 })
-                                .child(
-                                    div()
-                                        .flex()
-                                        .gap(px(20.0))
-                                        .child(auth_radio(
-                                            "windows-auth",
-                                            !f.sql_auth,
-                                            "Windows authentication",
-                                            false,
-                                            cx,
-                                        ))
-                                        .child(auth_radio(
-                                            "sql-auth",
-                                            f.sql_auth,
-                                            "SQL Server authentication",
-                                            true,
-                                            cx,
-                                        )),
-                                )
-                                .child(
-                                    column(4.0)
-                                        .when(f.sql_auth, |d| {
-                                            d.child(
-                                                div()
-                                                    .flex()
-                                                    .gap(px(12.0))
-                                                    .child(self.labelled("Username", Field::ServerUser, window, cx))
-                                                    .child(self.labelled_password(
-                                                        "Password",
-                                                        Secret::Server,
-                                                        window,
-                                                        cx,
-                                                    )),
-                                            )
-                                        })
-                                        .child(hint(f.auth_hint(), &theme)),
-                                ),
-                        ),
+                        column(4.0)
+                            .child(ui::with_tip(
+                                dialog::label("Authentication", cx),
+                                "authentication-tip",
+                                f.auth_hint(),
+                                cx,
+                            ))
+                            .child(
+                                column(10.0)
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .gap(px(20.0))
+                                            .child(auth_radio(
+                                                "windows-auth",
+                                                !f.sql_auth,
+                                                "Windows authentication",
+                                                false,
+                                                cx,
+                                            ))
+                                            .child(auth_radio(
+                                                "sql-auth",
+                                                f.sql_auth,
+                                                "SQL Server authentication",
+                                                true,
+                                                cx,
+                                            )),
+                                    )
+                                    .when(f.sql_auth, |d| {
+                                        d.child(
+                                            div()
+                                                .flex()
+                                                .gap(px(12.0))
+                                                .child(self.labelled("Username", Field::ServerUser, window, cx))
+                                                .child(self.labelled_password("Password", Secret::Server, window, cx)),
+                                        )
+                                    }),
+                            ),
                     )
                 }),
         );
@@ -1991,30 +2021,32 @@ impl SettingsPage {
                 )),
         );
 
-        let ssms_group = group("SQL Server Management Studio", 8.0, &theme).child(
-            column(2.0)
-                .child(self.check_box(
-                    "ssms-remember-password",
-                    ssms,
-                    "Remember the password in SQL Server Management Studio",
-                    |f, on| f.ssms_remember = on,
-                    cx,
-                ))
-                .child(indented_hint(
-                    "When a project's right-click menu signs SSMS in, tick its 'Remember Password' - SSMS then keeps the password and connects straight away next time.",
-                    &theme,
-                )),
-        );
+        let ssms_group = group("SQL Server Management Studio", 8.0, &theme).child(ui::with_tip(
+            self.check_box(
+                "ssms-remember-password",
+                ssms,
+                "Remember the password in SQL Server Management Studio",
+                |f, on| f.ssms_remember = on,
+                cx,
+            ),
+            "ssms-remember-password-tip",
+            "When a project's right-click menu signs SSMS in, tick its 'Remember Password' - SSMS then keeps the password and connects straight away next time.",
+            cx,
+        ));
 
         let test = group("Test and set up", 8.0, &theme)
             .when(self.dirty, |d| d.child(hint("These use the saved settings - save your changes first.", &theme)))
             .child(self.render_sql_card(cx));
 
-        column(6.0)
-            .child(category_title("Database server", &theme))
+        column(20.0)
+            .child(ui::with_tip(
+                category_title("Database server", &theme),
+                "database-server-tip",
+                "Where new projects get their database. Existing projects keep theirs.",
+                cx,
+            ))
             .child(
                 column(22.0)
-                    .child(hint("Where new projects get their database. Existing projects keep theirs.", &theme))
                     .child(connection)
                     .when(container, |d| d.child(container_fields))
                     .when(!container, |d| d.child(server_fields))
@@ -2046,32 +2078,27 @@ impl SettingsPage {
         let test = group("Test and set up", 8.0, &theme)
             .when(self.dirty, |d| d.child(hint("These use the saved settings - save your changes first.", &theme)))
             .child(self.render_docker_card(cx));
-        column(6.0)
-            .child(category_title("Docker container", &theme))
-            .child(
-                column(22.0)
-                    .child(hint(
-                        "The SQL Server container. After a change, save it and apply it with Set up docker-compose below.",
-                        &theme,
-                    ))
-                    .child(container)
-                    .child(test),
-            )
+        column(20.0)
+            .child(ui::with_tip(
+                category_title("Docker container", &theme),
+                "docker-container-tip",
+                "The SQL Server container. After a change, save it and apply it with Set up docker-compose below.",
+                cx,
+            ))
+            .child(column(22.0).child(container).child(test))
             .into_any_element()
     }
 
     fn render_iis(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::get(cx).clone();
-        column(6.0)
-            .child(category_title("IIS", &theme))
-            .child(
-                column(16.0)
-                    .child(hint(
-                        "The Windows features DNN Manager needs. These buttons act at once, without Save.",
-                        &theme,
-                    ))
-                    .child(self.render_iis_card(cx)),
-            )
+        column(20.0)
+            .child(ui::with_tip(
+                category_title("IIS", &theme),
+                "iis-tip",
+                "The Windows features DNN Manager needs. These buttons act at once, without Save.",
+                cx,
+            ))
+            .child(self.render_iis_card(cx))
             .into_any_element()
     }
 
@@ -2086,9 +2113,56 @@ impl SettingsPage {
 
         let mut list = div().flex().flex_col();
         for (i, row) in shown.iter().enumerate() {
-            let recording = self.recording.as_deref() == Some(row.command.id.as_str());
-            let id = row.command.id.clone();
+            let recording_slot =
+                self.recording.as_ref().filter(|(id, _)| *id == row.command.id).map(|(_, slot)| *slot);
             let reset_id = row.command.id.clone();
+            // Each shortcut a chip (a click records a new one in its place); "+" records another after them. While
+            // recording, the chip being changed - or the new one - says so.
+            let chip = |key: String, text: String, slot: Slot, tip: &'static str, cx: &mut Context<Self>| {
+                let id = row.command.id.clone();
+                let lit = recording_slot == Some(slot);
+                div()
+                    .id(SharedString::from(key))
+                    .flex()
+                    .items_center()
+                    .h(px(22.0))
+                    .pad(px(0.0), px(8.0))
+                    .rounded(theme.metrics.control_radius)
+                    .border_1()
+                    .border_color(if lit { c.focus_border } else { c.card_border })
+                    .bg(c.card_bg)
+                    .text_size(theme.text.caption)
+                    .whitespace_nowrap()
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(c.hover_bg))
+                    .tip(tip)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.start_recording(id.clone(), slot, cx);
+                        }),
+                    )
+                    .child(if lit { "Press the keys…".to_string() } else { text })
+            };
+            let mut keys = div().flex().flex_wrap().items_center().gap(px(4.0));
+            for (n, shortcut) in row.shortcuts.iter().enumerate() {
+                let slot = Slot::At(n);
+                keys = keys.child(chip(
+                    format!("shortcut-{i}-{n}"),
+                    shortcut.to_string(),
+                    slot,
+                    ShortcutRow::shortcut_tip(recording_slot == Some(slot)),
+                    cx,
+                ));
+            }
+            keys = keys.child(chip(
+                format!("shortcut-{i}-add"),
+                if row.shortcuts.is_empty() { "Add shortcut".into() } else { "+".into() },
+                Slot::New,
+                ShortcutRow::add_tip(recording_slot == Some(Slot::New)),
+                cx,
+            ));
             let custom = row.is_custom;
             list = list.child(
                 div()
@@ -2120,30 +2194,7 @@ impl SettingsPage {
                             .flex()
                             .items_center()
                             .flex_none()
-                            .child(
-                                div()
-                                    .id(SharedString::from(format!("shortcut-{i}")))
-                                    .flex()
-                                    .items_center()
-                                    .w(px(200.0))
-                                    .h(theme.metrics.control_height)
-                                    .pad(px(0.0), px(10.0))
-                                    .rounded(theme.metrics.control_radius)
-                                    .border_1()
-                                    .border_color(if recording { c.focus_border } else { c.card_border })
-                                    .bg(c.card_bg)
-                                    .cursor_pointer()
-                                    .hover(move |s| s.bg(c.hover_bg))
-                                    .tooltip(Tooltip::text(ShortcutRow::shortcut_tip(recording)))
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                                            cx.stop_propagation();
-                                            this.start_recording(id.clone(), cx);
-                                        }),
-                                    )
-                                    .child(row.shortcut_text(recording)),
-                            )
+                            .child(div().w(px(200.0)).child(keys))
                             .child(
                                 div().w(px(36.0)).flex().justify_end().child(
                                     ui::icon_button(
@@ -2153,7 +2204,7 @@ impl SettingsPage {
                                         custom,
                                         cx,
                                     )
-                                    .tooltip(Tooltip::text(row.reset_tip()))
+                                    .tip(row.reset_tip())
                                     .when(custom, |b| {
                                         b.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                             this.reset_shortcut(&reset_id, cx)
@@ -2193,7 +2244,7 @@ impl SettingsPage {
                                 any_custom,
                                 cx,
                             )
-                            .tooltip(Tooltip::text("Reset all to defaults"))
+                            .tip("Reset all to defaults")
                             .when(any_custom, |b| {
                                 b.on_click(cx.listener(|_, _: &ClickEvent, _, cx| {
                                     cx.emit(SettingsEvent::ConfirmResetAllShortcuts)
@@ -2209,16 +2260,14 @@ impl SettingsPage {
                         .child(table),
                 );
 
-        column(6.0)
-            .child(category_title("Keyboard shortcuts", &theme))
-            .child(
-                column(14.0)
-                    .child(hint(
-                        "Click a shortcut and press the new keys - Esc cancels, Backspace removes it. Saved at once.",
-                        &theme,
-                    ))
-                    .child(controls),
-            )
+        column(20.0)
+            .child(ui::with_tip(
+                category_title("Keyboard shortcuts", &theme),
+                "keyboard-shortcuts-tip",
+                "Click a shortcut and press the new keys - Esc cancels, Backspace removes it. Saved at once.",
+                cx,
+            ))
+            .child(controls)
             .into_any_element()
     }
 
@@ -2240,18 +2289,17 @@ impl SettingsPage {
             .border_b_1()
             .when(first, |d| d.border_t_1())
             .border_color(theme.colors.grid_line)
-            .child(
-                column(2.0)
-                    .flex_1()
-                    .min_w_0()
-                    .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
-                    .child(hint(text, &theme)),
-            )
+            .child(div().flex_1().min_w_0().child(ui::with_tip(
+                div().font_weight(FontWeight::SEMIBOLD).child(title),
+                SharedString::from(format!("{id}-tip")),
+                text,
+                cx,
+            )))
             .when_some(button, |d, (label, tip, event)| {
                 d.child(
                     ui::button(id, label, ButtonKind::Secondary, true, cx)
                         .min_w(px(120.0))
-                        .tooltip(Tooltip::text(tip))
+                        .tip(tip)
                         .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(event.clone()))),
                 )
             })
@@ -2308,16 +2356,14 @@ impl SettingsPage {
                 false,
                 cx,
             ));
-        column(6.0)
-            .child(category_title("Help", &theme))
-            .child(
-                column(8.0)
-                    .child(hint(
-                        "New to DNN Manager, or looking for something? Open these whenever you like - they don't change any setting.",
-                        &theme,
-                    ))
-                    .child(rows),
-            )
+        column(20.0)
+            .child(ui::with_tip(
+                category_title("Help", &theme),
+                "help-tip",
+                "New to DNN Manager, or looking for something? Open these whenever you like - they don't change any setting.",
+                cx,
+            ))
+            .child(rows)
             .into_any_element()
     }
 
@@ -2383,23 +2429,27 @@ impl SettingsPage {
                                     .overflow_hidden()
                                     .whitespace_nowrap()
                                     .text_ellipsis()
-                                    .tooltip(Tooltip::text(text.clone()))
+                                    .tip(text.clone())
                                     .child(text),
                             ),
                     )
                     .child(
                         ui::link(SharedString::from(format!("open-folder-{i}")), "Open", cx)
-                            .tooltip(Tooltip::text("Open folder"))
+                            .tip("Open folder")
                             .on_click(
                                 cx.listener(move |this, _: &ClickEvent, _, cx| this.open_folder(folder.clone(), cx)),
                             ),
                     ),
             );
         }
-        let files = group("Your files", 8.0, &theme).child(column(10.0).child(folders).child(hint(
+        let files = group_tip(
+            "Your files",
+            "your-files-tip",
             "Kept apart from the program: updating or uninstalling DNN Manager leaves these folders alone.",
-            &theme,
-        )));
+            8.0,
+            cx,
+        )
+        .child(folders);
         column(20.0)
             .child(category_title("About", &theme))
             .child(column(22.0).child(blocks).child(files))

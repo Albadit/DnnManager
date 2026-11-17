@@ -29,9 +29,10 @@ menu) say whether there is a newer release.
 
 | Part | What it does |
 |---|---|
-| Sidebar | **Projects** (every DNN website in IIS) and **New project**; the gear opens Settings, themes, Customize Layout, Troubleshoot and Check for Updates. **Ctrl+B** hides it. |
+| Activity bar | The icons on the left: **Projects** (every DNN website in IIS) and **New project**; the gear opens Settings, themes, Customize Layout, Troubleshoot and Check for Updates. Customize Layout hides it or puts it on the right. |
+| Side bars | A **primary** side bar beside the activity bar (**Ctrl+B**) and a **secondary** one on the other side (**Ctrl+Alt+B**) - empty for now, kept for what comes later. Drag their edges to resize them. |
 | Title bar | The search in the middle finds a project; type `>` for any command (**Ctrl+Shift+P**). **?** is help. |
-| Bottom panel | **Output** (what an operation does, step by step), **Logs** (the sites' and DNN Manager's logs), **Terminal**. **Ctrl+J** opens and closes it. |
+| Bottom panel | **Output** (what an operation does, step by step), **Logs** (the sites' and DNN Manager's logs), **Terminal**. **Ctrl+J** opens and closes it; drag its top edge to resize it (it stops at its smallest size), or the corner where it meets the primary side bar to resize both. **Ctrl+F** (or 🔍) finds text in the tab shown: **Aa** match case, **ab** whole word, **.\*** regular expression; **Enter** / **Shift+Enter** go to the next / previous match, **Esc** closes it. |
 | Status bar | IIS's state with Start / Stop / Restart (these affect every site), memory, processor and disk. |
 
 ## Projects
@@ -69,7 +70,12 @@ and the database; **Still needed** lists what is missing. What you type is kept 
 ## Settings and Troubleshoot
 
 **Settings** (**Ctrl+,**) has General, Projects, DNN releases, Database server, Docker container, IIS, Keyboard
-shortcuts, Help and About. Changes apply when you press **Save**.
+shortcuts, Help and About. Changes apply when you press **Save**. **Ctrl+F** there goes to its search.
+
+**Keyboard shortcuts**: a command can have several shortcuts. Click one to record a new one in its place (Backspace
+removes it, Esc cancels), **+** to add another; the arrow puts the command's default back. The panel and side bar
+commands are toggles - **Toggle panel visibility** (Ctrl+J), **Toggle terminal** (Ctrl+\`), **Toggle Output**
+(Ctrl+Shift+U): run on the tab already shown, they hide the panel.
 
 **Troubleshoot** (gear menu): **Restart** DNN Manager; **Clean up data** (logs, kept DNN packages, backups, deployment
 packages, with their sizes); **Reset settings**; **Reset to factory defaults** (everything but your projects and their

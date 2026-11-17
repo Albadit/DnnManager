@@ -65,6 +65,22 @@ pub struct Run {
 }
 
 impl Run {
+    /// When each stage started, in order (its stage line's time) - a stage lasts until the next starts, or the run ends.
+    pub fn stage_starts(&self) -> Vec<SystemTime> {
+        self.lines.iter().filter(|l| l.kind == LineKind::Stage).map(|l| l.at).collect()
+    }
+
+    /// How long stage `index` took - so far, while it is the one running (`now`).
+    pub fn stage_duration(&self, index: usize, now: SystemTime) -> Option<Duration> {
+        let starts = self.stage_starts();
+        let start = *starts.get(index)?;
+        let end = match starts.get(index + 1) {
+            Some(next) => *next,
+            None => self.duration.map(|d| self.started + d).unwrap_or(now),
+        };
+        end.duration_since(start).ok()
+    }
+
     /// The stages in order, each with the worst of its lines (the Output's stage rail).
     pub fn stages(&self) -> Vec<(SharedString, LineKind)> {
         let mut stages: Vec<(SharedString, LineKind)> = Vec::new();
@@ -1089,4 +1105,40 @@ pub fn new_store(
     run_log: Arc<dnnm_logs::run_log::RunLog>,
 ) -> Entity<Store> {
     cx.new(|cx| Store::new(db, iis, run_log, cx))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runner::{LineKind, LogLine};
+
+    fn line(at: SystemTime, kind: LineKind, text: &str) -> LogLine {
+        LogLine { at, kind, text: text.to_string().into() }
+    }
+
+    #[test]
+    fn a_stage_lasts_until_the_next_one_or_the_end_and_the_running_one_until_now() {
+        let t0 = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let mut run = Run {
+            title: "Create 'qwer'".into(),
+            status: RunStatus::Running,
+            started: t0,
+            duration: None,
+            lines: vec![
+                line(at(0), LineKind::Stage, "DNN version"),
+                line(at(1), LineKind::Info, "Using DNN 10.4.1"),
+                line(at(3), LineKind::Stage, "Checking IIS"),
+            ],
+            facts: Vec::new(),
+            error: None,
+        };
+        assert_eq!(run.stage_starts(), vec![at(0), at(3)]);
+        assert_eq!(run.stage_duration(0, at(10)), Some(Duration::from_secs(3)));
+        assert_eq!(run.stage_duration(1, at(10)), Some(Duration::from_secs(7)), "running: until now");
+        assert_eq!(run.stage_duration(2, at(10)), None);
+        run.status = RunStatus::Finished;
+        run.duration = Some(Duration::from_secs(5));
+        assert_eq!(run.stage_duration(1, at(10)), Some(Duration::from_secs(2)), "ended: until the run's end");
+    }
 }

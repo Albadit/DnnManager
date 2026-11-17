@@ -15,7 +15,7 @@ mod workspace_state;
 
 use std::sync::Arc;
 
-use gpui::{App, AppContext, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, point, px, size};
+use gpui::{App, AppContext, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, point, size};
 
 use dnnm_application::iis::IisManager;
 use dnnm_infrastructure::iis_fixture::FixtureIis;
@@ -85,11 +85,15 @@ impl log::Log for OwnLog {
 
 /// The window's place from the last start - if it is still on a screen (a monitor may be gone) - or centred.
 fn initial_bounds(state: &WindowState, cx: &App) -> WindowBounds {
-    let centred = Bounds::centered(None, size(px(1180.0), px(800.0)), cx);
+    let centred = Bounds::centered(None, size(gpui::px(1180.0), gpui::px(800.0)), cx);
     let (Some(left), Some(top), Some(width), Some(height)) = (state.left, state.top, state.width, state.height) else {
         return WindowBounds::Windowed(centred);
     };
-    let bounds = Bounds::new(point(px(left), px(top)), size(px(width.max(400.0)), px(height.max(270.0))));
+    // The window's place and size are the screen's, not the UI scale's (`gpui::px`, not the app's scaled `px`).
+    let bounds = Bounds::new(
+        point(gpui::px(left), gpui::px(top)),
+        size(gpui::px(width.max(400.0)), gpui::px(height.max(270.0))),
+    );
     let on_screen = cx.displays().iter().any(|d| d.bounds().intersects(&bounds));
     match (on_screen, state.maximized) {
         (false, _) => WindowBounds::Windowed(centred),
@@ -103,9 +107,11 @@ fn main() {
     // (`AdminElevation`). If the user says no, run anyway - the Projects page says why it can't read IIS.
     let fixture = std::env::var_os(FIXTURE).map(std::path::PathBuf::from);
     wait_for_previous();
-    // One DNN Manager at a time (`SingleInstance`): a second start brings the running one forward and ends - the same
-    // named events as the WPF app's, so the two don't run at once either. Not for the fixture, a UI check.
-    if fixture.is_none() && dnnm_system::single_instance::hand_off_to_running() {
+    // One DNN Manager at a time (`SingleInstance`): a second start brings the running one forward and ends. Only in a
+    // release build (what the packages ship): a debug build - testing - opens as many as asked, and so does the
+    // fixture, a UI check.
+    let single_instance = fixture.is_none() && !cfg!(debug_assertions);
+    if single_instance && dnnm_system::single_instance::hand_off_to_running() {
         return;
     }
     if !windows_security::is_elevated()
@@ -156,7 +162,11 @@ fn main() {
         })
         .detach();
         let settings = store.read(cx).settings.clone();
-        cx.set_global(Theme::new(settings.theme(), cx.window_appearance(), settings.font_size(), settings.density()));
+        workspace::apply_ui_scale(&settings);
+        cx.set_global(
+            Theme::new(settings.theme(), cx.window_appearance(), settings.font_size(), settings.density())
+                .with_animations(settings.animations() && dnnm_system::motion::system_animations()),
+        );
         // The defaults, then the user's own shortcuts (Settings → Keyboard shortcuts).
         workspace::apply_shortcuts(&settings, cx);
         cx.on_window_closed(|cx| {
@@ -174,17 +184,17 @@ fn main() {
                 appears_transparent: true,
                 traffic_light_position: None,
             }),
-            window_min_size: Some(size(px(400.0), px(270.0))),
+            window_min_size: Some(size(gpui::px(400.0), gpui::px(270.0))),
             app_id: Some("DnnManager.NET".into()),
             ..Default::default()
         };
         // While it runs: marked as running, and listening for a second start (bring forward) and Setup (quit).
-        let marker = if fixture.is_none() { dnnm_system::single_instance::create_running_marker() } else { None };
+        let marker = if single_instance { dnnm_system::single_instance::create_running_marker() } else { None };
         let window = cx.open_window(options, |window, cx| cx.new(|cx| Workspace::new(store.clone(), window, cx)));
         if let Ok(handle) = &window {
             let (tx, mut rx) = futures::channel::mpsc::unbounded::<bool>();
             let (activate, quit) = (tx.clone(), tx);
-            let listener = if fixture.is_none() {
+            let listener = if single_instance {
                 dnnm_system::single_instance::listen(
                     move || {
                         let _ = activate.unbounded_send(true);

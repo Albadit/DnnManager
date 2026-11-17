@@ -101,9 +101,11 @@ fn state(path: &Path) -> (bool, bool) {
 
 /// Whether `path` - or a folder on the way to it from `root`, the root included - is a link or junction. What doesn't
 /// exist yet isn't one; a path outside the root counts as one (never trusted). `checked` remembers the folders already
-/// found to be no link.
+/// found to be no link. Both are compared by their long names: `safe_zip::target` hands out long paths, and a root
+/// given by its short (8.3) name - `C:\Users\RUNNER~1\...`, as a TEMP folder can be - would otherwise look like another
+/// folder.
 pub fn has_link(root: &Path, path: &Path, checked: Option<&mut CheckedFolders>) -> bool {
-    let (Some(top), Some(mut at)) = (full(root), full(path)) else { return true };
+    let (Some(top), Some(mut at)) = (full(&long_path(root)), full(&long_path(path))) else { return true };
     if !same_or_inside(&at, &top) {
         return true;
     }
@@ -303,7 +305,8 @@ mod tests {
         let mut checked = CheckedFolders::new();
         std::fs::create_dir_all(root.join("App_Data")).unwrap();
         assert!(!has_link(&root, &root.join(r"App_Data\x"), Some(&mut checked)));
-        assert!(checked.contains(&full(&root.join("App_Data")).unwrap()));
+        // Remembered by its long name, as has_link compares them.
+        assert!(checked.contains(&long_path(&root.join("App_Data"))));
 
         // Deleting the site deletes the junction, not what it points to.
         std::fs::write(target.join("keep.txt"), "x").unwrap();

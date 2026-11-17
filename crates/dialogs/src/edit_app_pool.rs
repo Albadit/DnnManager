@@ -4,19 +4,17 @@
 //!
 //! The app gives it the pool's name and settings from `dnnm_wiring::edit_app_pool::current_pool`.
 
+use dnnm_ui::px;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gpui::{
-    AnyElement, App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, SharedString,
-    Subscription, Window, div, prelude::*, px,
-};
+use gpui::{AnyElement, App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, SharedString, Subscription, Window, div, prelude::*};
 
 use dnnm_application::iis::IisPoolSettings;
 use dnnm_application::use_cases::edit_app_pool::EditAppPoolRequest;
 use dnnm_ui::dialog::{self, DialogEvent};
 use dnnm_ui::text_input::{TextChanged, TextInput};
-use dnnm_ui::{self as ui, Tooltip};
+use dnnm_ui::{self as ui, Tip};
 
 /// IIS takes an idle time-out of up to 30 days.
 pub const MAX_IDLE_MINUTES: i64 = 43_200;
@@ -281,7 +279,6 @@ impl Render for AppPoolDialog {
             .flex()
             .flex_col()
             .gap(px(14.0))
-            .child(div().w_full().child(intro(&self.site, &self.pool)))
             .child(
                 stack(10.0)
                     .child(
@@ -299,27 +296,27 @@ impl Render for AppPoolDialog {
                     ))
                     .child(
                         stack(4.0)
-                            .child(dialog::label("Identity", cx))
-                            .child(identity)
-                            .child(dialog::hint(self.identity_hint, cx)),
+                            .child(ui::with_tip(dialog::label("Identity", cx), "identity-tip", self.identity_hint, cx))
+                            .child(identity),
                     ),
             )
             .child(
                 stack(10.0)
                     .child(
-                        stack(4.0)
+                        div()
+                            .flex()
+                            .gap(px(12.0))
                             .child(
-                                div()
-                                    .flex()
-                                    .gap(px(12.0))
-                                    .child(
-                                        column()
-                                            .child(dialog::label("Idle time-out (minutes)", cx))
-                                            .child(dialog::text_field(&self.idle, window, cx)),
-                                    )
-                                    .child(column().child(dialog::label("Start mode", cx)).child(start_mode)),
+                                column()
+                                    .child(ui::with_tip(
+                                        dialog::label("Idle time-out (minutes)", cx),
+                                        "idle-tip",
+                                        "An idle time-out of 0 never shuts the pool down for being idle.",
+                                        cx,
+                                    ))
+                                    .child(dialog::text_field(&self.idle, window, cx)),
                             )
-                            .child(dialog::hint("An idle time-out of 0 never shuts the pool down for being idle.", cx)),
+                            .child(column().child(dialog::label("Start mode", cx)).child(start_mode)),
                     )
                     .children(dialog::field_error(problem.map(SharedString::from), cx)),
             );
@@ -330,13 +327,13 @@ impl Render for AppPoolDialog {
             .child(
                 ui::button("dialog-ok", "Save", ui::ButtonKind::Primary, ok, cx)
                     .min_w(px(80.0))
-                    .tooltip(Tooltip::text("Save (Enter)"))
+                    .tip("Save (Enter)")
                     .when(ok, |b| b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.submit(cx)))),
             )
             .child(
                 ui::button("dialog-cancel", "Cancel", ui::ButtonKind::Secondary, true, cx)
                     .min_w(px(80.0))
-                    .tooltip(Tooltip::text("Cancel (Esc)"))
+                    .tip("Cancel (Esc)")
                     .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(DialogEvent::Cancelled))),
             );
 
@@ -347,7 +344,14 @@ impl Render for AppPoolDialog {
                     this.submit(cx);
                 }
             }))
-            .child(dialog::frame("Edit app pool", 460.0, body, buttons, cx))
+            .child(dialog::frame_with_tip(
+                "Edit app pool",
+                Some(intro(&self.site, &self.pool)),
+                460.0,
+                body,
+                buttons,
+                cx,
+            ))
     }
 }
 

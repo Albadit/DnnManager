@@ -1,14 +1,14 @@
 //! A single-line text field, adapted from GPUI's `examples/input.rs` (Zed Industries, Apache-2.0): the theme's
 //! colours, a change event for the views that follow it, and Esc to clear.
 
+use crate::px;
 use std::ops::Range;
+use std::time::{Duration, Instant};
 
-use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity, EntityInputHandler,
-    EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine, SharedString, Style, TextRun, UTF16Selection,
-    UnderlineStyle, Window, actions, div, fill, point, prelude::*, px, relative, size,
-};
+/// The caret's blink: shown and hidden this long each (Windows' default caret blink time).
+const BLINK: Duration = Duration::from_millis(530);
+
+use gpui::{App, Bounds, ClipboardItem, Context, CursorStyle, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, ShapedLine, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window, actions, div, fill, point, prelude::*, relative, size};
 use unicode_segmentation::*;
 
 use crate::theme::Theme;
@@ -69,6 +69,12 @@ pub struct TextInput {
     is_selecting: bool,
     /// Esc empties it first (a search box); else Esc goes on to close what it is in (a dialog's field).
     clears_on_escape: bool,
+    /// The caret blinks from here - moved on by every edit and move, so the caret shows at once after one.
+    blink_from: Instant,
+    /// What the caret was last at (the text's length, the selection) - a change restarts the blink.
+    caret_at: (usize, Range<usize>),
+    /// Redraws while focused, for the blink; dropped when the field loses the keyboard.
+    _blink: Option<gpui::Task<()>>,
 }
 
 impl EventEmitter<TextChanged> for TextInput {}
@@ -86,6 +92,9 @@ impl TextInput {
             last_bounds: None,
             is_selecting: false,
             clears_on_escape: false,
+            blink_from: Instant::now(),
+            caret_at: (0, 0..0),
+            _blink: None,
         }
     }
 
@@ -96,6 +105,11 @@ impl TextInput {
 
     pub fn set_placeholder(&mut self, placeholder: impl Into<SharedString>) {
         self.placeholder = placeholder.into();
+    }
+
+    /// Whether the caret shows now: solid for a moment after an edit or a move, then on and off every `BLINK`.
+    fn caret_visible(&self) -> bool {
+        (self.blink_from.elapsed().as_millis() / BLINK.as_millis()).is_multiple_of(2)
     }
 
     pub fn text(&self) -> &SharedString {
@@ -502,14 +516,15 @@ impl Element for TextElement {
         let line = window.text_system().shape_line(display_text, font_size, &runs, None);
 
         let cursor_pos = line.x_for_index(cursor);
+        // The caret: 1 px wide and as high as the text itself (1.2 x its size) - not the whole, taller line box - in
+        // the line's middle, as Windows' and VS Code's.
+        let caret_height = (font_size * 1.2).round().min(bounds.size.height);
+        let caret_top = bounds.top() + ((bounds.size.height - caret_height) / 2.0).round();
         let (selection, cursor) = if selected_range.is_empty() {
             (
                 None,
                 Some(fill(
-                    Bounds::new(
-                        point(bounds.left() + cursor_pos, bounds.top()),
-                        size(px(1.), bounds.bottom() - bounds.top()),
-                    ),
+                    Bounds::new(point(bounds.left() + cursor_pos, caret_top), size(px(1.), caret_height)),
                     colors.text_primary,
                 )),
             )
@@ -547,6 +562,7 @@ impl Element for TextElement {
         line.paint(bounds.origin, window.line_height(), window, cx).unwrap();
 
         if focus_handle.is_focused(window)
+            && self.input.read(cx).caret_visible()
             && let Some(cursor) = prepaint.cursor.take()
         {
             window.paint_quad(cursor);
@@ -560,7 +576,28 @@ impl Element for TextElement {
 }
 
 impl Render for TextInput {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // An edit or a move shows the caret at once, then it blinks again.
+        let caret_at = (self.content.len(), self.selected_range.clone());
+        if caret_at != self.caret_at {
+            self.caret_at = caret_at;
+            self.blink_from = Instant::now();
+        }
+        // The blink: a redraw at each change while the field has the keyboard - none without it.
+        let focused = self.focus_handle.is_focused(window);
+        if focused && self._blink.is_none() {
+            self.blink_from = Instant::now();
+            self._blink = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(BLINK).await;
+                    if this.update(cx, |_, cx| cx.notify()).is_err() {
+                        break;
+                    }
+                }
+            }));
+        } else if !focused && self._blink.is_some() {
+            self._blink = None;
+        }
         div()
             .flex()
             .key_context("TextInput")

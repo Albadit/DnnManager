@@ -2,13 +2,11 @@
 //! sidebar, the page, the bottom panel, the status bar, the toasts, the gear's and Help's menus, Settings and
 //! Troubleshoot over the page, the dialogs and the tour.
 
+use dnnm_ui::px;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
-use gpui::{
-    App, ClickEvent, Context, Entity, FocusHandle, Focusable, FontWeight, Image, ImageFormat, KeyBinding, MouseButton,
-    SharedString, Subscription, Window, WindowAppearance, WindowBounds, WindowControlArea, actions, div, img, prelude::*, px,
-};
+use gpui::{App, ClickEvent, Context, Entity, FocusHandle, Focusable, FontWeight, Image, ImageFormat, KeyBinding, MouseButton, SharedString, Subscription, Window, WindowAppearance, WindowBounds, WindowControlArea, actions, div, img, prelude::*};
 
 use dnnm_application::iis::{IisServerAction, IisServerState};
 use dnnm_application::settings::ThemeChoice;
@@ -34,12 +32,14 @@ use crate::runner::LineKind;
 use crate::store::{Run, RunStatus, Store, ToastKind};
 use dnnm_ui::theme::Theme;
 use dnnm_ui::icons::{self, LayoutIcon};
-use dnnm_ui::{self as ui, Pad, Tooltip};
+use dnnm_ui::text_input::{TextChanged, TextInput};
+use dnnm_ui::{self as ui, Pad, Tip};
 
 actions!(
     workspace,
     [
         ToggleSidebar,
+        ToggleSecondarySidebar,
         TogglePanel,
         GoToProjects,
         GoToNewProject,
@@ -51,7 +51,14 @@ actions!(
         QuickOpen,
         ShowTerminal,
         NewTerminal,
-        MaximizePanel
+        MaximizePanel,
+        FindInPanel,
+        FindNext,
+        FindPrevious,
+        FindClose,
+        FindToggleCase,
+        FindToggleWord,
+        FindToggleRegex
     ]
 );
 
@@ -60,10 +67,28 @@ pub fn apply_shortcuts(settings: &dnnm_application::settings::Settings, cx: &mut
     shortcuts::apply(settings, cx);
 }
 
+/// Settings → General's UI scale for every size the app draws (dnnm-ui's and the terminal's `px`) - before a theme is
+/// made from the settings, since its font sizes are sizes too.
+pub fn apply_ui_scale(settings: &dnnm_application::settings::Settings) {
+    ui::set_ui_scale(settings.ui_scale());
+    dnnm_terminal::scale::set_ui_scale(ui::ui_scale());
+}
+
 /// The default shortcuts (`AppCommands`).
 pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
+        // As VS Code: Ctrl+B the primary side bar, Ctrl+Alt+B the secondary one.
         KeyBinding::new("ctrl-b", ToggleSidebar, None),
+        KeyBinding::new("ctrl-alt-b", ToggleSecondarySidebar, None),
+        // The panel's Find bar (`PanelSearch`): Ctrl+F opens it on the shown tab; in it, Enter / Shift+Enter go to the
+        // next / previous match, Esc closes it, Alt+C / W / R switch Match Case, Whole Word, Regular Expression.
+        KeyBinding::new("ctrl-f", FindInPanel, None),
+        KeyBinding::new("enter", FindNext, Some("PanelFind")),
+        KeyBinding::new("shift-enter", FindPrevious, Some("PanelFind")),
+        KeyBinding::new("escape", FindClose, Some("PanelFind")),
+        KeyBinding::new("alt-c", FindToggleCase, Some("PanelFind")),
+        KeyBinding::new("alt-w", FindToggleWord, Some("PanelFind")),
+        KeyBinding::new("alt-r", FindToggleRegex, Some("PanelFind")),
         KeyBinding::new("ctrl-j", TogglePanel, None),
         KeyBinding::new("ctrl-1", GoToProjects, None),
         KeyBinding::new("ctrl-2", GoToNewProject, None),
@@ -85,8 +110,6 @@ pub fn bind_keys(cx: &mut App) {
 }
 
 const APP_ICON: &[u8] = include_bytes!("../assets/dnn-32.png");
-/// Below this width the sidebar shows only its icons (`MainWindow.IsCompact`).
-const NARROW_WINDOW: f32 = 1100.0;
 
 /// The bottom panel's tabs (`TerminalPanel`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,11 +119,81 @@ pub enum PanelTab {
     Terminal,
 }
 
+/// A part that slides open and shut - a side bar, the panel: whether it was shown last frame, and since when it has
+/// been moving. Kept on the workspace so a show or hide from anywhere (a toggle, a command, a page) slides.
+struct Reveal {
+    shown: bool,
+    since: Option<std::time::Instant>,
+}
+
+impl Reveal {
+    fn new(shown: bool) -> Self {
+        Self { shown, since: None }
+    }
+
+    /// How much of it is out now, 0 to 1, given whether it should be shown - and whether it is still moving. A change
+    /// starts a slide of `ui::MOTION` (none with animations off).
+    fn amount(&mut self, shown: bool, animate: bool) -> (f32, bool) {
+        if shown != self.shown {
+            self.shown = shown;
+            self.since = animate.then(std::time::Instant::now);
+        }
+        let end = if shown { 1.0 } else { 0.0 };
+        let Some(since) = self.since else { return (end, false) };
+        let done = since.elapsed().as_secs_f32() / ui::MOTION.as_secs_f32();
+        if done >= 1.0 {
+            self.since = None;
+            return (end, false);
+        }
+        let eased = ui::motion_easing(done);
+        (if shown { eased } else { 1.0 - eased }, true)
+    }
+}
+
 /// A sash being dragged (`Controls/Sash`).
 #[derive(Debug, Clone, Copy)]
 enum Drag {
     Sidebar { start_x: gpui::Pixels, start_width: gpui::Pixels },
     Panel { start_y: gpui::Pixels, start_height: gpui::Pixels },
+    /// The secondary side bar's edge.
+    Secondary { start_x: gpui::Pixels, start_width: gpui::Pixels },
+    /// The edge between the Output's stage list and its lines.
+    Stages { start_x: gpui::Pixels, start_width: gpui::Pixels },
+    /// Where the primary side bar's and the panel's sashes meet: both at once.
+    Corner { start_x: gpui::Pixels, start_width: gpui::Pixels, start_y: gpui::Pixels, start_height: gpui::Pixels },
+}
+
+/// The panel's Find bar (`PanelSearch`), while open: what it looks for and how, and which match it is on.
+struct PanelFind {
+    input: Entity<TextInput>,
+    match_case: bool,
+    whole_word: bool,
+    use_regex: bool,
+    /// The match it is on (0-based), and whether to bring it into view at the next draw.
+    current: usize,
+    reveal: bool,
+    /// What the last search found: the count, stopped before the end (too long), the pattern's error.
+    count: usize,
+    stopped: bool,
+    error: Option<String>,
+    _changed: Subscription,
+    /// Redraws when the searched text grows: the logs, the terminal shown.
+    _watching: Vec<Subscription>,
+    watched_terminal: Option<gpui::EntityId>,
+    /// The tab it last searched: on another, it starts again at that tab's first match.
+    searched_tab: Option<PanelTab>,
+}
+
+/// Matches by line, each line's byte ranges with whether it is the current match.
+pub(crate) fn marks_by_line(
+    matches: &[dnnm_logs::search::Match],
+    current: Option<usize>,
+) -> std::collections::HashMap<usize, ui::LineMarks> {
+    let mut marks: std::collections::HashMap<usize, ui::LineMarks> = std::collections::HashMap::new();
+    for (i, m) in matches.iter().enumerate() {
+        marks.entry(m.line).or_default().push((m.start..m.start + m.len, Some(i) == current));
+    }
+    marks
 }
 
 /// What runs once the What's new dialog at the start has gone (the guide).
@@ -110,6 +203,13 @@ type AfterNotes = Box<dyn FnOnce(&mut Workspace, &mut Window, &mut Context<Works
 const MIN_SIDEBAR: f32 = 160.0;
 const MAX_SIDEBAR: f32 = 600.0;
 const MIN_PANEL: f32 = 90.0;
+/// The Output's stage list: its width unless dragged, and how narrow and wide a drag makes it.
+const STAGES_WIDTH: f32 = 220.0;
+const MIN_STAGES: f32 = 150.0;
+const MAX_STAGES: f32 = 520.0;
+/// Of the window's height, what the panel leaves at least: the title and status bars and a page that still shows its
+/// title, toolbar and a few rows (less and its parts run into each other).
+const PANEL_LEAVES: f32 = 300.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Page {
@@ -119,6 +219,18 @@ pub enum Page {
 
 pub struct Workspace {
     store: Entity<Store>,
+    /// The panel's Find bar, while open.
+    find: Option<PanelFind>,
+    /// Where the title bar's Help button is: its menu opens under it.
+    help_anchor: ui::Anchor,
+    /// Where the activity bar's gear is: its menu opens beside it, their bottoms level.
+    gear_anchor: ui::Anchor,
+    /// Its matches in the Output tab, by line; the line to bring into view at the next draw; the lines' scroll.
+    output_marks: std::collections::HashMap<usize, ui::LineMarks>,
+    output_reveal: std::cell::Cell<Option<usize>>,
+    output_scroll: gpui::ScrollHandle,
+    /// While an operation runs and the panel shows: redraws every second, for the Output's clock.
+    output_tick: Option<gpui::Task<()>>,
     page: Page,
     projects: Entity<ProjectsPage>,
     /// New project - made the first time it is shown.
@@ -160,7 +272,20 @@ pub struct Workspace {
     dialog: Option<(gpui::AnyView, Subscription)>,
     panel_tab: PanelTab,
     /// The sidebar's and the panel's sizes (dragged), the panel taking the page's room (Ctrl+Shift+M).
+    /// The primary side bar's width.
     sidebar_width: Option<gpui::Pixels>,
+    /// The primary and secondary side bars (VS Code's), shown - empty for now; the secondary's width.
+    primary_visible: bool,
+    secondary_visible: bool,
+    /// The side bars' and the panel's slide as they open and shut.
+    primary_reveal: Reveal,
+    secondary_reveal: Reveal,
+    panel_reveal: Reveal,
+    secondary_width: Option<gpui::Pixels>,
+    /// The Output's stage list's width, once dragged.
+    output_stages_width: Option<gpui::Pixels>,
+    /// The mouse on the corner where the primary side bar's and the panel's sashes meet: both lines lit.
+    corner_hover: bool,
     panel_height: Option<gpui::Pixels>,
     panel_maximized: bool,
     /// A drag of the sidebar's edge or the panel's: where it began and the size then.
@@ -175,6 +300,7 @@ pub struct Workspace {
 
 impl Workspace {
     pub fn new(store: Entity<Store>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        background::install_move_pointer(window);
         let db = store.read(cx).db().clone();
         let store_for_logs = store.clone();
         let saved_window = WindowState::load(&db);
@@ -202,6 +328,16 @@ impl Workspace {
             cx.observe_in(&store, window, |this, store, window, cx| {
                 // The theme follows the settings (the gear's Themes, Settings → General).
                 this.apply_theme(store.read(cx).settings.theme(), None, cx);
+                // An open list moves at once when Quick Input Position changes (Customize Layout is one).
+                if let Some(palette) = this.palette.clone() {
+                    let centered = store.read(cx).settings.quick_input_centered();
+                    palette.update(cx, |p, cx| {
+                        if p.centered != centered {
+                            p.centered = centered;
+                            cx.notify();
+                        }
+                    });
+                }
                 // Quitting once the cancelled operation has stopped and undone itself.
                 if this.quit_when_idle && !store.read(cx).is_busy() {
                     this.quit_when_idle = false;
@@ -288,9 +424,24 @@ impl Workspace {
             dialog: None,
             panel_tab: PanelTab::Output,
             sidebar_width: saved_window.sidebar_width.map(px),
+            primary_visible: saved_window.primary_open,
+            secondary_visible: saved_window.secondary_open,
+            primary_reveal: Reveal::new(saved_window.primary_open),
+            secondary_reveal: Reveal::new(saved_window.secondary_open),
+            panel_reveal: Reveal::new(saved_window.panel_open),
+            secondary_width: saved_window.secondary_width.map(px),
+            output_stages_width: saved_window.output_stages_width.map(px),
+            corner_hover: false,
             panel_height: saved_window.panel_height.map(px),
             panel_maximized: saved_window.panel_maximized,
             drag: None,
+            output_tick: None,
+            find: None,
+            help_anchor: ui::Anchor::default(),
+            gear_anchor: ui::Anchor::default(),
+            output_marks: Default::default(),
+            output_reveal: Default::default(),
+            output_scroll: gpui::ScrollHandle::new(),
             logs: cx.new(|_| LogsView::new(store_for_logs)),
             terminal: None,
             focus,
@@ -364,14 +515,19 @@ impl Workspace {
             WindowBounds::Windowed(b) => (false, b),
         };
         let mut state = WindowState::load(&db);
-        state.left = Some(bounds.origin.x / px(1.0));
-        state.top = Some(bounds.origin.y / px(1.0));
-        state.width = Some(bounds.size.width / px(1.0));
-        state.height = Some(bounds.size.height / px(1.0));
+        // The window on the screen: in the screen's pixels, whatever the UI scale.
+        state.left = Some(bounds.origin.x / gpui::px(1.0));
+        state.top = Some(bounds.origin.y / gpui::px(1.0));
+        state.width = Some(bounds.size.width / gpui::px(1.0));
+        state.height = Some(bounds.size.height / gpui::px(1.0));
         state.maximized = maximized;
         state.sidebar_hidden = !self.sidebar_visible;
         state.panel_open = self.panel_visible;
         state.sidebar_width = self.sidebar_width.map(|w| w / px(1.0));
+        state.primary_open = self.primary_visible;
+        state.secondary_open = self.secondary_visible;
+        state.secondary_width = self.secondary_width.map(|w| w / px(1.0));
+        state.output_stages_width = self.output_stages_width.map(|w| w / px(1.0));
         state.panel_height = self.panel_height.map(|h| h / px(1.0));
         state.panel_maximized = self.panel_maximized;
         state.save(&db);
@@ -391,10 +547,17 @@ impl Workspace {
     /// Rebuilds the theme when the choice, the font size or Windows' light/dark mode changed.
     fn apply_theme(&mut self, choice: ThemeChoice, appearance: Option<WindowAppearance>, cx: &mut Context<Self>) {
         let settings = &self.store.read(cx).settings;
+        // A new UI scale changes the theme's sizes (its body text among them), so the windows are drawn again below.
+        apply_ui_scale(settings);
         let appearance = appearance.unwrap_or_else(|| cx.window_appearance());
-        let next = Theme::new(choice, appearance, settings.font_size(), settings.density());
+        let next = Theme::new(choice, appearance, settings.font_size(), settings.density())
+            .with_animations(settings.animations() && dnnm_system::motion::system_animations());
         let current = Theme::get(cx);
-        if current.dark != next.dark || current.text.body != next.text.body || current.density != next.density {
+        if current.dark != next.dark
+            || current.text.body != next.text.body
+            || current.density != next.density
+            || current.animations != next.animations
+        {
             cx.set_global(next);
             if let Some(terminal) = self.terminal.clone() {
                 let (style, colors) = terminal_style(&self.store.read(cx).settings, cx);
@@ -534,14 +697,14 @@ impl Workspace {
     fn resize_sidebar_by(&mut self, by: f32, window: &mut Window, cx: &mut Context<Self>) {
         let _ = window;
         let now = self.sidebar_width.unwrap_or(Theme::get(cx).metrics.sidebar_width);
-        self.sidebar_visible = true;
+        self.primary_visible = true;
         self.sidebar_width = Some((now + px(by)).clamp(px(MIN_SIDEBAR), px(MAX_SIDEBAR)));
         cx.notify();
     }
 
     fn resize_panel_by(&mut self, by: f32, window: &mut Window, cx: &mut Context<Self>) {
         let now = self.panel_height.unwrap_or(Theme::get(cx).metrics.panel_height);
-        let most = (window.viewport_size().height - px(160.0)).max(px(MIN_PANEL));
+        let most = (window.viewport_size().height - px(PANEL_LEAVES)).max(px(MIN_PANEL));
         self.panel_visible = true;
         self.panel_height = Some((now + px(by)).clamp(px(MIN_PANEL), most));
         cx.notify();
@@ -673,6 +836,8 @@ impl Workspace {
         let reset: std::rc::Rc<dyn Fn(&mut App)> = std::rc::Rc::new(move |cx| {
             let _ = reset_weak.update(cx, |ws, cx| {
                 ws.sidebar_visible = true;
+                ws.primary_visible = false;
+                ws.secondary_visible = false;
                 ws.panel_visible = false;
                 ws.store.update(cx, |s, cx| {
                     s.update_settings(
@@ -714,8 +879,21 @@ impl Workspace {
         self.projects.update(cx, |p, cx| p.focus_search(window, cx));
     }
 
+    /// The activity bar: the page entries' column (Customize Layout).
     fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_visible = !self.sidebar_visible;
+        cx.notify();
+    }
+
+    /// Ctrl+B: the primary side bar.
+    pub(crate) fn toggle_primary(&mut self, cx: &mut Context<Self>) {
+        self.primary_visible = !self.primary_visible;
+        cx.notify();
+    }
+
+    /// Ctrl+Alt+B: the secondary side bar.
+    pub(crate) fn toggle_secondary(&mut self, cx: &mut Context<Self>) {
+        self.secondary_visible = !self.secondary_visible;
         cx.notify();
     }
 
@@ -726,8 +904,42 @@ impl Workspace {
 
     fn show_output(&mut self, cx: &mut Context<Self>) {
         self.panel_visible = true;
+        self.panel_tab = PanelTab::Output;
         self.store.update(cx, |s, _| s.output_unseen_failure = false);
         cx.notify();
+    }
+
+    /// Whether the panel is up on `tab` - a toggle for that tab hides the panel then.
+    fn panel_shows(&self, tab: PanelTab) -> bool {
+        self.panel_visible && self.panel_tab == tab
+    }
+
+    /// Toggle Output: the panel on the Output tab, or hidden when it is already there.
+    pub(crate) fn toggle_output(&mut self, cx: &mut Context<Self>) {
+        if self.panel_shows(PanelTab::Output) {
+            self.toggle_panel(cx);
+        } else {
+            self.show_output(cx);
+        }
+    }
+
+    /// Toggle terminal (Ctrl+`): the panel on the Terminal tab, or hidden when it is already there.
+    pub(crate) fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.panel_shows(PanelTab::Terminal) {
+            self.toggle_panel(cx);
+        } else {
+            self.show_terminal(window, cx);
+        }
+    }
+
+    /// Toggle DNN Manager's log: the Logs tab on the app's own log, or the panel hidden when it is already there.
+    pub(crate) fn toggle_app_log(&mut self, cx: &mut Context<Self>) {
+        let on_app_log = self.logs.read(cx).showing_app_log();
+        if self.panel_shows(PanelTab::Logs) && on_app_log {
+            self.toggle_panel(cx);
+        } else {
+            self.show_logs(crate::logs_view::LogSite::App, cx);
+        }
     }
 
     fn open_url(&mut self, url: &str, cx: &mut Context<Self>) {
@@ -756,14 +968,16 @@ impl Focusable for Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.keep_output_clock(cx);
+        self.update_find(cx);
         let theme = Theme::get(cx).clone();
         let c = theme.colors;
-        let narrow = window.viewport_size().width < px(NARROW_WINDOW);
         let gap = theme.metrics.card_gap;
         let compact_density = gap == px(0.0);
         let status_bar_visible = self.store.read(cx).settings.status_bar_visible();
         let has_prompt = self.store.read(cx).prompt.is_some();
-        let sidebar_width = if narrow { theme.metrics.sidebar_compact_width } else { theme.metrics.sidebar_width };
+        // The activity bar: always its icons alone (VS Code's), this wide with the gap to the window's side.
+        let sidebar_width = theme.metrics.sidebar_compact_width;
 
         let page: gpui::AnyElement = match self.page {
             Page::Projects => self.projects.clone().into_any_element(),
@@ -781,42 +995,198 @@ impl Render for Workspace {
 
         let settings = self.store.read(cx).settings.clone();
         let sidebar_right = settings.sidebar_position() == dnnm_application::settings::SidebarPosition::Right;
-        let panel_under_sidebar = match settings.panel_alignment() {
-            dnnm_application::settings::PanelAlignment::Justify => true,
-            dnnm_application::settings::PanelAlignment::Left => !sidebar_right,
-            dnnm_application::settings::PanelAlignment::Right => sidebar_right,
-            dnnm_application::settings::PanelAlignment::Center => false,
+        // Which parts the panel runs under besides the page (`PanelAlignment`): the side on its left, its right, both.
+        let (panel_left, panel_right) = match settings.panel_alignment() {
+            dnnm_application::settings::PanelAlignment::Justify => (true, true),
+            dnnm_application::settings::PanelAlignment::Left => (true, false),
+            dnnm_application::settings::PanelAlignment::Right => (false, true),
+            dnnm_application::settings::PanelAlignment::Center => (false, false),
         };
-        let sidebar_width = if narrow { sidebar_width } else { self.sidebar_width.unwrap_or(sidebar_width) };
-        let panel_height = self.panel_height.unwrap_or(theme.metrics.panel_height);
+        // The primary side bar's side (the activity bar's), and whether the panel runs under it.
+        let under_primary = if sidebar_right { panel_right } else { panel_left };
+        let primary_width = self.sidebar_width.unwrap_or(theme.metrics.sidebar_width);
+        let secondary_width = self.secondary_width.unwrap_or(theme.metrics.sidebar_width);
+        // Never more than leaves the page its room - also a height saved in a taller window.
+        let panel_height = self
+            .panel_height
+            .unwrap_or(theme.metrics.panel_height)
+            .min((window.viewport_size().height - px(PANEL_LEAVES)).max(px(MIN_PANEL)));
         let maximized = self.panel_visible && self.panel_maximized;
-        let sash_size = if compact_density { px(6.0) } else { gap };
-        let sidebar = self.sidebar_visible.then(|| {
+        // How far each part is out - a fraction while it slides open or shut, the next frame asked for until it stops.
+        let animate = theme.animations;
+        let (primary_out, primary_moving) = self.primary_reveal.amount(self.primary_visible, animate);
+        let (secondary_out, secondary_moving) = self.secondary_reveal.amount(self.secondary_visible, animate);
+        let (panel_out, panel_moving) = self.panel_reveal.amount(self.panel_visible, animate && !self.panel_maximized);
+        if primary_moving || secondary_moving || panel_moving {
+            window.request_animation_frame();
+        }
+        // The sash's grab area: the gap between the cards; in Compact, where the parts touch, 4 px around their line.
+        let sash_size = if compact_density { px(4.0) } else { gap };
+        // A sash (`Sash.cs`): three dots in its middle say it can be dragged (in Compact a 1 px line marks it instead);
+        // under the mouse and while dragged a blue line with round ends runs along it - as thick as the sash itself, so
+        // every lit sash is the same and none sits half a pixel off (a thinner line in the 5 px gap would).
+        // The lit line is always as thick as the sash and only its colour changes: GPUI's group hover takes a colour but
+        // not a size, so a 1 px line widened on hover stayed 1 px under the mouse (and was thick only while dragged).
+        let sash_line = move |vertical: bool, group: &'static str, active: bool| {
+            let rest = div().absolute().bg(c.sidebar_border);
+            let rest = if vertical {
+                rest.top_0().bottom_0().left((sash_size - px(1.0)) / 2.0).w(px(1.0))
+            } else {
+                rest.left_0().right_0().top((sash_size - px(1.0)) / 2.0).h(px(1.0))
+            };
             div()
-                .flex_none()
-                // `sidebar_width` counts the gap to the window's side, which is the body's padding.
-                .w(sidebar_width - gap)
-                .h_full()
-                .child(self.render_sidebar(narrow, cx))
-        });
-        // The sidebar's edge: dragged, its width; not while it shows only its icons.
-        let sidebar_sash = (self.sidebar_visible && !narrow).then(|| {
+                .absolute()
+                .inset_0()
+                .when(compact_density, |d| d.child(rest))
+                .child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .rounded_full()
+                        .group_hover(group, move |s| s.bg(c.accent))
+                        .when(active, |d| d.bg(c.accent)),
+                )
+        };
+        let grip = move |vertical: bool| {
+            let dot = || div().flex_none().size(px(2.0)).rounded_full().bg(c.text_muted);
+            div().flex().gap(px(2.0)).when(vertical, |d| d.flex_col()).child(dot()).child(dot()).child(dot())
+        };
+        // Lit while dragged - and both while their corner is under the mouse or dragged.
+        let corner = matches!(self.drag, Some(Drag::Corner { .. })) || self.corner_hover;
+        let (dragging_primary, dragging_secondary, dragging_panel) = (
+            corner || matches!(self.drag, Some(Drag::Sidebar { .. })),
+            matches!(self.drag, Some(Drag::Secondary { .. })),
+            corner || matches!(self.drag, Some(Drag::Panel { .. })),
+        );
+        // Where the primary side bar's and the panel's sashes meet: dragged, both move - an invisible square over
+        // their crossing (the two lines light up), a little larger than a sash to be easy to catch.
+        let corner_size = sash_size + px(4.0);
+        let corner_handle = move |cx: &mut Context<Self>| {
             div()
-                .id("sidebar-sash")
-                .flex_none()
-                .w(sash_size)
-                .h_full()
-                .cursor(gpui::CursorStyle::ResizeLeftRight)
+                .id("sash-corner")
+                .absolute()
+                .size(corner_size)
+                // Windows' Move pointer: it moves two edges. GPUI has none, so `move_pointer` sets it while the mouse is on
+                // the corner or drags it (the crosshair is what GPUI shows where that can't, off Windows).
+                .cursor(gpui::CursorStyle::Crosshair)
+                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                    this.corner_hover = *hovered;
+                    background::move_pointer(*hovered || matches!(this.drag, Some(Drag::Corner { .. })));
+                    cx.notify();
+                }))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
-                        this.drag = Some(Drag::Sidebar { start_x: e.position.x, start_width: sidebar_width });
+                        this.drag = Some(Drag::Corner {
+                            start_x: e.position.x,
+                            start_width: primary_width,
+                            start_y: e.position.y,
+                            start_height: panel_height,
+                        });
                         cx.stop_propagation();
                     }),
                 )
+        };
+        let has_corner = self.primary_visible && self.panel_visible && !maximized;
+        // A vertical sash: its line, its dots (not in Compact), dragged sideways.
+        let side_sash = |id: &'static str, active: bool| {
+            div()
+                .id(id)
+                .group(id)
+                .flex_none()
+                .w(sash_size)
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .relative()
+                .child(sash_line(true, id, active))
+                .when(!compact_density, |d| {
+                    d.child(div().absolute().inset_0().flex().items_center().justify_center().child(grip(true)))
+                })
+                .cursor(gpui::CursorStyle::ResizeLeftRight)
+        };
+        // An empty side bar - kept for what comes later. `out` of it shows while it slides: its content keeps its
+        // width and is cut off, so nothing in it moves about.
+        let side_card = |id: &'static str, width: gpui::Pixels, out: f32| {
+            div().flex_none().w(width * out).h_full().overflow_hidden().child(
+                div()
+                    .id(id)
+                    .w(width)
+                    .h_full()
+                    .bg(c.window_bg)
+                    .when(!compact_density, |d| {
+                        d.rounded(theme.metrics.card_radius).border_1().border_color(c.card_border)
+                    }),
+            )
+        };
+
+        // The primary side: the activity bar (its icons alone), the primary side bar and its sash - from the window's
+        // side inwards.
+        let activity = self.sidebar_visible.then(|| {
+            div()
+                .flex_none()
+                .flex()
+                .h_full()
+                // `sidebar_width` counts the gap to the window's side, which is the body's padding.
+                .child(div().flex_none().w(sidebar_width - gap).h_full().child(self.render_sidebar(cx)))
         });
+        let primary = (primary_out > 0.0).then(|| {
+            let sash = side_sash("sidebar-sash", dragging_primary)
+                .when(has_corner && under_primary, |d| {
+                    d.child(corner_handle(cx).bottom(-corner_size).left((sash_size - corner_size) / 2.0))
+                })
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                        this.drag = Some(Drag::Sidebar { start_x: e.position.x, start_width: primary_width });
+                        cx.stop_propagation();
+                    }),
+                );
+            (side_card("primary-side-bar", primary_width, primary_out), sash)
+        });
+        let primary_group = (activity.is_some() || primary.is_some()).then(|| {
+            // The primary side bar and its sash side by side (touching); the activity bar the card gap from them (none
+            // in Compact, where a line divides them).
+            let side = primary.map(|(card, sash)| {
+                let mut both = vec![card.into_any_element(), sash.into_any_element()];
+                if sidebar_right {
+                    both.reverse();
+                }
+                div().flex().flex_none().h_full().children(both)
+            });
+            let mut parts: Vec<gpui::AnyElement> = Vec::new();
+            if let Some(a) = activity {
+                parts.push(a.into_any_element());
+            }
+            if let Some(side) = side {
+                parts.push(side.into_any_element());
+            }
+            if sidebar_right {
+                parts.reverse();
+            }
+            div().flex().flex_none().h_full().gap(gap).children(parts)
+        });
+        // The secondary side: its sash and the secondary side bar - from the page outwards.
+        let secondary_group = (secondary_out > 0.0).then(|| {
+            let sash = side_sash("secondary-sash", dragging_secondary).on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                    this.drag = Some(Drag::Secondary { start_x: e.position.x, start_width: secondary_width });
+                    cx.stop_propagation();
+                }),
+            );
+            let card = side_card("secondary-side-bar", secondary_width, secondary_out);
+            let parts: Vec<gpui::AnyElement> = if sidebar_right {
+                vec![card.into_any_element(), sash.into_any_element()]
+            } else {
+                vec![sash.into_any_element(), card.into_any_element()]
+            };
+            div().flex().flex_none().h_full().children(parts)
+        });
+
         let page_card = (!maximized).then(|| div().flex_1().min_h_0().min_w_0().child(card(page, c.window_bg)));
-        let panel_part = self.panel_visible.then(|| {
+        let panel_part = (maximized || panel_out > 0.0).then(|| {
             let panel = card(
                 div()
                     .relative()
@@ -826,19 +1196,32 @@ impl Render for Workspace {
                     .into_any_element(),
                 c.log_bg,
             );
-            div()
+            let part = div()
                 .flex()
                 .flex_col()
                 .when(maximized, |d| d.flex_1().min_h_0())
                 .when(!maximized, |d| d.flex_none().h(panel_height + sash_size))
                 .child(
-                    // The panel's edge: dragged, its height; closed when dragged far enough down.
+                    // The panel's edge: dragged, its height - down to its smallest, never closed by it.
                     div()
                         .id("panel-sash")
+                        .group("panel-sash")
                         .flex_none()
                         .h(sash_size)
                         .w_full()
-                        .when(compact_density, |d| d.border_b_1().border_color(c.card_border))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .relative()
+                        .child(sash_line(false, "panel-sash", dragging_panel))
+                        .when(!compact_density, |d| {
+                            d.child(div().absolute().inset_0().flex().items_center().justify_center().child(grip(false)))
+                        })
+                        // Beside the primary side bar's sash when the panel doesn't run under it.
+                        .when(has_corner && !under_primary, |d| {
+                            let handle = corner_handle(cx).top((sash_size - corner_size) / 2.0);
+                            d.child(if sidebar_right { handle.right(-corner_size) } else { handle.left(-corner_size) })
+                        })
                         .cursor(gpui::CursorStyle::ResizeUpDown)
                         .on_mouse_down(
                             MouseButton::Left,
@@ -848,50 +1231,52 @@ impl Render for Workspace {
                             }),
                         ),
                 )
-                .child(div().flex_1().min_h_0().child(panel))
+                .child(div().flex_1().min_h_0().child(panel));
+            // While it slides, `out` of its height shows - the panel itself keeps its height and is cut off.
+            if maximized {
+                part
+            } else {
+                div().flex_none().h((panel_height + sash_size) * panel_out).overflow_hidden().child(part)
+            }
         });
         let bottom_gap = !self.panel_visible && !status_bar_visible;
         // The gap under the cards when neither the panel nor the status bar is there (the sides': the body's padding).
         let bottom_gutter = || div().flex_none().h(gap);
-        let body = if panel_under_sidebar {
-            let mut top = div().flex().flex_1().min_h_0();
-            let page_col = div().flex().flex_col().flex_1().min_w_0().children(page_card);
-            top = if sidebar_right {
-                top.child(page_col).children(sidebar_sash).children(sidebar)
-            } else {
-                top.children(sidebar).children(sidebar_sash).child(page_col)
-            };
-            div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h_0()
-                .pad(px(0.0), gap)
-                .bg(c.sidebar_bg)
-                .when(!maximized, |d| d.child(top))
-                .when_some(panel_part, |d, panel| d.child(div().flex().flex_col().when(maximized, |d| d.flex_1().min_h_0()).child(panel)))
-                .when(bottom_gap, |d| d.child(bottom_gutter()))
-        } else {
-            let column = div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_w_0()
-                .children(page_card)
-                .children(panel_part)
-                .when(bottom_gap, |d| d.child(bottom_gutter()));
-            let row = div().flex().flex_1().min_h_0().pad(px(0.0), gap).bg(c.sidebar_bg);
-            if sidebar_right {
-                row.child(column).children(sidebar_sash).children(sidebar)
-            } else {
-                row.children(sidebar).children(sidebar_sash).child(column)
-            }
-        };
+        // The sides as they sit on screen; each beside the panel too, or over it when the panel runs under it.
+        let (left_group, right_group) =
+            if sidebar_right { (secondary_group, primary_group) } else { (primary_group, secondary_group) };
+        let (left_over, left_beside) = if panel_left { (left_group, None) } else { (None, left_group) };
+        let (right_over, right_beside) = if panel_right { (right_group, None) } else { (None, right_group) };
+        let top = div().flex().flex_1().min_h_0().children(left_over).children(page_card).children(right_over);
+        let column = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .when(!maximized, |d| d.child(top))
+            .children(panel_part)
+            .when(bottom_gap, |d| d.child(bottom_gutter()));
+        let body = div()
+            .flex()
+            .flex_1()
+            .min_h_0()
+            .pad(px(0.0), gap)
+            .bg(c.sidebar_bg)
+            .children(left_beside)
+            .child(column)
+            .children(right_beside);
 
         div()
             .id("workspace")
+            // A popup open - Settings, a prompt, a dialog, a menu, the Columns popup - and Esc closes it.
             .key_context(
-                if self.settings.is_some() || has_prompt || self.dialog.is_some() || self.menu.is_some() {
+                if self.settings.is_some()
+                    || has_prompt
+                    || self.dialog.is_some()
+                    || self.menu.is_some()
+                    || self.projects.read(cx).columns_open()
+                {
                     "Workspace Modal"
                 } else {
                     "Workspace"
@@ -900,45 +1285,66 @@ impl Render for Workspace {
             .track_focus(&self.focus)
             .on_mouse_move(cx.listener(move |this, e: &gpui::MouseMoveEvent, window, cx| {
                 let Some(drag) = this.drag else { return };
+                // The button let go outside the window: the drag is over (its sash no longer lit).
                 if e.pressed_button != Some(MouseButton::Left) {
                     this.drag = None;
+                    cx.notify();
                     return;
                 }
                 match drag {
+                    // The side bars stop at their smallest width - a drag doesn't close them (as the panel).
                     Drag::Sidebar { start_x, start_width } => {
                         let moved = if sidebar_right { start_x - e.position.x } else { e.position.x - start_x };
-                        let wanted = start_width + moved;
-                        if wanted < px(MIN_SIDEBAR / 2.0) {
-                            this.sidebar_visible = false;
-                            this.drag = None;
-                        } else {
-                            this.sidebar_width = Some(wanted.clamp(px(MIN_SIDEBAR), px(MAX_SIDEBAR)));
-                        }
+                        this.sidebar_width = Some((start_width + moved).clamp(px(MIN_SIDEBAR), px(MAX_SIDEBAR)));
                     }
+                    Drag::Secondary { start_x, start_width } => {
+                        let moved = if sidebar_right { e.position.x - start_x } else { start_x - e.position.x };
+                        this.secondary_width = Some((start_width + moved).clamp(px(MIN_SIDEBAR), px(MAX_SIDEBAR)));
+                    }
+                    Drag::Stages { start_x, start_width } => {
+                        let wanted = start_width + (e.position.x - start_x);
+                        this.output_stages_width = Some(wanted.clamp(px(MIN_STAGES), px(MAX_STAGES)));
+                    }
+                    // The panel stops at its smallest height - dragging it down doesn't close it (Ctrl+J, ✕ do).
                     Drag::Panel { start_y, start_height } => {
                         let wanted = start_height + (start_y - e.position.y);
-                        let most = window.viewport_size().height - px(160.0);
-                        if wanted < px(MIN_PANEL / 2.0) {
-                            this.panel_visible = false;
-                            this.drag = None;
-                        } else {
-                            this.panel_height = Some(wanted.clamp(px(MIN_PANEL), most.max(px(MIN_PANEL))));
-                        }
+                        let most = window.viewport_size().height - px(PANEL_LEAVES);
+                        this.panel_height = Some(wanted.clamp(px(MIN_PANEL), most.max(px(MIN_PANEL))));
+                    }
+                    Drag::Corner { start_x, start_width, start_y, start_height } => {
+                        let moved = if sidebar_right { start_x - e.position.x } else { e.position.x - start_x };
+                        this.sidebar_width = Some((start_width + moved).clamp(px(MIN_SIDEBAR), px(MAX_SIDEBAR)));
+                        let wanted = start_height + (start_y - e.position.y);
+                        let most = window.viewport_size().height - px(PANEL_LEAVES);
+                        this.panel_height = Some(wanted.clamp(px(MIN_PANEL), most.max(px(MIN_PANEL))));
                     }
                 }
                 cx.notify();
             }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.drag = None))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    // A corner drag ended: its Move pointer only while the mouse is still on the corner.
+                    if matches!(this.drag, Some(Drag::Corner { .. })) {
+                        background::move_pointer(this.corner_hover);
+                    }
+                    // Drawn again, so the sash that was dragged is no longer lit.
+                    if this.drag.take().is_some() {
+                        cx.notify();
+                    }
+                }),
+            )
             .on_action(cx.listener(|this, _: &MaximizePanel, _, cx| {
                 this.panel_visible = true;
                 this.panel_maximized = !this.panel_maximized;
                 cx.notify();
             }))
-            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
+            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_primary(cx)))
+            .on_action(cx.listener(|this, _: &ToggleSecondarySidebar, _, cx| this.toggle_secondary(cx)))
             .on_action(cx.listener(|this, _: &TogglePanel, _, cx| this.toggle_panel(cx)))
             .on_action(cx.listener(|this, _: &ShowCommands, window, cx| this.show_palette(true, window, cx)))
             .on_action(cx.listener(|this, _: &QuickOpen, window, cx| this.show_palette(false, window, cx)))
-            .on_action(cx.listener(|this, _: &ShowTerminal, window, cx| this.show_terminal(window, cx)))
+            .on_action(cx.listener(|this, _: &ShowTerminal, window, cx| this.toggle_terminal(window, cx)))
             .on_action(cx.listener(|this, _: &NewTerminal, window, cx| this.new_terminal(None, false, window, cx)))
             .on_action(cx.listener(|this, _: &GoToProjects, window, cx| this.go(Page::Projects, window, cx)))
             .on_action(cx.listener(|this, _: &GoToNewProject, window, cx| this.go(Page::NewProject, window, cx)))
@@ -970,7 +1376,16 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &SearchProjects, window, cx| this.search_projects(window, cx)))
-            .on_action(cx.listener(|this, _: &ShowOutput, _, cx| this.show_output(cx)))
+            // Ctrl+F finds in what is in front: Settings' own search while it is open (a binding takes the key before
+            // the page's key handler could, and the focus may not be in the page), else the panel's Find bar.
+            .on_action(cx.listener(|this, _: &FindInPanel, window, cx| {
+                if let Some(Modal::Settings(page, _)) = &this.settings {
+                    page.update(cx, |p, cx| p.focus_search(window, cx));
+                } else {
+                    this.open_find(window, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ShowOutput, _, cx| this.toggle_output(cx)))
             .relative()
             .size_full()
             .flex()
@@ -983,7 +1398,7 @@ impl Render for Workspace {
             .child(body)
             .when(status_bar_visible, |d| d.child(self.render_status_bar(sidebar_width, cx)))
             .when_some(self.settings.as_ref().map(|m| m.view()), |d, view| {
-                d.child(
+                d.child(ui::fade_in(
                     div()
                         .id("modal-backdrop")
                         .absolute()
@@ -1017,12 +1432,14 @@ impl Render for Workspace {
                                     .child(view),
                             ),
                         ),
-                )
+                    "modal-fade",
+                    cx,
+                ))
             })
             .child(self.render_toasts(status_bar_visible, cx))
             .when_some(self.render_menu(cx), |d, menu| d.child(menu))
             .when_some(self.dialog.as_ref().map(|(view, _)| view.clone()), |d, view| {
-                d.child(
+                d.child(ui::fade_in(
                     div()
                         .id("dialog-backdrop")
                         .absolute()
@@ -1033,9 +1450,13 @@ impl Render for Workspace {
                         .bg(c.modal_backdrop)
                         .occlude()
                         .child(view),
-                )
+                    "dialog-fade",
+                    cx,
+                ))
             })
-            .when_some(self.palette.clone(), |d, palette| d.child(palette))
+            .when_some(self.palette.clone(), |d, palette| {
+                d.child(ui::fade_in(div().absolute().inset_0().child(palette), "palette-fade", cx))
+            })
             .when_some(self.tour.as_ref().map(|(t, _)| t.clone()), |d, tour| d.child(tour))
             .when(has_prompt, |d| d.child(self.render_prompt(cx)))
     }
@@ -1062,7 +1483,9 @@ impl Workspace {
                 .rounded(px(5.0))
                 .cursor_pointer()
                 .hover(move |s| s.bg(c.hover_bg))
-                .tooltip(Tooltip::text(tip))
+                .tip(tip)
+                // Out of the caption's drag area: a press here is a click, not the start of a move.
+                .occlude()
         };
         let caption = |id: &'static str, glyph: &'static str, area: WindowControlArea, hover| {
             div()
@@ -1073,18 +1496,25 @@ impl Workspace {
                 .w(theme.metrics.caption_button_width)
                 .h(h)
                 .window_control_area(area)
+                // Only its own area under the mouse - not the caption's drag area too.
+                .occlude()
                 .hover(move |s| s.bg(hover))
-                .child(ui::icon(glyph, 10.0, c.text_primary, cx))
+                .child(ui::icon(glyph, icons::SIZE_SMALL, c.text_primary, cx))
         };
         div()
             .relative()
             .flex()
             .flex_none()
             .items_center()
+            // The logo at the left, the buttons at the right (the command center is a layer over the whole bar).
+            .justify_between()
             .h(h)
             .bg(c.sidebar_bg)
             .when(theme.metrics.card_gap == px(0.0), |d| d.border_b_1().border_color(c.sidebar_border))
             .window_control_area(WindowControlArea::Drag)
+            // Over the workspace for the mouse: its focus handling marks every press as handled, which on Windows
+            // stops a press on the caption from moving the window. The bar's own buttons are on top of it.
+            .occlude()
             // The command center, centred on the window.
             .child(
                 div().absolute().inset_0().flex().items_center().justify_center().child(
@@ -1092,9 +1522,9 @@ impl Workspace {
                         .id("command-center")
                         .flex()
                         .items_center()
-                        .gap(px(6.0))
+                        .gap(px(icons::LABEL_GAP))
                         .w(relative_width(window, 0.38, 600.0))
-                        .h(px(22.0))
+                        .h(px(26.0))
                         .pad(px(0.0), px(8.0))
                         .rounded(px(6.0))
                         .border_1()
@@ -1105,11 +1535,12 @@ impl Workspace {
                         .text_color(c.command_center_fg)
                         .cursor_pointer()
                         .hover(move |s| s.bg(c.command_center_hover_bg).border_color(c.command_center_hover_border))
-                        .tooltip(Tooltip::text("Search projects and commands"))
+                        .tip("Search projects and commands")
+                        .occlude()
                         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.show_palette(false, window, cx)))
                         .relative()
                         .child(dnnm_dialogs::tour::target(dnnm_dialogs::tour::TourPart::CommandCenter, &self.tour_targets))
-                        .child(ui::icon(icons::SEARCH, 12.0, c.command_center_fg, cx))
+                        .child(ui::icon(icons::SEARCH, icons::SIZE, c.command_center_fg, cx))
                         .child(
                             div()
                                 .overflow_hidden()
@@ -1135,7 +1566,6 @@ impl Workspace {
                         )
                     }),
             )
-            .child(div().flex_1())
             .child(
                 // Help, a line, the layout buttons, a line, the window's buttons.
                 div()
@@ -1147,13 +1577,19 @@ impl Workspace {
                             .relative()
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(|this, e: &gpui::MouseDownEvent, _, cx| {
+                                cx.listener(|this, _: &gpui::MouseDownEvent, _, cx| {
                                     cx.stop_propagation();
-                                    this.open_help_menu(gpui::point(e.position.x - px(8.0), px(30.0)), cx);
+                                    // Under the button, their left edges level.
+                                    let (position, corner) = this.help_anchor.below(false);
+                                    this.open_help_menu(position, cx);
+                                    if let Some(menu) = this.menu.as_mut() {
+                                        menu.anchor = corner;
+                                    }
                                 }),
                             )
+                            .child(self.help_anchor.measure())
                             .child(dnnm_dialogs::tour::target(dnnm_dialogs::tour::TourPart::HelpButton, &self.tour_targets))
-                            .child(ui::icon(icons::QUESTION, 13.0, c.text_primary, cx)),
+                            .child(ui::icon(icons::QUESTION, icons::SIZE, c.text_primary, cx)),
                     )
                     .child(div().w(px(1.0)).h(px(16.0)).bg(c.sidebar_divider))
                     .child(
@@ -1171,19 +1607,16 @@ impl Workspace {
                             .child(
                                 layout_button(
                                     "toggle-sidebar",
-                                    if self.sidebar_visible {
-                                        "Hide the pages on the left"
+                                    if self.primary_visible {
+                                        "Hide Primary Side Bar (Ctrl+B)"
                                     } else {
-                                        "Show the pages on the left"
+                                        "Show Primary Side Bar (Ctrl+B)"
                                     },
                                 )
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.sidebar_visible = !this.sidebar_visible;
-                                    cx.notify();
-                                }))
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_primary(cx)))
                                 .child(icons::layout_icon(
                                     if sidebar_right { LayoutIcon::SidebarRight } else { LayoutIcon::SidebarLeft },
-                                    self.sidebar_visible,
+                                    self.primary_visible,
                                     c.text_primary,
                                 )),
                             )
@@ -1199,6 +1632,22 @@ impl Workspace {
                                 .child(icons::layout_icon(
                                     LayoutIcon::Panel,
                                     self.panel_visible,
+                                    c.text_primary,
+                                )),
+                            )
+                            .child(
+                                layout_button(
+                                    "toggle-secondary",
+                                    if self.secondary_visible {
+                                        "Hide Secondary Side Bar (Ctrl+Alt+B)"
+                                    } else {
+                                        "Show Secondary Side Bar (Ctrl+Alt+B)"
+                                    },
+                                )
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_secondary(cx)))
+                                .child(icons::layout_icon(
+                                    if sidebar_right { LayoutIcon::SidebarLeft } else { LayoutIcon::SidebarRight },
+                                    self.secondary_visible,
                                     c.text_primary,
                                 )),
                             ),
@@ -1220,46 +1669,43 @@ impl Workspace {
             )
     }
 
-    /// The sidebar: Projects and New project; the gear at the bottom. Icons only in a narrow window.
-    fn render_sidebar(&self, narrow: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The activity bar: Projects and New project, the gear at the bottom - their icons alone (VS Code's).
+    fn render_sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        // An entry is a square this big: its 16 px glyph, 8 px around it.
+        const ENTRY: f32 = 32.0;
         let theme = Theme::get(cx).clone();
         let c = theme.colors;
         let compact_density = theme.metrics.card_gap == px(0.0);
         let sidebar_right =
             self.store.read(cx).settings.sidebar_position() == dnnm_application::settings::SidebarPosition::Right;
-        // How far the sidebar's inner edge is from the window's side.
-        let width = if narrow {
-            theme.metrics.sidebar_compact_width
-        } else {
-            self.sidebar_width.unwrap_or(theme.metrics.sidebar_width)
-        };
-        let sidebar_edge = width + if compact_density { px(0.0) } else { theme.metrics.card_gap };
+        // How far the activity bar's inner edge is from the window's side.
+        let sidebar_edge =
+            theme.metrics.sidebar_compact_width + if compact_density { px(0.0) } else { theme.metrics.card_gap };
         // The gear's menu opens upwards from it; Help's opens down from the title bar.
         let gear_open = self.menu.as_ref().is_some_and(|m| m.anchor != gpui::Corner::TopLeft);
-        let entry = |id: &'static str, glyph: &'static str, label: &'static str, tip: &'static str, selected: bool| {
+        // An entry: its icon alone, what it is in its tooltip (VS Code's activity bar).
+        let entry = |id: &'static str, glyph: &'static str, tip: &'static str, selected: bool| {
             div()
                 .id(id)
                 .flex()
                 .items_center()
-                .gap(px(6.0))
-                .pad(px(9.0), px(if narrow { 3.0 } else { 7.0 }))
+                .justify_center()
+                .size(px(ENTRY))
+                .flex_none()
                 .rounded(theme.metrics.card_radius)
                 .cursor_pointer()
                 .text_size(theme.text.medium)
                 .text_color(if selected { c.sidebar_active_fg } else { c.sidebar_fg })
                 .when(selected, |d| d.bg(c.sidebar_selected))
                 .when(!selected, |d| d.hover(move |s| s.bg(c.sidebar_hover)))
-                .tooltip(Tooltip::text(tip))
-                .child(div().flex().justify_center().w(px(30.0)).child(ui::icon(
-                    glyph,
-                    16.0,
-                    if selected { c.sidebar_active_fg } else { c.sidebar_fg },
-                    cx,
-                )))
-                .when(!narrow, |d| d.child(div().child(label)))
+                .tip_beside(tip)
+                .child(ui::icon(glyph, icons::SIZE_NAV, if selected { c.sidebar_active_fg } else { c.sidebar_fg }, cx))
         };
-        // The entries' groups: 9 px over the first and under the last, 2 px between them, inset from the sides.
-        let group = || div().flex().flex_col().gap(px(2.0)).pad(px(9.0), px(if narrow { 6.0 } else { 8.0 }));
+        // The entries' groups: as much room above the first and below the last as beside them (the bar's width less
+        // its edge lines and the entry, halved), 4 px between them.
+        let edges = if compact_density { px(1.0) } else { px(2.0) };
+        let room = (theme.metrics.sidebar_compact_width - edges - px(ENTRY)) / 2.0;
+        let group = move || div().flex().flex_col().items_center().gap(px(4.0)).p(room);
         div()
             .size_full()
             .flex()
@@ -1267,7 +1713,9 @@ impl Workspace {
             .justify_between()
             .bg(c.sidebar_bg)
             .when(!compact_density, |d| d.rounded(theme.metrics.card_radius).border_1().border_color(c.card_border))
-            .when(compact_density, |d| d.border_r_1().border_color(c.sidebar_border))
+            // Its edge in Compact: a line on the side towards the page.
+            .when(compact_density && !sidebar_right, |d| d.border_r_1().border_color(c.sidebar_border))
+            .when(compact_density && sidebar_right, |d| d.border_l_1().border_color(c.sidebar_border))
             .child(
                 group()
                     .relative()
@@ -1276,7 +1724,6 @@ impl Workspace {
                         entry(
                             "nav-projects",
                             icons::LIST,
-                            "Projects",
                             "Projects - every website on this computer (Ctrl+1)",
                             self.page == Page::Projects,
                         )
@@ -1286,7 +1733,6 @@ impl Workspace {
                         entry(
                             "nav-new",
                             icons::ADD,
-                            "New project",
                             "New project - create a website, or one from a backup (Ctrl+2)",
                             self.page == Page::NewProject,
                         )
@@ -1296,8 +1742,9 @@ impl Workspace {
                     ),
             )
             .child(group().child(
-                entry("nav-gear", icons::SETTINGS, "Settings", "Settings, themes, Troubleshoot and updates", gear_open)
+                entry("nav-gear", icons::SETTINGS, "Settings, themes, Troubleshoot and updates", gear_open)
                     .relative()
+                    .child(self.gear_anchor.measure())
                     .child(dnnm_dialogs::tour::target(dnnm_dialogs::tour::TourPart::ManageButton, &self.tour_targets))
                     .on_mouse_down(
                         MouseButton::Left,
@@ -1306,7 +1753,7 @@ impl Workspace {
                             if this.menu.take().is_none() {
                                 // Beside the gear - right of the sidebar (left of it on the right) - its bottom level
                                 // with the gear's (`Manage_Click`).
-                                let bottom = e.position.y + px(17.0);
+                                let bottom = this.gear_anchor.bounds().map_or(e.position.y + px(17.0), |b| b.bottom());
                                 let (x, corner) = if sidebar_right {
                                     (window.viewport_size().width - sidebar_edge - px(6.0), gpui::Corner::BottomRight)
                                 } else {
@@ -1375,9 +1822,11 @@ impl Workspace {
                             .items_start()
                             .gap(px(14.0))
                             .pad(px(19.0), px(20.0))
-                            .child(ui::icon(glyph, 26.0, glyph_color, cx))
+                            // Centred on the question's first line, however many lines it takes.
+                            .child(ui::line_icon(glyph, icons::SIZE_LARGE, glyph_color, cx))
                             .child(
-                                div().id("prompt-text").flex_1().max_h(px(360.0)).overflow_y_scroll().child(question),
+                                // `min_w_0`: without it a long line (a path) widens the text past the dialog instead of wrapping.
+                                div().id("prompt-text").flex_1().min_w_0().max_h(px(360.0)).overflow_y_scroll().child(question),
                             ),
                     )
                     .child(
@@ -1433,6 +1882,302 @@ impl Workspace {
     }
 
     /// The bottom panel's Output tab (`Controls/PipelineView`): the last operation's status, title and lines.
+    /// While an operation runs and the panel is open, the Output's clock and the running stage's time move: a redraw
+    /// every second (`PipelineView`'s clock) - stopped once it has ended or the panel is closed.
+    fn keep_output_clock(&mut self, cx: &mut Context<Self>) {
+        let running = |ws: &Workspace, cx: &App| {
+            ws.panel_visible && ws.store.read(cx).runs.last().is_some_and(|r| r.status == RunStatus::Running)
+        };
+        if !running(self, cx) || self.output_tick.is_some() {
+            return;
+        }
+        self.output_tick = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                let go_on = this
+                    .update(cx, |ws, cx| {
+                        let go_on = running(ws, cx);
+                        if go_on {
+                            cx.notify();
+                        } else {
+                            ws.output_tick = None;
+                        }
+                        go_on
+                    })
+                    .unwrap_or(false);
+                if !go_on {
+                    break;
+                }
+            }
+        }));
+    }
+
+    /// Ctrl+F: the panel's Find bar on the shown tab - opened (the panel too), or its text selected to type over.
+    pub(crate) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.panel_visible = true;
+        if self.find.is_none() {
+            let input = cx.new(|cx| TextInput::new("Find", cx));
+            let changed = cx.subscribe(&input, |this, _, _: &TextChanged, cx| {
+                if let Some(find) = this.find.as_mut() {
+                    find.current = 0;
+                    find.reveal = true;
+                }
+                cx.notify();
+            });
+            // A log that grows is searched again.
+            let logs = cx.observe(&self.logs, |_, _, cx| cx.notify());
+            self.find = Some(PanelFind {
+                input,
+                match_case: false,
+                whole_word: false,
+                use_regex: false,
+                current: 0,
+                reveal: true,
+                count: 0,
+                stopped: false,
+                error: None,
+                _changed: changed,
+                _watching: vec![logs],
+                watched_terminal: None,
+                searched_tab: None,
+            });
+        }
+        if let Some(find) = &self.find {
+            let handle = find.input.read(cx).focus_handle(cx);
+            window.focus(&handle);
+        }
+        cx.notify();
+    }
+
+    fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.find.take().is_some() {
+            self.clear_find_marks(cx);
+            window.focus(&self.focus);
+            cx.notify();
+        }
+    }
+
+    /// Enter / Shift+Enter, ↓ / ↑: the next or previous match, round from the last to the first.
+    fn step_find(&mut self, by: isize, cx: &mut Context<Self>) {
+        if let Some(find) = self.find.as_mut()
+            && find.count > 0
+        {
+            find.current = (find.current as isize + by).rem_euclid(find.count as isize) as usize;
+            find.reveal = true;
+            cx.notify();
+        }
+    }
+
+    fn toggle_find_option(&mut self, option: fn(&mut PanelFind) -> &mut bool, cx: &mut Context<Self>) {
+        if let Some(find) = self.find.as_mut() {
+            let on = option(find);
+            *on = !*on;
+            find.current = 0;
+            find.reveal = true;
+            cx.notify();
+        }
+    }
+
+    /// No highlights left anywhere: the bar closed, or its tab no longer shown.
+    fn clear_find_marks(&mut self, cx: &mut Context<Self>) {
+        self.output_marks.clear();
+        self.logs.update(cx, |l, cx| l.set_find(&[], None, false, cx));
+        if let Some(view) = self.terminal.as_ref().and_then(|t| t.read(cx).shown().cloned()) {
+            view.update(cx, |v, cx| v.set_find(Default::default(), Default::default(), None, cx));
+        }
+    }
+
+    /// Searches the shown tab with the Find bar's text and options (`PanelSearch`): its count for the bar, and its
+    /// matches highlighted there - the current one brought into view when asked. Every draw: the text may have grown.
+    fn update_find(&mut self, cx: &mut Context<Self>) {
+        let Some(find) = self.find.as_ref() else { return };
+        if !self.panel_visible {
+            return;
+        }
+        let on_terminal = self.panel_tab == PanelTab::Terminal && self.terminal.is_some();
+        let on_logs = self.panel_tab == PanelTab::Logs;
+        let text = find.input.read(cx).text().to_string();
+        let query = dnnm_logs::search::SearchQuery::new(&text, find.match_case, find.whole_word, find.use_regex);
+        let terminal_view = self.terminal.as_ref().filter(|_| on_terminal).and_then(|t| t.read(cx).shown().cloned());
+        let lines: Vec<String> = if let Some(view) = &terminal_view {
+            view.read(cx).find_lines()
+        } else if on_logs {
+            self.logs.read(cx).find_lines().iter().map(|l| l.to_string()).collect()
+        } else {
+            self.store.read(cx).runs.last().map(|r| r.lines.iter().map(|l| l.text.to_string()).collect()).unwrap_or_default()
+        };
+        let result = query.find(&lines);
+        let count = result.matches.len();
+        let find = self.find.as_mut().expect("checked above");
+        if find.searched_tab != Some(self.panel_tab) {
+            find.searched_tab = Some(self.panel_tab);
+            find.current = 0;
+            find.reveal = true;
+        }
+        if find.current >= count {
+            find.current = 0;
+        }
+        let current = (count > 0).then_some(find.current);
+        let reveal = std::mem::take(&mut find.reveal);
+        find.count = count;
+        find.stopped = result.stopped;
+        find.error = query.error().map(str::to_string);
+        // A terminal's output grows too: the one shown is watched while the bar is open.
+        let terminal_id = terminal_view.as_ref().map(|v| v.entity_id());
+        if terminal_id != find.watched_terminal {
+            find.watched_terminal = terminal_id;
+            find._watching.truncate(1);
+            if let Some(view) = &terminal_view {
+                let watch = cx.observe(view, |_, _, cx| cx.notify());
+                if let Some(find) = self.find.as_mut() {
+                    find._watching.push(watch);
+                }
+            }
+        }
+        let current_line = current.and_then(|i| result.matches.get(i)).map(|m| m.line);
+
+        // Each tab: its own matches; the others none.
+        self.output_marks =
+            if !on_logs && !on_terminal { marks_by_line(&result.matches, current) } else { Default::default() };
+        if !on_logs && !on_terminal && reveal {
+            self.output_reveal.set(current_line);
+        }
+        let log_matches: &[dnnm_logs::search::Match] = if on_logs { &result.matches } else { &[] };
+        self.logs.update(cx, |l, cx| l.set_find(log_matches, current.filter(|_| on_logs), reveal && on_logs, cx));
+        if let Some(view) = self.terminal.as_ref().and_then(|t| t.read(cx).shown().cloned()) {
+            let marks = if on_terminal { terminal_marks(&lines, &result.matches, current) } else { Default::default() };
+            let colors = ui::find_colors(cx);
+            let line = current_line.filter(|_| reveal && on_terminal);
+            view.update(cx, |v, cx| v.set_find(marks, colors, line, cx));
+        }
+    }
+
+    /// The Find bar, over the top right of the shown tab (`PanelSearch`): the text with Match Case, Whole Word and
+    /// Regular Expression in its box, the count, previous, next and close.
+    fn render_find_bar(&self, find: &PanelFind, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let theme = Theme::get(cx).clone();
+        let c = theme.colors;
+        let option = |id: &'static str, label: &'static str, tip: &'static str, on: bool| {
+            div()
+                .id(id)
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .w(px(22.0))
+                .h(px(18.0))
+                .rounded(px(3.0))
+                .border_1()
+                .border_color(if on { c.accent } else { gpui::transparent_black() })
+                .when(on, |d| d.bg(c.accent.opacity(0.25)))
+                .when(!on, |d| d.hover(move |s| s.bg(c.hover_bg)))
+                .cursor_pointer()
+                .text_size(theme.text.small)
+                .text_color(if on { c.text_primary } else { c.log_muted })
+                .tip(tip)
+                .child(label)
+        };
+        let count_text: SharedString = if find.error.is_some() {
+            "Invalid pattern".into()
+        } else if find.input.read(cx).text().is_empty() {
+            "".into()
+        } else if find.count == 0 {
+            "No results".into()
+        } else if find.stopped {
+            format!("{} of {}+", find.current + 1, find.count).into()
+        } else {
+            format!("{} of {}", find.current + 1, find.count).into()
+        };
+        let nav = |id: &'static str, glyph: &'static str, size: f32, tip: &'static str| {
+            div()
+                .id(id)
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .size(px(26.0))
+                .rounded(theme.metrics.control_radius)
+                .cursor_pointer()
+                .hover(move |s| s.bg(c.hover_bg))
+                .tip(tip)
+                .child(ui::icon(glyph, size, c.log_muted, cx))
+        };
+        div()
+            .id("panel-find")
+            .key_context("PanelFind")
+            .on_action(cx.listener(|this, _: &FindNext, _, cx| this.step_find(1, cx)))
+            .on_action(cx.listener(|this, _: &FindPrevious, _, cx| this.step_find(-1, cx)))
+            .on_action(cx.listener(|this, _: &FindClose, window, cx| this.close_find(window, cx)))
+            .on_action(cx.listener(|this, _: &FindToggleCase, _, cx| this.toggle_find_option(|f| &mut f.match_case, cx)))
+            .on_action(cx.listener(|this, _: &FindToggleWord, _, cx| this.toggle_find_option(|f| &mut f.whole_word, cx)))
+            .on_action(cx.listener(|this, _: &FindToggleRegex, _, cx| this.toggle_find_option(|f| &mut f.use_regex, cx)))
+            .absolute()
+            .top(px(41.0))
+            .right(px(20.0))
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .p(px(4.0))
+            .rounded(px(4.0))
+            .border_1()
+            .border_color(c.card_border)
+            .bg(c.card_bg)
+            .shadow_lg()
+            .occlude()
+            .child(
+                div()
+                    .id("panel-find-box")
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .w(px(260.0))
+                    .h(theme.metrics.search_height)
+                    .pad(px(0.0), px(6.0))
+                    .rounded(theme.metrics.control_radius)
+                    .border_1()
+                    .border_color(if find.error.is_some() { c.error_text } else { c.focus_border })
+                    .bg(c.input_bg)
+                    .text_size(theme.text.body)
+                    .when_some(find.error.clone(), |d, error| d.tip(error))
+                    .child(div().flex_1().min_w_0().child(find.input.clone()))
+                    .child(
+                        option("find-case", "Aa", "Match Case (Alt+C)", find.match_case)
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_find_option(|f| &mut f.match_case, cx))),
+                    )
+                    .child(
+                        option("find-word", "ab", "Match Whole Word (Alt+W)", find.whole_word)
+                            .underline()
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_find_option(|f| &mut f.whole_word, cx))),
+                    )
+                    .child(
+                        option("find-regex", ".*", "Use Regular Expression (Alt+R)", find.use_regex)
+                            .font_weight(FontWeight::BOLD)
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_find_option(|f| &mut f.use_regex, cx))),
+                    ),
+            )
+            .child(
+                div()
+                    .min_w(px(70.0))
+                    .pad(px(0.0), px(4.0))
+                    .text_size(theme.text.caption)
+                    .text_color(if find.error.is_some() { c.error_text } else { c.text_muted })
+                    .child(count_text),
+            )
+            .child(
+                nav("find-previous", icons::CHEVRON_UP, icons::SIZE, "Previous match (Shift+Enter)")
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.step_find(-1, cx))),
+            )
+            .child(
+                nav("find-next", icons::CHEVRON_DOWN, icons::SIZE, "Next match (Enter)")
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.step_find(1, cx))),
+            )
+            .child(
+                nav("find-close", icons::CLOSE, icons::SIZE_CLOSE, "Close (Esc)")
+                    .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.close_find(window, cx))),
+            )
+            .into_any_element()
+    }
+
     fn render_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
         let c = theme.colors;
@@ -1447,13 +2192,14 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .gap(px(5.0))
-                .pad(px(3.0), px(8.0))
+                .h(px(26.0))
+                .pad(px(0.0), px(8.0))
                 .rounded(theme.metrics.control_radius)
                 .cursor_pointer()
                 .text_size(theme.text.caption)
                 .when(chosen, |d| d.bg(c.sidebar_selected).text_color(c.log_header_fg))
                 .when(!chosen, |d| d.text_color(c.log_muted).hover(move |s| s.bg(c.hover_bg).text_color(c.log_header_fg)))
-                .tooltip(Tooltip::text(tip))
+                .tip(tip)
                 .child(label)
         };
         let on_terminal = self.panel_tab == PanelTab::Terminal && self.terminal.is_some();
@@ -1461,18 +2207,35 @@ impl Workspace {
         // The logs are followed only while they are seen (`LogsView.Paused`).
         let logs_seen = on_logs && self.panel_visible;
         self.logs.update(cx, |l, _| l.shown = logs_seen);
+        // A panel button (`PanelButton`): 26 x 26, transparent until hovered, the icon in LogMuted.
+        let panel_button = |id: &'static str, icon: gpui::Div, enabled: bool| {
+            div()
+                .id(id)
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .size(px(26.0))
+                .rounded(theme.metrics.control_radius)
+                .when(enabled, |d| d.cursor_pointer().hover(move |s| s.bg(c.hover_bg)))
+                .when(!enabled, |d| d.opacity(0.35))
+                .child(icon)
+        };
+        // The header: the tabs and buttons 26 high, 4 px from its edges all round (as much beside them as above), a
+        // line under it.
         let tabs = div()
             .flex()
+            .flex_none()
             .items_center()
-            .h(px(35.0))
-            .pad(px(0.0), px(8.0))
+            .p(px(4.0))
+            .border_b_1()
+            .border_color(c.card_border)
             .justify_between()
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(px(4.0))
-                    .pad(px(0.0), px(2.0))
                     .child(
                         tab("tab-output", "Output", "Output - what DNN Manager does, stage by stage", !on_terminal && !on_logs)
                             .when(unseen, |d| d.child(div().size(px(6.0)).rounded_full().bg(c.out_error)))
@@ -1510,16 +2273,45 @@ impl Workspace {
                     })
                     .when(!on_terminal && !on_logs, |d| {
                         d.child(
-                            ui::icon_button("clear-output", icons::DELETE, c.text_primary, !busy, cx)
-                                .tooltip(Tooltip::text("Clear output"))
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.store.update(cx, |s, cx| s.clear_output(cx));
-                                })),
+                            panel_button("clear-output", ui::icon(icons::DELETE, icons::SIZE, c.log_muted, cx), !busy)
+                                .tip("Clear output")
+                                .when(!busy, |b| {
+                                    b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                                        this.store.update(cx, |s, cx| s.clear_output(cx));
+                                    }))
+                                }),
                         )
                     })
                     .child(
-                        ui::icon_button("hide-panel", icons::CLOSE, c.text_primary, true, cx)
-                            .tooltip(Tooltip::text("Hide panel (Ctrl+J)"))
+                        panel_button("find-in-panel", ui::icon(icons::SEARCH, icons::SIZE, c.log_muted, cx), true)
+                            .tip("Find (Ctrl+F)")
+                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_find(window, cx))),
+                    )
+                    .child(div().flex_none().w(px(1.0)).h(px(16.0)).bg(c.card_border))
+                    .child({
+                        let maximized = self.panel_maximized;
+                        panel_button(
+                            "maximize-panel",
+                            ui::shape_icon(
+                                if maximized { dnnm_ui::shapes::RESTORE_PATH } else { dnnm_ui::shapes::MAXIMIZE_PATH },
+                                12.0,
+                                c.log_muted,
+                            ),
+                            true,
+                        )
+                        .tip(if maximized {
+                            "Restore panel size (Ctrl+Shift+M)"
+                        } else {
+                            "Maximize panel (Ctrl+Shift+M)"
+                        })
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            this.panel_maximized = !this.panel_maximized;
+                            cx.notify();
+                        }))
+                    })
+                    .child(
+                        panel_button("hide-panel", ui::icon(icons::CLOSE, icons::SIZE_CLOSE, c.log_muted, cx), true)
+                            .tip("Hide panel (Ctrl+J)")
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                 this.panel_visible = false;
                                 cx.notify();
@@ -1527,11 +2319,26 @@ impl Workspace {
                     ),
             );
 
+        let find_bar = self.find.as_ref().map(|find| self.render_find_bar(find, cx));
         if on_logs {
-            return div().size_full().flex().flex_col().child(tabs).child(div().flex_1().min_h_0().child(self.logs.clone()));
+            return div()
+                .relative()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(tabs)
+                .child(div().flex_1().min_h_0().child(self.logs.clone()))
+                .children(find_bar);
         }
         if let Some(terminal) = self.terminal.clone().filter(|_| on_terminal) {
-            return div().size_full().flex().flex_col().child(tabs).child(div().flex_1().min_h_0().child(terminal));
+            return div()
+                .relative()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(tabs)
+                .child(div().flex_1().min_h_0().child(terminal))
+                .children(find_bar);
         }
         let content = match run {
             None => div()
@@ -1543,7 +2350,7 @@ impl Workspace {
                 .child("No operation has run yet - what DNN Manager does shows here, stage by stage."),
             Some(run) => self.render_run(&run, cx),
         };
-        div().size_full().flex().flex_col().child(tabs).child(content)
+        div().relative().size_full().flex().flex_col().child(tabs).child(content).children(find_bar)
     }
 
     /// One operation in the Output tab (`PipelineView`): the header - status pill, title, issues, time and duration -,
@@ -1551,20 +2358,24 @@ impl Workspace {
     fn render_run(&self, run: &Run, cx: &mut Context<Self>) -> gpui::Div {
         let theme = Theme::get(cx).clone();
         let c = theme.colors;
+        // The pill (`PipelineView`): a spinner while it runs, else how it ended.
         let (pill, pill_bg, pill_fg, pill_glyph) = match run.status {
-            RunStatus::Running => ("RUNNING", c.out_pill_running_bg, c.out_pill_running_fg, icons::REFRESH),
-            RunStatus::Finished => ("FINISHED", c.out_pill_ok_bg, c.out_pill_ok_fg, icons::CHECK),
-            RunStatus::Failed => ("FAILED", c.out_pill_fail_bg, c.out_pill_fail_fg, icons::CLOSE),
-            RunStatus::Cancelled => ("CANCELLED", c.out_pill_neutral_bg, c.out_pill_neutral_fg, icons::STOP),
+            RunStatus::Running => ("Running", c.out_pill_running_bg, c.out_pill_running_fg, None),
+            RunStatus::Finished => ("Finished", c.out_pill_ok_bg, c.out_pill_ok_fg, Some(icons::CHECK)),
+            RunStatus::Failed => ("Failed", c.out_pill_fail_bg, c.out_pill_fail_fg, Some(icons::CLOSE)),
+            RunStatus::Cancelled => ("Cancelled", c.out_pill_neutral_bg, c.out_pill_neutral_fg, Some(icons::CLOSE)),
         };
+        let now = SystemTime::now();
         let warnings = run.lines.iter().filter(|l| l.kind == LineKind::Warn).count();
         let errors = run.lines.iter().filter(|l| l.kind == LineKind::Fail).count();
         let ended = run.duration.map(|d| run.started + d);
+        // "13:20:34 → 13:23:01" once it ended; "13:20:34 →" and the time so far, by the second, while it runs.
         let time_range = match ended {
-            Some(end) => format!("{} - {}", clock(run.started), clock(end)),
-            None => format!("{} -", clock(run.started)),
+            Some(end) => format!("{} → {}", clock(run.started), clock(end)),
+            None => format!("{} →", clock(run.started)),
         };
-        let duration = run.duration.map(|d| format!("{:.1} s", d.as_secs_f32())).unwrap_or_default();
+        let elapsed = run.duration.unwrap_or_else(|| now.duration_since(run.started).unwrap_or_default());
+        let duration = span(elapsed, run.duration.is_none());
         let issues = match (warnings, errors) {
             (0, 0) => None,
             (w, 0) => Some((format!("{w} warning{}", if w == 1 { "" } else { "s" }), c.log_warn)),
@@ -1579,26 +2390,35 @@ impl Workspace {
             .pad(px(0.0), px(10.0))
             .border_b_1()
             .border_color(c.card_border)
+            .gap(px(14.0))
             .child(
-                // The pill and the title 12 px apart, the issues 14 px after them.
+                // The pill and the title 12 px apart, the issues 14 px after them - the title cut short with "…"
+                // before the times on the right are.
                 div()
                     .flex()
+                    .flex_1()
+                    .min_w_0()
                     .items_center()
                     .gap(px(14.0))
                     .child(
                         div()
                             .flex()
+                            .min_w_0()
                             .items_center()
                             .gap(px(12.0))
                             .child(
                                 div()
                                     .flex()
+                                    .flex_none()
                                     .items_center()
-                                    .gap(px(6.0))
+                                    .gap(px(icons::LABEL_GAP))
                                     .pad(px(2.0), px(9.0))
                                     .rounded(px(10.0))
                                     .bg(pill_bg)
-                                    .child(ui::icon(pill_glyph, 10.0, pill_fg, cx))
+                                    .child(match pill_glyph {
+                                        Some(glyph) => ui::icon(glyph, icons::SIZE_SMALL, pill_fg, cx).into_any_element(),
+                                        None => ui::spinner("output-pill-spinner", icons::SIZE_SMALL, pill_fg, cx),
+                                    })
                                     .child(
                                         div()
                                             .text_size(theme.text.small)
@@ -1608,24 +2428,27 @@ impl Workspace {
                                     ),
                             )
                             .child(
-                                div().font_weight(FontWeight::SEMIBOLD).text_color(c.out_heading).child(run.title.clone()),
+                                ui::one_line(run.title.clone())
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(c.out_heading),
                             ),
                     )
                     .when_some(issues, |d, (text, color)| {
                         d.child(
                             div()
                                 .flex()
+                                .flex_none()
                                 .items_center()
-                                .gap(px(6.0))
-                                .child(ui::icon(icons::WARNING, 11.0, color, cx))
+                                .gap(px(icons::LABEL_GAP))
+                                .child(ui::icon(icons::WARNING, icons::SIZE, color, cx))
                                 .child(div().text_color(color).child(text)),
                         )
                     }),
             )
-            .child(div().flex_1())
             .child(
                 div()
                     .flex()
+                    .flex_none()
                     .items_center()
                     .gap(px(14.0))
                     .child(div().text_color(c.log_muted).child(time_range))
@@ -1643,25 +2466,33 @@ impl Workspace {
                     .pad(px(0.0), px(6.0))
                     .text_size(theme.text.small)
                     .text_color(c.log_muted)
-                    .child(format!("STAGES ({})", stage_list.len())),
+                    .child(format!(
+                        "Stages · {}/{}",
+                        stage_list.iter().filter(|(_, state)| *state != LineKind::Info).count(),
+                        stage_list.len()
+                    )),
             );
         }
-        for (name, state) in stage_list {
-            let (glyph, color) = match state {
-                LineKind::Fail => (icons::ERROR, c.out_error),
-                LineKind::Warn => (icons::WARNING, c.log_warn),
-                LineKind::Info => (icons::REFRESH, c.out_pill_running_fg),
-                _ => (icons::CHECK, c.success_text),
+        for (i, (name, state)) in stage_list.into_iter().enumerate() {
+            let running = state == LineKind::Info;
+            let mark = match state {
+                LineKind::Fail => ui::icon(icons::ERROR, icons::SIZE, c.out_error, cx).into_any_element(),
+                LineKind::Warn => ui::icon(icons::WARNING, icons::SIZE, c.log_warn, cx).into_any_element(),
+                LineKind::Info => ui::spinner(("stage-spinner", i), icons::SIZE, c.out_pill_running_fg, cx),
+                _ => ui::icon(icons::CHECK, icons::SIZE, c.success_text, cx).into_any_element(),
             };
+            let took = run.stage_duration(i, now).map(|d| span(d, running)).unwrap_or_default();
             stage_rows = stage_rows.child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(10.0))
+                    .gap(px(icons::LABEL_GAP))
                     .pad(px(4.0), px(6.0))
                     .rounded(theme.metrics.control_radius)
-                    .child(div().flex().flex_none().justify_center().w(px(14.0)).child(ui::icon(glyph, 11.0, color, cx)))
-                    .child(div().min_w_0().overflow_hidden().whitespace_nowrap().text_ellipsis().child(name)),
+                    .when(running, |d| d.bg(c.selection_bg))
+                    .child(mark)
+                    .child(ui::one_line(name).flex_1())
+                    .child(div().flex_none().text_size(theme.text.small).text_color(c.log_muted).child(took)),
             );
         }
         let stages = stages.child(stage_rows);
@@ -1672,12 +2503,14 @@ impl Workspace {
                 .justify_between()
                 .gap(px(8.0))
                 .pad(px(1.0), px(0.0))
-                .child(div().text_color(c.log_muted).overflow_hidden().text_ellipsis().child(key))
-                .child(div().text_color(c.log_fg).child(value))
+                // The name whole (they are short); the value on the right, cut short with "…" in a narrow list.
+                .child(div().flex_none().whitespace_nowrap().text_color(c.log_muted).child(key))
+                .child(ui::one_line(value).flex_1().text_right().text_color(c.log_fg))
         };
         let mut summary = div()
             .flex()
             .flex_col()
+            .w_full()
             .pad(px(7.0), px(0.0))
             .border_t_1()
             .border_color(c.card_border);
@@ -1687,23 +2520,40 @@ impl Workspace {
         summary = summary
             .child(summary_row("Warnings".into(), warnings.to_string().into()))
             .child(summary_row("Errors".into(), errors.to_string().into()));
+        let stages_width = self.output_stages_width.unwrap_or(px(STAGES_WIDTH));
         let rail = div()
             .flex()
             .flex_col()
             .flex_none()
-            .w(px(220.0))
+            .w(stages_width)
             .h_full()
             .gap(px(10.0))
-            .border_r_1()
-            .border_color(c.card_border)
             .child(div().id("output-stages").flex_1().min_h_0().overflow_y_scroll().child(stages))
             // The summary's line stops 10 px short of the rail's sides.
-            .child(div().flex_none().pad(px(0.0), px(10.0)).child(summary));
+            .child(div().flex().flex_col().flex_none().pad(px(0.0), px(10.0)).child(summary));
 
-        // The lines in groups, each from a stage's line on, 6 px apart.
-        let mut lines = div().flex().flex_col().gap(px(6.0)).pad(px(8.0), px(12.0)).font_family(theme.mono_font.clone());
-        let mut lines_group: Option<gpui::Div> = None;
-        for line in &run.lines {
+        // The lines, each a child of the scrolled column so the Find bar can bring one into view; a stage's heading 3 px
+        // padded above and below, so stages stand 6 px apart without a spacer between them.
+        let mut lines = div()
+            .id("output-lines")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&self.output_scroll)
+            .flex()
+            .flex_col()
+            .pad(px(8.0), px(12.0))
+            .font_family(theme.mono_font.clone());
+        let reveal = self.output_reveal.take();
+        let mut stage_index = 0;
+        for (index, line) in run.lines.iter().enumerate() {
+            // A stage's heading carries its time on the right (`PipelineLog`).
+            let took = (line.kind == LineKind::Stage).then(|| {
+                let running = run.status == RunStatus::Running && stage_index + 1 == run.stage_starts().len();
+                let took = run.stage_duration(stage_index, now).map(|d| span(d, running)).unwrap_or_default();
+                stage_index += 1;
+                took
+            });
             let color = match line.kind {
                 LineKind::Stage => c.out_heading,
                 LineKind::Info => c.log_fg,
@@ -1711,32 +2561,70 @@ impl Workspace {
                 LineKind::Warn => c.log_warn,
                 LineKind::Fail => c.log_fail,
             };
-            if line.kind == LineKind::Stage
-                && let Some(done) = lines_group.take()
-            {
-                lines = lines.child(done);
+            if reveal == Some(index) {
+                self.output_scroll.scroll_to_item(index);
             }
-            let group = lines_group.take().unwrap_or_else(|| div().flex().flex_col());
-            lines_group = Some(
-                group.child(
-                    div()
-                        .flex()
-                        .gap(px(10.0))
-                        .when(line.kind == LineKind::Stage, |d| d.font_weight(FontWeight::SEMIBOLD))
-                        .child(div().flex_none().text_color(c.log_muted).child(clock(line.at)))
-                        .child(div().text_color(color).child(line.text.clone())),
-                ),
+            let text: gpui::AnyElement = match self.output_marks.get(&index) {
+                Some(marks) => ui::marked_text(line.text.clone(), marks, cx).into_any_element(),
+                None => line.text.clone().into_any_element(),
+            };
+            lines = lines.child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .gap(px(10.0))
+                    .when(line.kind == LineKind::Stage, |d| d.pad(px(3.0), px(0.0)).font_weight(FontWeight::SEMIBOLD))
+                    .child(div().flex_none().text_color(c.log_muted).child(clock(line.at)))
+                    // Wraps in the panel's width rather than running past it.
+                    .child(div().flex_1().min_w_0().text_color(color).child(text))
+                    .when_some(took, |d, took| {
+                        d.child(div().flex_none().font_weight(FontWeight::NORMAL).text_color(c.log_muted).child(took))
+                    }),
             );
         }
-        let lines = lines.children(lines_group);
-        div().flex_1().min_h_0().flex().flex_col().child(header).child(
-            div()
-                .flex()
-                .flex_1()
-                .min_h_0()
-                .child(rail)
-                .child(div().id("output-lines").flex_1().min_h_0().overflow_y_scroll().child(lines)),
-        )
+        div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .child(header)
+            .child(div().flex().flex_1().min_h_0().child(rail).child(self.stages_sash(stages_width, cx)).child(lines))
+    }
+
+    /// The edge between the Output's stage list and its lines: a 1 px line, dragged sideways to make the list wider or
+    /// narrower - lit in the accent, 4 px wide, under the mouse and while dragged (as the window's sashes).
+    fn stages_sash(&self, width: gpui::Pixels, cx: &mut Context<Self>) -> impl IntoElement {
+        let c = Theme::get(cx).colors;
+        let dragging = matches!(self.drag, Some(Drag::Stages { .. }));
+        div()
+            .id("output-stages-sash")
+            .group("output-stages-sash")
+            .relative()
+            .flex_none()
+            .w(px(1.0))
+            .h_full()
+            .bg(c.card_border)
+            .child(
+                // The grab area and the lit line: 4 px over the 1 px line - it takes no room from the list or lines.
+                div()
+                    .id("output-stages-grip")
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(-2.0))
+                    .w(px(4.0))
+                    .cursor(gpui::CursorStyle::ResizeLeftRight)
+                    .group_hover("output-stages-sash", move |s| s.bg(c.accent))
+                    .when(dragging, |d| d.bg(c.accent))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
+                            this.drag = Some(Drag::Stages { start_x: e.position.x, start_width: width });
+                            cx.stop_propagation();
+                            cx.notify();
+                        }),
+                    ),
+            )
     }
 
     /// The status bar: IIS under the sidebar, this PC's figures, the version.
@@ -1762,12 +2650,12 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .justify_center()
-                .size(px(20.0))
+                .size(px(22.0))
                 .rounded(px(3.0))
                 .when(!busy, |d| d.cursor_pointer().hover(move |s| s.bg(c.hover_bg)))
                 .when(busy, |d| d.opacity(0.35))
-                .tooltip(Tooltip::text(tip))
-                .child(ui::icon(glyph, 11.0, c.text_primary, cx))
+                .tip(tip)
+                .child(ui::icon(glyph, icons::SIZE, c.text_primary, cx))
         };
         let iis = div()
             .relative()
@@ -1844,20 +2732,20 @@ impl Workspace {
                     .child(
                         div()
                             .id("ram")
-                            .tooltip(Tooltip::text(format!(
+                            .tip(format!(
                                 "Memory in use: {} of {}",
                                 fmt(host.memory_used_bytes as f64),
                                 fmt(host.memory_total_bytes as f64)
-                            )))
+                            ))
                             .child(ram),
                     )
                     .child(
                         div()
                             .id("cpu")
-                            .tooltip(Tooltip::text(format!(
+                            .tip(format!(
                                 "Processor use of this PC ({} logical processors)",
                                 std::thread::available_parallelism().map_or(1, |n| n.get())
-                            )))
+                            ))
                             .child(cpu),
                     )
                     .child(div().child(disk)),
@@ -1919,11 +2807,11 @@ impl Workspace {
                                 )
                                 .min_h(px(24.0))
                                 .pad(px(0.0), px(10.0))
-                                .tooltip(Tooltip::text(if undoing {
+                                .tip(if undoing {
                                     "Stop undoing - what isn't undone yet stays as it is"
                                 } else {
                                     "Cancel - DNN Manager undoes what the operation did"
-                                }))
+                                })
                                 .on_click(cx.listener(
                                     |this, _: &ClickEvent, _, cx| {
                                         cx.stop_propagation();
@@ -1948,7 +2836,7 @@ impl Workspace {
                     .id(SharedString::from(format!("toast-{id}")))
                     .flex()
                     .items_start()
-                    .gap(px(10.0))
+                    .gap(px(icons::LABEL_GAP))
                     .w(px(360.0))
                     .pad(px(10.0), px(14.0))
                     .rounded(px(6.0))
@@ -1957,8 +2845,9 @@ impl Workspace {
                     .border_color(c.card_border)
                     .shadow_lg()
                     .occlude()
-                    .child(ui::icon(glyph, 14.0, color, cx))
-                    .child(div().flex_1().flex().flex_col().gap(px(8.0)).child(toast.text.clone())
+                    .child(ui::line_icon(glyph, icons::SIZE, color, cx))
+                    // `min_w_0`: the text wraps in the toast's width instead of running past it.
+                    .child(div().flex_1().min_w_0().flex().flex_col().gap(px(8.0)).child(toast.text.clone())
                             .when(waiting > 0, |d| {
                                 d.child(
                                     div()
@@ -2023,6 +2912,11 @@ fn layout_items_of(w: &Workspace, weak: gpui::WeakEntity<Workspace>, cx: &App) -
         items.extend(list.into_iter().map(|item| item.group(name.to_string())));
     };
     let (sidebar, panel) = (w.sidebar_visible, w.panel_visible);
+    let (primary, secondary) = (w.primary_visible, w.secondary_visible);
+    let (toggle_primary, toggle_secondary) = (weak.clone(), weak.clone());
+    // Each option with the C# app's layout icon, the part it is about always filled in - the tick says whether it is shown.
+    use dnnm_ui::shapes::layout;
+    let right_sidebar = get("layout.sidebarPosition") == "right";
     let toggle_sidebar = weak.clone();
     let toggle_panel = weak.clone();
     group(
@@ -2030,43 +2924,76 @@ fn layout_items_of(w: &Workspace, weak: gpui::WeakEntity<Workspace>, cx: &App) -
         "Visibility",
         vec![
             PaletteItem::new("Menu Bar", setting("layout.menuBarVisible", if settings.menu_bar_visible() { "false" } else { "true" }))
+                .icon(layout("menu-bar", true))
                 .checked(settings.menu_bar_visible()),
-            PaletteItem::new("Sidebar", move |_, cx| {
+            // The page entries' column (VS Code's activity bar), then the two side bars, empty for now.
+            PaletteItem::new("Activity Bar", move |_, cx| {
                 let _ = toggle_sidebar.update(cx, |ws, cx| ws.toggle_sidebar(cx));
             })
-            .shortcut("Ctrl+B")
+            .keywords("sidebar pages")
+            .icon(layout(if right_sidebar { "activity-bar-right" } else { "activity-bar-left" }, true))
             .checked(sidebar),
+            PaletteItem::new("Primary Side Bar", move |_, cx| {
+                let _ = toggle_primary.update(cx, |ws, cx| ws.toggle_primary(cx));
+            })
+            .keywords("sidebar side bar")
+            .shortcut("Ctrl+B")
+            .icon(layout(if right_sidebar { "sidebar-right" } else { "sidebar-left" }, true))
+            .checked(primary),
+            PaletteItem::new("Secondary Side Bar", move |_, cx| {
+                let _ = toggle_secondary.update(cx, |ws, cx| ws.toggle_secondary(cx));
+            })
+            .keywords("sidebar side bar")
+            .shortcut("Ctrl+Alt+B")
+            .icon(layout(if right_sidebar { "sidebar-left" } else { "sidebar-right" }, true))
+            .checked(secondary),
             PaletteItem::new("Panel", move |_, cx| {
                 let _ = toggle_panel.update(cx, |ws, cx| ws.toggle_panel(cx));
             })
             .shortcut("Ctrl+J")
+            .icon(layout("panel", true))
             .checked(panel),
             PaletteItem::new(
                 "Status Bar",
                 setting("layout.statusBarVisible", if settings.status_bar_visible() { "false" } else { "true" }),
             )
+            .icon(layout("status-bar", true))
             .checked(settings.status_bar_visible()),
         ],
     );
     let side = get("layout.sidebarPosition");
     group(
         &mut items,
-        "Sidebar Position",
+        "Primary Side Bar Position",
         vec![
-            PaletteItem::new("Left", setting("layout.sidebarPosition", "left")).checked(side != "right"),
-            PaletteItem::new("Right", setting("layout.sidebarPosition", "right")).checked(side == "right"),
+            // Where the activity bar and the primary side bar sit (the secondary on the other side); filled in either
+            // way - the place is the picture.
+            PaletteItem::new("Left", setting("layout.sidebarPosition", "left"))
+                .icon(layout("activity-bar-left", true))
+                .checked(side != "right"),
+            PaletteItem::new("Right", setting("layout.sidebarPosition", "right"))
+                .icon(layout("activity-bar-right", true))
+                .checked(side == "right"),
         ],
     );
     let align = get("layout.panelAlignment");
+    let center = !matches!(align.as_str(), "left" | "right" | "justify");
     group(
         &mut items,
         "Panel Alignment",
         vec![
-            PaletteItem::new("Left", setting("layout.panelAlignment", "left")).checked(align == "left"),
-            PaletteItem::new("Right", setting("layout.panelAlignment", "right")).checked(align == "right"),
+            PaletteItem::new("Left", setting("layout.panelAlignment", "left"))
+                .icon(layout("panel-left", true))
+                .checked(align == "left"),
+            PaletteItem::new("Right", setting("layout.panelAlignment", "right"))
+                .icon(layout("panel-right", true))
+                .checked(align == "right"),
             PaletteItem::new("Center", setting("layout.panelAlignment", "center"))
-                .checked(!matches!(align.as_str(), "left" | "right" | "justify")),
-            PaletteItem::new("Justify", setting("layout.panelAlignment", "justify")).checked(align == "justify"),
+                .icon(layout("panel-center", true))
+                .checked(center),
+            PaletteItem::new("Justify", setting("layout.panelAlignment", "justify"))
+                .icon(layout("panel-justify", true))
+                .checked(align == "justify"),
         ],
     );
     let quick = get("layout.quickInputPosition");
@@ -2074,8 +3001,12 @@ fn layout_items_of(w: &Workspace, weak: gpui::WeakEntity<Workspace>, cx: &App) -
         &mut items,
         "Quick Input Position",
         vec![
-            PaletteItem::new("Top", setting("layout.quickInputPosition", "top")).checked(quick != "center"),
-            PaletteItem::new("Center", setting("layout.quickInputPosition", "center")).checked(quick == "center"),
+            PaletteItem::new("Top", setting("layout.quickInputPosition", "top"))
+                .icon(layout("quick-input-top", false))
+                .checked(quick != "center"),
+            PaletteItem::new("Center", setting("layout.quickInputPosition", "center"))
+                .icon(layout("quick-input-center", false))
+                .checked(quick == "center"),
         ],
     );
     let density = get("layout.density");
@@ -2083,8 +3014,12 @@ fn layout_items_of(w: &Workspace, weak: gpui::WeakEntity<Workspace>, cx: &App) -
         &mut items,
         "Layout Density",
         vec![
-            PaletteItem::new("Default", setting("layout.density", "default")).checked(density != "compact"),
-            PaletteItem::new("Compact", setting("layout.density", "compact")).checked(density == "compact"),
+            PaletteItem::new("Default", setting("layout.density", "default"))
+                .icon(layout("default", false))
+                .checked(density != "compact"),
+            PaletteItem::new("Compact", setting("layout.density", "compact"))
+                .icon(layout("compact", false))
+                .checked(density == "compact"),
         ],
     );
     items
@@ -2139,6 +3074,51 @@ fn plural(n: usize) -> &'static str {
 }
 
 /// "14:03:27" in local time.
+/// Byte-range matches in `lines` as the terminal's cells: (first column, columns, current) by line - a character a cell.
+fn terminal_marks(
+    lines: &[String],
+    matches: &[dnnm_logs::search::Match],
+    current: Option<usize>,
+) -> std::collections::HashMap<usize, Vec<(usize, usize, bool)>> {
+    let mut marks: std::collections::HashMap<usize, Vec<(usize, usize, bool)>> = std::collections::HashMap::new();
+    for (i, m) in matches.iter().enumerate() {
+        let Some(line) = lines.get(m.line) else { continue };
+        let column = line[..m.start].chars().count();
+        let columns = line[m.start..m.start + m.len].chars().count();
+        marks.entry(m.line).or_default().push((column, columns, Some(i) == current));
+    }
+    marks
+}
+
 fn clock(at: SystemTime) -> String {
     dnnm_infrastructure::local_time::hms(at)
+}
+
+/// A time as the Output says it (`OutputRun.DurationText`): "0.25s", "14.61s" once known, whole seconds while it still
+/// runs ("18s"); "2m 26s" past a minute, "1h 4m" past an hour.
+fn span(d: Duration, running: bool) -> String {
+    let secs = d.as_secs();
+    if secs >= 3600 {
+        format!("{}h {}m", secs / 3600, secs % 3600 / 60)
+    } else if secs >= 60 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else if running {
+        format!("{secs}s")
+    } else {
+        format!("{:.2}s", d.as_secs_f64())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn times_read_as_the_output_says_them() {
+        assert_eq!(span(Duration::from_millis(250), false), "0.25s");
+        assert_eq!(span(Duration::from_millis(14_610), false), "14.61s");
+        assert_eq!(span(Duration::from_millis(18_900), true), "18s");
+        assert_eq!(span(Duration::from_secs(146), false), "2m 26s");
+        assert_eq!(span(Duration::from_secs(3_840), true), "1h 4m");
+    }
 }

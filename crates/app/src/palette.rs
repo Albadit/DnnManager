@@ -2,16 +2,15 @@
 //! the projects (typing `>` switches to the commands), Ctrl+Shift+P the commands; a pick lists a choice to make
 //! ("which project?"). Arrows move (round at the ends), Enter runs, Esc closes.
 
+use dnnm_ui::px;
+use dnnm_ui::Tip;
 use std::rc::Rc;
 
-use gpui::{
-    App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, SharedString, Subscription,
-    Window, actions, div, prelude::*, px,
-};
+use gpui::{App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding, ScrollHandle, SharedString, Subscription, Window, actions, div, prelude::*};
 
 use dnnm_ui::Pad;
-use dnnm_ui::theme::Theme;
 use dnnm_ui::text_input::{TextChanged, TextInput};
+use dnnm_ui::theme::Theme;
 use dnnm_ui::{self as ui, icons};
 
 actions!(palette, [SelectNext, SelectPrevious, PageDown, PageUp, Confirm, Dismiss]);
@@ -44,6 +43,8 @@ pub struct PaletteItem {
     pub group: SharedString,
     /// Ticked (the theme in use).
     pub checked: bool,
+    /// A drawn icon in front of the title (`dnnm_ui::shapes`, Customize Layout's) - the tick then follows the title.
+    pub icon: Option<SharedString>,
     pub action: ItemAction,
 }
 
@@ -56,6 +57,7 @@ impl PaletteItem {
             shortcut: SharedString::default(),
             group: SharedString::default(),
             checked: false,
+            icon: None,
             action: Rc::new(action),
         }
     }
@@ -82,6 +84,11 @@ impl PaletteItem {
 
     pub fn checked(mut self, checked: bool) -> Self {
         self.checked = checked;
+        self
+    }
+
+    pub fn icon(mut self, path: impl Into<SharedString>) -> Self {
+        self.icon = Some(path.into());
         self
     }
 }
@@ -152,6 +159,8 @@ pub struct Palette {
     query: Entity<TextInput>,
     text: String,
     selected: usize,
+    /// The results' scroll position - kept on the selected item as the arrows move it.
+    scroll: ScrollHandle,
     focus: FocusHandle,
     _subscription: Subscription,
 }
@@ -167,12 +176,22 @@ impl Palette {
         let subscription = cx.subscribe(&query, |this, _, e: &TextChanged, cx| {
             this.text = e.0.to_string();
             this.selected = 0;
+            this.scroll.scroll_to_item(0);
             cx.notify();
         });
         let handle = query.read(cx).focus_handle(cx);
         window.focus(&handle);
         let text = if start_with_commands { ">".to_string() } else { String::new() };
-        Self { centered: false, mode, query, text, selected: 0, focus: cx.focus_handle(), _subscription: subscription }
+        Self {
+            centered: false,
+            mode,
+            query,
+            text,
+            selected: 0,
+            scroll: ScrollHandle::new(),
+            focus: cx.focus_handle(),
+            _subscription: subscription,
+        }
     }
 
     /// The source list, the text to rank by, and the box's placeholder.
@@ -206,6 +225,8 @@ impl Palette {
         } else {
             next.clamp(0, count - 1) as usize
         };
+        // The list follows the selection: scrolled just enough to show it.
+        self.scroll.scroll_to_item(self.selected);
         cx.notify();
     }
 
@@ -245,7 +266,13 @@ impl Render for Palette {
         let empty = self.text.trim_start_matches('>').is_empty();
         self.query
             .update(cx, |q, _| q.set_placeholder(if empty { placeholder.clone() } else { SharedString::default() }));
-        let mut list = div().id("palette-results").flex().flex_col().max_h(px(440.0)).overflow_y_scroll();
+        let mut list = div()
+            .id("palette-results")
+            .flex()
+            .flex_col()
+            .max_h(px(440.0))
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll);
         if shown.is_empty() {
             list = list.child(
                 div()
@@ -257,6 +284,12 @@ impl Render for Palette {
                     .child("No matching results"),
             );
         }
+        // A list with icons (Customize Layout) shows each in front of its title and the tick after the title, as VS
+        // Code's; one that only ticks (a theme) keeps a column for the ticks; Go to project has neither.
+        let with_icons = shown.iter().any(|item| item.icon.is_some());
+        let with_checks = !with_icons && shown.iter().any(|item| item.checked);
+        // The tick, 1 px up: on the middle of the title's letters, which sit that much above the row's middle (measured).
+        let tick = |cx: &App| ui::icon(icons::CHECK, icons::SIZE_SMALL, c.text_primary, cx).relative().top(px(-1.0));
         let mut group: Option<SharedString> = None;
         for (i, item) in shown.iter().enumerate() {
             let starts_group = !item.group.is_empty() && group.as_ref() != Some(&item.group);
@@ -265,69 +298,80 @@ impl Render for Palette {
             let side = if starts_group { item.group.clone() } else { item.detail.clone() };
             let selected = i == self.selected;
             let separator_line = div().pad(px(3.0), px(0.0)).child(div().h(px(1.0)).bg(c.picker_group_border));
-            list = list.when(separator, |d| d.child(separator_line)).child(
-                div()
-                    .id(SharedString::from(format!("palette-{i}")))
-                    .flex()
-                    .items_center()
-                    .min_h(px(22.0))
-                    .gap(px(8.0))
-                    .pad(px(0.0), px(8.0))
-                    .rounded(px(3.0))
-                    .cursor_pointer()
-                    .when(selected, |d| d.bg(c.selection_bg))
-                    .when(!selected, |d| d.hover(move |s| s.bg(c.hover_bg)))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.run(i, window, cx)))
-                    .child(
+            let row = div()
+                .id(SharedString::from(format!("palette-{i}")))
+                .flex()
+                .items_center()
+                .min_h(px(22.0))
+                .gap(px(8.0))
+                .pad(px(0.0), px(8.0))
+                .rounded(px(3.0))
+                .cursor_pointer()
+                .when(selected, |d| d.bg(c.selection_bg))
+                .when(!selected, |d| d.hover(move |s| s.bg(c.hover_bg)))
+                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| this.run(i, window, cx)))
+                .when(with_checks, |d| {
+                    d.child(
                         div()
                             .flex()
                             .items_center()
                             .flex_none()
                             .w(px(16.0))
-                            .when(item.checked, |d| d.child(ui::icon(icons::CHECK, 11.0, c.text_primary, cx))),
+                            .when(item.checked, |d| d.child(tick(cx))),
                     )
-                    .child(
-                        // The title, its group or detail and its shortcut, 12 px apart.
-                        div()
-                            .flex()
-                            .items_center()
-                            .flex_1()
-                            .min_w_0()
-                            .gap(px(12.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .whitespace_nowrap()
-                                    .text_ellipsis()
-                                    .child(item.title.clone()),
-                            )
-                            .when(!side.is_empty(), |d| {
-                                d.child(
+                })
+                .when_some(item.icon.clone(), |d, icon| d.child(ui::shape_icon(icon, icons::SIZE_NAV, c.text_primary)))
+                .child(
+                    // The title, its group or detail and its shortcut, 12 px apart.
+                    div()
+                        .flex()
+                        .items_center()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(px(12.0))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .flex_1()
+                                .min_w_0()
+                                .gap(px(icons::LABEL_GAP))
+                                .child(
                                     div()
-                                        .max_w(px(260.0))
+                                        .min_w_0()
                                         .overflow_hidden()
                                         .whitespace_nowrap()
                                         .text_ellipsis()
-                                        .text_size(theme.text.caption)
-                                        .text_color(c.text_muted)
-                                        .child(side),
+                                        .child(item.title.clone()),
                                 )
-                            })
-                            .when(!item.shortcut.is_empty(), |d| {
-                                d.child(
-                                    div()
-                                        .pad(px(0.0), px(5.0))
-                                        .rounded(px(3.0))
-                                        .bg(c.hover_bg)
-                                        .text_size(theme.text.small)
-                                        .text_color(c.text_muted)
-                                        .child(item.shortcut.clone()),
-                                )
-                            }),
-                    ),
-            );
+                                .when(with_icons && item.checked, |d| d.child(tick(cx))),
+                        )
+                        .when(!side.is_empty(), |d| {
+                            d.child(
+                                div()
+                                    .max_w(px(260.0))
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .text_size(theme.text.caption)
+                                    .text_color(c.text_muted)
+                                    .child(side),
+                            )
+                        })
+                        .when(!item.shortcut.is_empty(), |d| {
+                            d.child(
+                                div()
+                                    .pad(px(0.0), px(5.0))
+                                    .rounded(px(3.0))
+                                    .bg(c.hover_bg)
+                                    .text_size(theme.text.small)
+                                    .text_color(c.text_muted)
+                                    .child(item.shortcut.clone()),
+                            )
+                        }),
+                );
+            // One child per item, its group's line in it: the list's child `i` is item `i`, for scrolling to it.
+            list = list.child(div().flex().flex_col().when(separator, |d| d.child(separator_line)).child(row));
         }
         div()
             .id("palette-overlay")
@@ -373,20 +417,32 @@ impl Render for Palette {
                             _ => None,
                         },
                         |d, (title, reset, refresh)| {
+                            // Three equal columns: the title centred in the middle one, Reset and Close at the
+                            // right of the last - centred on the list without a blank to balance the buttons.
                             d.child(
                                 div()
-                                    .flex()
+                                    .grid()
+                                    .grid_cols(3)
                                     .items_center()
-                                    .justify_between()
-                                    .child(div().w(px(44.0)))
-                                    .child(div().text_size(theme.text.caption).child(title))
                                     .child(
                                         div()
+                                            .col_start(2)
                                             .flex()
+                                            .justify_center()
+                                            .text_size(theme.text.caption)
+                                            .whitespace_nowrap()
+                                            .child(title),
+                                    )
+                                    .child(
+                                        div()
+                                            .col_start(3)
+                                            .flex()
+                                            .justify_end()
                                             .child(
-                                                ui::icon_button("palette-reset", "\u{E7A7}", c.text_primary, true, cx)
+                                                // Reset 12 and close 10 in 22 x 22, as the C# list's title row.
+                                                ui::icon_button_sized("palette-reset", "\u{E7A7}", 12.0, c.text_primary, true, cx)
                                                     .size(px(22.0))
-                                                    .tooltip(ui::Tooltip::text("Reset"))
+                                                    .tip("Reset")
                                                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                                         reset(cx);
                                                         if let Mode::Settings { items, .. } = &mut this.mode {
@@ -396,10 +452,19 @@ impl Render for Palette {
                                                     })),
                                             )
                                             .child(
-                                                ui::icon_button("palette-close", icons::CLOSE, c.text_primary, true, cx)
-                                                    .size(px(22.0))
-                                                    .tooltip(ui::Tooltip::text("Close"))
-                                                    .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(PaletteClosed))),
+                                                ui::icon_button_sized(
+                                                    "palette-close",
+                                                    icons::CLOSE,
+                                                    10.0,
+                                                    c.text_primary,
+                                                    true,
+                                                    cx,
+                                                )
+                                                .size(px(22.0))
+                                                .tip("Close")
+                                                .on_click(
+                                                    cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(PaletteClosed)),
+                                                ),
                                             ),
                                     ),
                             )

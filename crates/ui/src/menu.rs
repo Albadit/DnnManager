@@ -1,15 +1,15 @@
 //! A context menu (`Themes/Controls/MenuStyles.xaml`): items with their state, bold for the default one, separators,
 //! and submenus that open beside their item under the mouse. Placed where the mouse was, in window coordinates.
 
+use crate::px;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::Rc;
 
-use gpui::{
-    App, ClickEvent, ElementId, FontWeight, Pixels, Point, SharedString, Window, anchored, deferred, div, prelude::*,
-    px,
-};
+use gpui::{App, Bounds, ClickEvent, ElementId, FontWeight, Pixels, Point, SharedString, Window, anchored, canvas, deferred, div, point, prelude::*};
 
 use crate::theme::Theme;
-use crate::{Pad, Tooltip, icon, icons};
+use crate::{Pad, Tip, icon, icons};
 
 pub type MenuAction = Rc<dyn Fn(&mut Window, &mut App)>;
 
@@ -91,12 +91,29 @@ pub struct ContextMenu {
     pub open_submenu: Option<usize>,
     /// The menu's corner at `position` - the gear's opens upwards, its bottom-left there.
     pub anchor: gpui::Corner,
+    /// Where each submenu's entry was drawn and how wide the open submenu was, last frame: a submenu opens beside its
+    /// entry on whichever side it fits.
+    placement: Placement,
+}
+
+#[derive(Clone, Default)]
+struct Placement {
+    entries: Rc<RefCell<HashMap<usize, Bounds<Pixels>>>>,
+    window_width: Rc<Cell<Pixels>>,
+    submenu_width: Rc<Cell<Option<Pixels>>>,
 }
 
 impl ContextMenu {
     pub fn new(position: Point<Pixels>, items: Vec<MenuItem>) -> Self {
-        Self { position, items, open_submenu: None, anchor: gpui::Corner::TopLeft }
+        Self { position, items, open_submenu: None, anchor: gpui::Corner::TopLeft, placement: Placement::default() }
     }
+}
+
+/// Records the bounds of the element it fills (and the window's width) as it is laid out.
+fn measure(record: impl Fn(Bounds<Pixels>, Pixels) + 'static) -> impl IntoElement {
+    canvas(move |bounds, window, _| record(bounds, window.viewport_size().width), |_, _, _, _| {})
+        .absolute()
+        .inset_0()
 }
 
 /// Draws a menu's list. `on_close` is called after an item runs; `on_hover_submenu` when the mouse rests on a
@@ -107,6 +124,7 @@ fn list(
     open: Option<usize>,
     on_close: MenuAction,
     on_hover_submenu: HoverSubmenu,
+    placement: &Placement,
     cx: &App,
 ) -> gpui::Stateful<gpui::Div> {
     let theme = Theme::get(cx);
@@ -157,7 +175,7 @@ fn list(
                 menu.child(inset().child(
                     row(enabled)
                         .when(*bold, |d| d.font_weight(FontWeight::SEMIBOLD))
-                        .when_some(tooltip.clone(), |d, tip| d.tooltip(Tooltip::text(tip)))
+                        .when_some(tooltip.clone(), |d, tip| d.tip(tip))
                         .on_hover(move |hovered, window, cx| {
                             if *hovered {
                                 hover(None, window, cx);
@@ -177,7 +195,13 @@ fn list(
                 let hover = on_hover_submenu.clone();
                 let enabled = *enabled;
                 let is_open = open == Some(i);
-                let mut entry = inset().relative().child(
+                let entries = placement.entries.clone();
+                let window_width = placement.window_width.clone();
+                let mut entry = inset().relative().child(measure(move |bounds, width| {
+                    entries.borrow_mut().insert(i, bounds);
+                    window_width.set(width);
+                }));
+                entry = entry.child(
                     row(enabled)
                         .when(is_open, |d| d.bg(c.hover_bg))
                         .on_hover(move |hovered, window, cx| {
@@ -186,20 +210,33 @@ fn list(
                             }
                         })
                         .child(label.clone())
-                        .child(icon(icons::CHEVRON_RIGHT, 9.0, c.text_muted, cx)),
+                        .child(icon(icons::CHEVRON_RIGHT, icons::SIZE_SMALL, c.text_muted, cx)),
                 );
-                if is_open {
+                if is_open && let Some(at) = placement.entries.borrow().get(&i).copied() {
                     let noop: HoverSubmenu = Rc::new(|_, _, _| {});
-                    entry = entry.child(
-                        div().absolute().top(px(-5.0)).left_full().child(list(
-                            SharedString::from(format!("{id}-sub-{i}")),
-                            sub,
-                            None,
-                            on_close.clone(),
-                            noop,
-                            cx,
-                        )),
-                    );
+                    let measured = placement.submenu_width.clone();
+                    let content = list(
+                        SharedString::from(format!("{id}-sub-{i}")),
+                        sub,
+                        None,
+                        on_close.clone(),
+                        noop,
+                        &Placement::default(),
+                        cx,
+                    )
+                    .relative()
+                    .child(measure(move |bounds, _| measured.set(Some(bounds.size.width))));
+                    // Beside the menu, its first item level with the entry: on the right when it fits in the window,
+                    // else on the left. Until its width is known (its first frame), it is taken as 260 px.
+                    let width = placement.submenu_width.get().unwrap_or(px(260.0));
+                    let (gap, top) = (px(4.0), at.top() - px(5.0));
+                    let fits_right = at.right() + gap + width <= placement.window_width.get();
+                    let placed = if fits_right {
+                        anchored().position(point(at.right() + gap, top))
+                    } else {
+                        anchored().anchor(gpui::Corner::TopRight).position(point(at.left() - gap, top))
+                    };
+                    entry = entry.child(placed.snap_to_window().child(content));
                 }
                 menu.child(entry)
             }
@@ -215,6 +252,32 @@ pub fn render(
     on_hover_submenu: impl Fn(Option<usize>, &mut Window, &mut App) + 'static,
     cx: &App,
 ) -> impl IntoElement {
-    let content = list("context-menu", &menu.items, menu.open_submenu, Rc::new(on_close), Rc::new(on_hover_submenu), cx);
-    deferred(anchored().anchor(menu.anchor).position(menu.position).snap_to_window().child(content)).with_priority(2)
+    let on_close: MenuAction = Rc::new(on_close);
+    let content = list(
+        "context-menu",
+        &menu.items,
+        menu.open_submenu,
+        on_close.clone(),
+        Rc::new(on_hover_submenu),
+        &menu.placement,
+        cx,
+    );
+    let content = crate::fade_in(content, "context-menu-fade", cx);
+    // Under the menu, over everything else: a layer as large as the window that closes it at a press anywhere - the
+    // panel, the title bar, wherever it was opened from. (Its submenus are inside the menu, so a press there is not
+    // outside it.)
+    let (left, right) = (on_close.clone(), on_close);
+    let catcher = div()
+        .id("context-menu-catcher")
+        .size(px(100_000.0))
+        // The press only closes the menu - it does not reach what is under it.
+        .occlude()
+        .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| left(window, cx))
+        .on_mouse_down(gpui::MouseButton::Right, move |_, window, cx| right(window, cx));
+    div()
+        .child(deferred(anchored().position(Point::default()).snap_to_window().child(catcher)).with_priority(2))
+        .child(
+            deferred(anchored().anchor(menu.anchor).position(menu.position).snap_to_window().child(content))
+                .with_priority(3),
+        )
 }

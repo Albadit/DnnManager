@@ -106,13 +106,11 @@ pub fn host_existing_project(deps: &HostingDeps, req: &HostExistingRequest, op: 
         op.report.info("No web.config in the folder - it doesn't look like a DNN site yet. Continuing anyway.");
     }
 
-    let mut step = 0;
     let mut site_created = false;
     let mut disabled_rules = Vec::new();
     if req.setup_iis {
         // IIS is the point of this step, so missing features are offered before IIS is checked.
-        step += 1;
-        op.report.step(&format!("Step {step}: IIS website"));
+        op.report.step("IIS website");
         if let Err(e) = deps.machine.ensure_iis_features(op)
             && e == CANCELLED
         {
@@ -131,8 +129,7 @@ pub fn host_existing_project(deps: &HostingDeps, req: &HostExistingRequest, op: 
     }
 
     if req.setup_database {
-        step += 1;
-        op.report.step(&format!("Step {step}: Database"));
+        op.report.step("Database");
         if let Err(e) = setup_database(deps, &project, &web_config, has_web_config, req, &alias, op) {
             // Alongside a website the database is a best-effort extra - unless its data was asked for (a backup to
             // restore, Import). On its own it is the whole job.

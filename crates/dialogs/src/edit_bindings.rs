@@ -6,18 +6,16 @@
 //! The app gives it the site's bindings split by `dnnm_application::use_cases::edit_bindings::split_bindings`. As the
 //! C#, only this site's own bindings are checked for doubles - IIS refuses a binding another site has.
 
+use dnnm_ui::px;
 use std::path::PathBuf;
 
-use gpui::{
-    App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, SharedString, Subscription,
-    Window, div, prelude::*, px,
-};
+use gpui::{App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, SharedString, Subscription, Window, div, prelude::*};
 
 use dnnm_application::use_cases::edit_bindings::{EditBindingsRequest, HttpBindingEdit};
 use dnnm_ui::dialog::{self, DialogEvent};
 use dnnm_ui::text_input::{TextChanged, TextInput};
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{self as ui, Tooltip, icons};
+use dnnm_ui::{self as ui, Tip, icons};
 
 /// The dialog's first line.
 pub fn intro(site: &str) -> String {
@@ -245,7 +243,7 @@ impl Render for BindingsDialog {
                                     true,
                                     cx,
                                 )
-                                .tooltip(Tooltip::text("Remove this host name"))
+                                .tip("Remove this host name")
                                 .on_click(cx.listener(
                                     move |this, _: &ClickEvent, _, cx| {
                                         this.rows.retain(|r| r.id != id);
@@ -258,13 +256,22 @@ impl Render for BindingsDialog {
             .collect();
 
         let stack = |gap: f32| div().w_full().flex().flex_col().gap(px(gap));
-        // The labels 4 above the rows, the rows 6 apart; Add host name 10 under them and the hint 4 under that.
+        // The labels 4 above the rows (what an empty host name means in the tip beside its label), the rows 6 apart;
+        // Add host name 10 under them.
         let table = stack(4.0)
             .child(
                 div()
                     .flex()
                     .gap(px(8.0))
-                    .child(dialog::label("Host name", cx).w(px(260.0)))
+                    .child(
+                        ui::with_tip(
+                            dialog::label("Host name", cx),
+                            "host-name-tip",
+                            "An empty host name answers on any host name.",
+                            cx,
+                        )
+                        .w(px(260.0)),
+                    )
                     .child(dialog::label("Port", cx)),
             )
             .when(!row_views.is_empty(), |d| d.child(stack(6.0).children(row_views)));
@@ -278,11 +285,9 @@ impl Render for BindingsDialog {
                 cx.notify();
             },
         )));
-        let bindings = stack(4.0)
-            .child(stack(10.0).child(table).child(add))
-            .child(dialog::hint("An empty host name answers on any host name.", cx));
+        let bindings = stack(10.0).child(table).child(add);
 
-        let body = div().flex().flex_col().gap(px(18.0)).child(div().w_full().child(intro(&self.site))).child(
+        let body =
             stack(12.0)
                 .child(bindings)
                 .when(!self.others.is_empty(), |d| {
@@ -290,8 +295,7 @@ impl Render for BindingsDialog {
                         stack(2.0).children(self.others.iter().map(|other| div().w_full().child(other.clone()))),
                     ))
                 })
-                .children(dialog::field_error(found.map(SharedString::from), cx)),
-        );
+                .children(dialog::field_error(found.map(SharedString::from), cx));
 
         let buttons = div()
             .flex()
@@ -299,13 +303,13 @@ impl Render for BindingsDialog {
             .child(
                 ui::button("dialog-ok", "Save", ui::ButtonKind::Primary, ok, cx)
                     .min_w(px(80.0))
-                    .tooltip(Tooltip::text("Save (Enter)"))
+                    .tip("Save (Enter)")
                     .when(ok, |b| b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.submit(cx)))),
             )
             .child(
                 ui::button("dialog-cancel", "Cancel", ui::ButtonKind::Secondary, true, cx)
                     .min_w(px(80.0))
-                    .tooltip(Tooltip::text("Cancel (Esc)"))
+                    .tip("Cancel (Esc)")
                     .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(DialogEvent::Cancelled))),
             );
 
@@ -316,7 +320,7 @@ impl Render for BindingsDialog {
                     this.submit(cx);
                 }
             }))
-            .child(dialog::frame("Edit host names", 460.0, body, buttons, cx))
+            .child(dialog::frame_with_tip("Edit host names", Some(intro(&self.site)), 460.0, body, buttons, cx))
     }
 }
 

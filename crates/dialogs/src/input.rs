@@ -5,14 +5,12 @@
 //! The XAML selects the text when the dialog opens; here the cursor is put after it (Ctrl+A selects it), as the other
 //! dialogs of the port do.
 
-use gpui::{
-    App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, SharedString, Subscription,
-    Window, div, prelude::*, px,
-};
+use dnnm_ui::px;
+use gpui::{App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, SharedString, Subscription, Window, div, prelude::*};
 
 use dnnm_ui::dialog::{self, DialogEvent};
 use dnnm_ui::text_input::{TextChanged, TextInput};
-use dnnm_ui::{self as ui, Tooltip};
+use dnnm_ui::{self as ui, Tip};
 
 /// The window's title (`Title="DNN Manager"`).
 pub const TITLE: &str = "DNN Manager";
@@ -102,13 +100,13 @@ impl Render for InputDialog {
             .child(
                 ui::button("dialog-ok", self.ok_text.clone(), ui::ButtonKind::Primary, ok, cx)
                     .min_w(px(80.0))
-                    .tooltip(Tooltip::text(ok_tooltip))
+                    .tip(ok_tooltip)
                     .when(ok, |b| b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.submit(cx)))),
             )
             .child(
                 ui::button("dialog-cancel", "Cancel", ui::ButtonKind::Secondary, true, cx)
                     .min_w(px(80.0))
-                    .tooltip(Tooltip::text("Cancel (Esc)"))
+                    .tip("Cancel (Esc)")
                     .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(DialogEvent::Cancelled))),
             );
 

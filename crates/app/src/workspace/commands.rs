@@ -418,15 +418,31 @@ fn commands() -> Vec<Command> {
         // ── Layout ──
         Command {
             id: "view.toggleSidebar",
-            title: "Show or hide the sidebar",
+            title: "Toggle primary side bar visibility",
             area: "Layout",
             shortcut: "Ctrl+B",
-            keywords: "pages navigation",
+            keywords: "sidebar side bar",
+            run: Now(|ws, _, cx| ws.toggle_primary(cx), always),
+        },
+        Command {
+            id: "view.toggleSecondarySidebar",
+            title: "Toggle secondary side bar visibility",
+            area: "Layout",
+            shortcut: "Ctrl+Alt+B",
+            keywords: "sidebar side bar auxiliary right",
+            run: Now(|ws, _, cx| ws.toggle_secondary(cx), always),
+        },
+        Command {
+            id: "view.toggleActivityBar",
+            title: "Toggle activity bar visibility",
+            area: "Layout",
+            shortcut: "",
+            keywords: "pages navigation sidebar",
             run: Now(|ws, _, cx| ws.toggle_sidebar(cx), always),
         },
         Command {
             id: "view.sidebarWider",
-            title: "Make the sidebar wider",
+            title: "Make the primary side bar wider",
             area: "Layout",
             shortcut: "",
             keywords: "size width sash",
@@ -434,7 +450,7 @@ fn commands() -> Vec<Command> {
         },
         Command {
             id: "view.sidebarNarrower",
-            title: "Make the sidebar narrower",
+            title: "Make the primary side bar narrower",
             area: "Layout",
             shortcut: "",
             keywords: "size width sash",
@@ -442,7 +458,7 @@ fn commands() -> Vec<Command> {
         },
         Command {
             id: "view.toggleMenuBar",
-            title: "Show or hide the menu bar",
+            title: "Toggle menu bar visibility",
             area: "Layout",
             shortcut: "",
             keywords: "title",
@@ -458,7 +474,7 @@ fn commands() -> Vec<Command> {
         },
         Command {
             id: "view.toggleStatusBar",
-            title: "Show or hide the status bar",
+            title: "Toggle status bar visibility",
             area: "Layout",
             shortcut: "",
             keywords: "bottom",
@@ -475,11 +491,11 @@ fn commands() -> Vec<Command> {
         // ── Terminal ──
         Command {
             id: "terminal.toggle",
-            title: "Show the terminal",
+            title: "Toggle terminal",
             area: "Terminal",
             shortcut: "Ctrl+`",
-            keywords: "command line shell console",
-            run: Now(|ws, window, cx| ws.show_terminal(window, cx), |ws, _| ws.terminal.is_some()),
+            keywords: "command line shell console show hide",
+            run: Now(|ws, window, cx| ws.toggle_terminal(window, cx), |ws, _| ws.terminal.is_some()),
         },
         Command {
             id: "terminal.new",
@@ -506,8 +522,16 @@ fn commands() -> Vec<Command> {
             run: Now(|ws, window, cx| ws.customize_layout(window, cx), always),
         },
         Command {
+            id: "view.search",
+            title: "Find in the panel",
+            area: "Panel",
+            shortcut: "Ctrl+F",
+            keywords: "search output logs terminal match regex",
+            run: Now(|ws, window, cx| ws.open_find(window, cx), always),
+        },
+        Command {
             id: "panel.maximize",
-            title: "Maximize or restore the panel",
+            title: "Toggle maximized panel",
             area: "Panel",
             shortcut: "Ctrl+Shift+M",
             keywords: "bigger full",
@@ -523,7 +547,7 @@ fn commands() -> Vec<Command> {
         // ── Panel ──
         Command {
             id: "panel.toggle",
-            title: "Show or hide the panel",
+            title: "Toggle panel visibility",
             area: "Panel",
             shortcut: "Ctrl+J",
             keywords: "output bottom",
@@ -547,19 +571,19 @@ fn commands() -> Vec<Command> {
         },
         Command {
             id: "panel.output",
-            title: "Show Output",
+            title: "Toggle Output",
             area: "Panel",
             shortcut: "Ctrl+Shift+U",
-            keywords: "log operation",
-            run: Now(|ws, _, cx| ws.show_output(cx), always),
+            keywords: "log operation show hide",
+            run: Now(|ws, _, cx| ws.toggle_output(cx), always),
         },
         Command {
             id: "panel.appLog",
-            title: "Show DNN Manager's log",
+            title: "Toggle DNN Manager's log",
             area: "Panel",
             shortcut: "",
-            keywords: "logs file errors",
-            run: Now(|ws, _, cx| ws.show_logs(crate::logs_view::LogSite::App, cx), always),
+            keywords: "logs file errors show hide",
+            run: Now(|ws, _, cx| ws.toggle_app_log(cx), always),
         },
         Command {
             id: "panel.clearOutput",

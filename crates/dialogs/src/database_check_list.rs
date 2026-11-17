@@ -3,11 +3,12 @@
 //! its state rather than a view, so Change connection, Settings → Database server and New project's Database card
 //! draw it alike from what they hold.
 
-use gpui::{App, Div, FontWeight, HighlightStyle, SharedString, StyledText, div, prelude::*, px};
+use dnnm_ui::px;
+use gpui::{App, Div, FontWeight, HighlightStyle, SharedString, StyledText, div, prelude::*};
 
 use dnnm_application::use_cases::database_connection::{CheckOutcome, DatabaseCheckReport};
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{Pad, icon, icons};
+use dnnm_ui::{icons, line_icon};
 
 /// `GlyphCancel` of `Themes/Icons.xaml` - the failed check's mark.
 const CANCEL: &str = "\u{E711}";
@@ -46,7 +47,8 @@ pub fn database_check_list(state: &CheckListState, cx: &App) -> Div {
                 div()
                     .flex()
                     .items_start()
-                    .child(div().flex_none().w(px(20.0)).pad(px(2.0), px(0.0)).child(icon(glyph, 12.0, color, cx)))
+                    .gap(px(icons::LABEL_GAP))
+                    .child(line_icon(glyph, icons::SIZE, color, cx))
                     .child(
                         div()
                             .flex_1()
