@@ -61,6 +61,13 @@ MSI's version is numbers only). The `1.8.7` in `Cargo.toml` is only what a local
 listed under `[deb] depends`). The Linux jobs install GPUI's build dependencies with `scripts/linux-deps.sh`; Ubuntu
 22.04 keeps the .deb working on older systems.
 
+The ARM64 .msi needs two things cargo-packager doesn't have on its own: WiX 3.14 (it downloads 3.11, which has no
+ARM64) and a template that knows ARM64 (`assets/wix/main.wxs`, its own with an `arm64` branch and Windows Installer
+5.0, set as `[wix] template`). The workflow's step "WiX 3.14" puts WiX 3.14.1 (its hash pinned) in
+`%LOCALAPPDATA%\.cargo-packager\WixTools`, where cargo-packager uses it instead of downloading. To build
+`windows-arm64` on a PC, unzip `wix314-binaries.zip` from WiX's 3.14.1 release there first. When the packager's version
+changes, compare its `src/package/wix/main.wxs` with ours.
+
 The installers are **not code-signed**. Signing needs a certificate (Windows) and an Apple Developer ID (macOS) stored
 as repository secrets - not set up.
 

@@ -183,6 +183,25 @@ jobs:
       - name: cargo-packager
         run: cargo install cargo-packager --version "$PACKAGER_VERSION" --locked
 
+      - name: WiX 3.14 (Windows)
+        # cargo-packager 0.11.8 downloads WiX 3.11, whose candle has no -arch arm64. It uses a WixTools folder that is
+        # already there (in %LOCALAPPDATA%\.cargo-packager) instead: WiX 3.14.1, the hash pinned. Both Windows
+        # installers are made with it; Packager.toml's template adds ARM64.
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'wix314-binaries.zip'
+          Invoke-WebRequest 'https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip' -OutFile $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
+          if ($hash -ne '6AC824E1642D6F7277D0ED7EA09411A508F6116BA6FAE0AA5F2C7DAA2FF43D31') {
+            throw "wix314-binaries.zip has SHA256 $hash - not the WiX 3.14.1 that was tried"
+          }
+          $wix = Join-Path $env:LOCALAPPDATA '.cargo-packager\WixTools'
+          if (Test-Path $wix) { Remove-Item $wix -Recurse -Force }
+          Expand-Archive $zip -DestinationPath $wix
+          if (-not (Test-Path (Join-Path $wix 'candle.exe'))) { throw "No candle.exe in $wix" }
+          "WiX $((Get-Item (Join-Path $wix 'candle.exe')).VersionInfo.FileVersion) in $wix"
+
       - name: The tag's version into the build
         run: |
           if [ "$RUNNER_OS" = Windows ]; then python scripts/set-version.py "$VERSION"; else python3 scripts/set-version.py "$VERSION"; fi

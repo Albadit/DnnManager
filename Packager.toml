@@ -23,6 +23,8 @@ binaries = [{ path = "DnnManager", main = true }]
 # The MSI installs for every user, as the WPF app's Setup did for all users; DNN Manager asks for administrator rights
 # itself when it starts (IIS needs them).
 languages = ["en-US"]
+# cargo-packager's template with ARM64 added (its own stops at x64) - see the file's header.
+template = "assets/wix/main.wxs"
 
 [deb]
 # What GPUI needs at run time (scripts/linux-deps.sh installs the -dev packages to build).
