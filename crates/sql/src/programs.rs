@@ -278,6 +278,11 @@ pub fn resolve(name: &str) -> Resolved {
 }
 
 fn check(file: &Path) -> Resolved {
+    // Not there at all: missing - not "can't be opened to check it", which said the wrong thing when run as
+    // Administrator (as on CI's runners) and never reached "isn't installed".
+    if !file.exists() {
+        return Resolved::Missing;
+    }
     let Some(final_path) = trust::final_path(file) else {
         return Resolved::Refused {
             copy: file.display().to_string(),
@@ -954,6 +959,12 @@ mod tests {
         let cancel = CancelToken::new();
         cancel.cancel();
         assert_eq!(Run::new(&ping, &["-n", "30", "127.0.0.1"]).cancel(&cancel).run().unwrap_err(), CANCELLED);
+    }
+
+    #[test]
+    fn a_program_that_isnt_there_is_missing_however_it_is_run() {
+        // The check run as Administrator - what `resolve` does then for a full path.
+        assert!(matches!(check(Path::new(r"C:\no\such\program.exe")), Resolved::Missing));
     }
 
     #[test]

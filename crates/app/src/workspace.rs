@@ -229,6 +229,11 @@ pub struct Workspace {
     output_marks: std::collections::HashMap<usize, ui::LineMarks>,
     output_reveal: std::cell::Cell<Option<usize>>,
     output_scroll: gpui::ScrollHandle,
+    /// The Output's stage list's scroll position: it follows the stage that runs.
+    stages_scroll: gpui::ScrollHandle,
+    /// How many Output lines and which stage were last followed - the view keeps up with the run while it is at the end.
+    followed_lines: std::cell::Cell<usize>,
+    followed_stage: std::cell::Cell<Option<usize>>,
     /// While an operation runs and the panel shows: redraws every second, for the Output's clock.
     output_tick: Option<gpui::Task<()>>,
     page: Page,
@@ -442,6 +447,9 @@ impl Workspace {
             output_marks: Default::default(),
             output_reveal: Default::default(),
             output_scroll: gpui::ScrollHandle::new(),
+            stages_scroll: gpui::ScrollHandle::new(),
+            followed_lines: Default::default(),
+            followed_stage: Default::default(),
             logs: cx.new(|_| LogsView::new(store_for_logs)),
             terminal: None,
             focus,
@@ -1185,7 +1193,11 @@ impl Render for Workspace {
             div().flex().flex_none().h_full().children(parts)
         });
 
-        let page_card = (!maximized).then(|| div().flex_1().min_h_0().min_w_0().child(card(page, c.window_bg)));
+        // The toasts sit at the page's bottom right - over the page, above the panel (with the panel maximized, the
+        // window's).
+        let page_card = (!maximized).then(|| {
+            div().relative().flex_1().min_h_0().min_w_0().child(card(page, c.window_bg)).child(self.render_toasts(cx))
+        });
         let panel_part = (maximized || panel_out > 0.0).then(|| {
             let panel = card(
                 div()
@@ -1436,7 +1448,7 @@ impl Render for Workspace {
                     cx,
                 ))
             })
-            .child(self.render_toasts(status_bar_visible, cx))
+            .when(maximized, |d| d.child(self.render_toasts(cx)))
             .when_some(self.render_menu(cx), |d, menu| d.child(menu))
             .when_some(self.dialog.as_ref().map(|(view, _)| view.clone()), |d, view| {
                 d.child(ui::fade_in(
@@ -2411,8 +2423,9 @@ impl Workspace {
                                     .flex()
                                     .flex_none()
                                     .items_center()
-                                    .gap(px(icons::LABEL_GAP))
-                                    .pad(px(2.0), px(9.0))
+                                    // Tight: 4 px between the mark and the word, 6 inside each round end.
+                                    .gap(px(4.0))
+                                    .pad(px(2.0), px(6.0))
                                     .rounded(px(10.0))
                                     .bg(pill_bg)
                                     .child(match pill_glyph {
@@ -2455,15 +2468,31 @@ impl Workspace {
                     .child(div().font_weight(FontWeight::SEMIBOLD).text_color(c.out_heading).child(duration)),
             );
 
-        // The stage rail: each stage with how it went.
-        // The heading 5 px over the stages, the stages 2 px apart.
-        let mut stages = div().flex().flex_col().gap(px(5.0)).pad(px(10.0), px(4.0));
-        let mut stage_rows = div().flex().flex_col().gap(px(2.0));
+        // The stage rail: each stage with how it went - the heading and the stages children of the scrolled list, 2 px
+        // apart (the heading 1.5 px more padded above and below), so the list can bring the running stage into view.
+        let mut stages = div()
+            .id("output-stages")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&self.stages_scroll)
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
+            .pad(px(10.0), px(4.0));
         let stage_list = run.stages();
+        // The running stage in view as the run moves on to it (row `i` is child `i + 1`, after the heading).
+        let running_stage = stage_list.iter().position(|(_, state)| *state == LineKind::Info);
+        if running_stage.is_some() && running_stage != self.followed_stage.get() {
+            self.followed_stage.set(running_stage);
+            if let Some(i) = running_stage {
+                self.stages_scroll.scroll_to_item(i + 1);
+            }
+        }
         if !stage_list.is_empty() {
             stages = stages.child(
                 div()
-                    .pad(px(0.0), px(6.0))
+                    .pad(px(1.5), px(6.0))
                     .text_size(theme.text.small)
                     .text_color(c.log_muted)
                     .child(format!(
@@ -2482,9 +2511,10 @@ impl Workspace {
                 _ => ui::icon(icons::CHECK, icons::SIZE, c.success_text, cx).into_any_element(),
             };
             let took = run.stage_duration(i, now).map(|d| span(d, running)).unwrap_or_default();
-            stage_rows = stage_rows.child(
+            stages = stages.child(
                 div()
                     .flex()
+                    .flex_none()
                     .items_center()
                     .gap(px(icons::LABEL_GAP))
                     .pad(px(4.0), px(6.0))
@@ -2495,7 +2525,6 @@ impl Workspace {
                     .child(div().flex_none().text_size(theme.text.small).text_color(c.log_muted).child(took)),
             );
         }
-        let stages = stages.child(stage_rows);
         let summary_row = |key: SharedString, value: SharedString| {
             div()
                 .flex()
@@ -2528,7 +2557,7 @@ impl Workspace {
             .w(stages_width)
             .h_full()
             .gap(px(10.0))
-            .child(div().id("output-stages").flex_1().min_h_0().overflow_y_scroll().child(stages))
+            .child(stages)
             // The summary's line stops 10 px short of the rail's sides.
             .child(div().flex().flex_col().flex_none().pad(px(0.0), px(10.0)).child(summary));
 
@@ -2545,6 +2574,22 @@ impl Workspace {
             .pad(px(8.0), px(12.0))
             .font_family(theme.mono_font.clone());
         let reveal = self.output_reveal.take();
+        // New lines keep the view at the end while it is there (scrolled up to read, it stays put); a Find match to
+        // bring into view goes first.
+        let count = run.lines.len();
+        if count < self.followed_lines.get() {
+            self.followed_lines.set(0);
+        }
+        if reveal.is_none() && count > self.followed_lines.get() {
+            let at_end = {
+                let hidden = self.output_scroll.max_offset().height;
+                hidden <= px(0.0) || -self.output_scroll.offset().y >= hidden - px(24.0)
+            };
+            if at_end || self.followed_lines.get() == 0 {
+                self.output_scroll.scroll_to_item(count - 1);
+            }
+            self.followed_lines.set(count);
+        }
         let mut stage_index = 0;
         for (index, line) in run.lines.iter().enumerate() {
             // A stage's heading carries its time on the right (`PipelineLog`).
@@ -2757,18 +2802,16 @@ impl Workspace {
             )))
     }
 
-    /// The toasts, bottom right over the page: newest last.
-    fn render_toasts(&self, status_bar: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    /// The toasts, bottom right of what holds them (the page; the window while the panel is maximized): the running
+    /// operation, then one message - the newest at the bottom.
+    fn render_toasts(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
         let c = theme.colors;
         let store = self.store.read(cx);
         let toasts = store.toasts.clone();
         let running = store.running_title();
         let undoing = store.undoing;
-        let bottom = px(16.0)
-            + if status_bar { theme.metrics.status_bar_height } else { px(0.0) }
-            + if self.panel_visible { theme.metrics.panel_height + theme.metrics.card_gap } else { px(0.0) };
-        let mut stack = div().absolute().right(px(24.0)).bottom(bottom).flex().flex_col().items_end().gap(px(8.0));
+        let mut stack = div().absolute().right(px(16.0)).bottom(px(16.0)).flex().flex_col().items_end().gap(px(8.0));
         if let Some(title) = running {
             stack = stack.child(
                 div()
@@ -2820,7 +2863,7 @@ impl Workspace {
                                 )),
                             ),
                     )
-                    .child(div().pad(px(0.0), px(6.0)).child(div().h(px(2.0)).rounded(px(1.0)).bg(c.accent))),
+                    .child(div().pad(px(0.0), px(6.0)).child(progress_bar(&theme))),
             );
         }
         let waiting = toasts.len().saturating_sub(1);
@@ -2889,6 +2932,27 @@ impl Workspace {
         }
         stack.on_mouse_down(MouseButton::Left, |_, _, _| {})
     }
+}
+
+/// Something under way of unknown length: a third of a 2 px track running across it again and again (1.4 s), eased
+/// at both ends - the whole track lit while animations are off.
+fn progress_bar(theme: &Theme) -> gpui::AnyElement {
+    use gpui::AnimationExt as _;
+    let c = theme.colors;
+    let track = div().relative().h(px(2.0)).rounded(px(1.0)).overflow_hidden().bg(c.card_border);
+    if !theme.animations {
+        return track.bg(c.accent).into_any_element();
+    }
+    track
+        .child(
+            div().absolute().top_0().h_full().w(gpui::relative(0.35)).rounded(px(1.0)).bg(c.accent).with_animation(
+                "operation-progress",
+                gpui::Animation::new(std::time::Duration::from_millis(1400)).repeat().with_easing(ui::motion_easing),
+                // From just off the left end to just off the right one.
+                |bar, t| bar.left(gpui::relative(-0.35 + 1.35 * t)),
+            ),
+        )
+        .into_any_element()
 }
 
 /// The Customize Layout checklist, as it stands now.
