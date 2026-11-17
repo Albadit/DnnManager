@@ -1,11 +1,10 @@
 ---
 name: reliability
 description: >-
-  Reliability and resilience analysis and fixes: SLOs and error budgets, cascading failures, timeouts and deadline
-  propagation, retries with backoff and jitter, circuit breakers, bulkheads, idempotency, transaction boundaries,
-  durable multi-step workflows, health probes, graceful shutdown and degradation, backup restore drills and chaos
-  testing. Use for failure-mode analysis, error-handling reviews, disaster recovery, and implementing resilience
-  patterns.
+  Makes systems survive failure: error handling, timeouts, retries with backoff, idempotency, transactions and
+  consistency, circuit breakers, graceful degradation, health checks, backups and restore drills, SLOs. Use for
+  failure-mode analysis, "what happens if X is down", error-handling reviews, disaster recovery and adding
+  resilience patterns.
 ---
 
 # Reliability
@@ -15,10 +14,15 @@ defined by SLOs and error budgets, defended by resilience patterns (timeouts, re
 validated by chaos experiments and restore drills, and maintained through graceful degradation under overload. Never
 judge reliability without examining failure behaviour first.
 
+## Project standards
+
+If the repository has `docs/website_design_and_development_standards.md` or `docs/backend_design_and_development_standards.md`,
+read the sections on this area before starting (backend standards sections 8 and 9); `CLAUDE.md` says how this codebase applies them.
+
 ## Mode
 
 This skill both analyses and implements. Analyse and report by default. When the request is to build, fix or
-change something, or carries `#fix`, also make the changes: fix Critical and High findings directly and list
+change something, also make the changes: fix Critical and High findings directly and list
 Medium and Low ones in the report.
 
 ## What to cover
@@ -39,9 +43,11 @@ Medium and Low ones in the report.
 - Analyse **cascading failure dynamics** specific to AI workloads (429 retry storms, slow dependency saturation, partial outages)
 - Define **alerting on SLO burn rates** - not infrastructure metrics
 
-## AI-Specific SLIs to Define and Track
+## SLIs to Define and Track
 
-Before analysing reliability, establish what "reliable" means with explicit, user-centric SLIs:
+Before analysing reliability, establish what "reliable" means with explicit, user-centric SLIs. The list below is
+written for AI features (model calls, tool use, streaming); for a system without them keep the availability,
+latency and degradation SLIs and drop the model-specific ones:
 
 - **Availability / success rate**: fraction of "answer requests" returning HTTP 2xx + valid output schema
 - **Correctness proxy SLIs**: tool-call success rate, grounded answer rate (measured via evals)

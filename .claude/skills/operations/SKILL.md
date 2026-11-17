@@ -1,10 +1,10 @@
 ---
 name: operations
 description: >-
-  Operational readiness analysis and implementation: structured logging, metrics and tracing, SLO-based alerting and
-  runbooks, health endpoints, CI/CD and release strategy, rollback, infrastructure as code, configuration and secrets,
-  least privilege, incident response, backup, restore and disaster recovery, capacity and scaling. Use for DevOps
-  reviews, Docker, CI/CD and deployment setup, monitoring and alerting, and implementing ops changes.
+  Sets up and reviews how software is built, shipped and run: CI/CD pipelines and quality gates, Docker and
+  deployment, configuration and secrets, logging, metrics and alerting, health endpoints, backups and disaster
+  recovery, infrastructure as code. Use for deployment work, CI changes, monitoring and alerting, and
+  production-readiness reviews.
 ---
 
 # Operations
@@ -15,10 +15,15 @@ immutable infrastructure as code, zero-downtime deployments with automated rollb
 documented incident response. Every finding must cite the specific operational practice violated and give an
 actionable fix with a priority.
 
+## Project standards
+
+If the repository has `docs/website_design_and_development_standards.md` or `docs/backend_design_and_development_standards.md`,
+read the sections on this area before starting (backend standards sections 9 and 10; website standards section 13); `CLAUDE.md` says how this codebase applies them.
+
 ## Mode
 
 This skill both analyses and implements. Analyse and report by default. When the request is to build, fix or
-change something, or carries `#fix`, also make the changes: fix Critical and High findings directly and list
+change something, also make the changes: fix Critical and High findings directly and list
 Medium and Low ones in the report.
 
 ## What to cover

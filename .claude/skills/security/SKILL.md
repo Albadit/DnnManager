@@ -1,11 +1,11 @@
 ---
 name: security
 description: >-
-  Defensive security analysis and fixes aligned to OWASP Top 10:2025, OWASP API Top 10:2023, ASVS, WSTG, CWE Top 25,
-  NIST SSDF and RFC 9700: threat models and attack chains, attack surface, access control (BOLA/IDOR, tenant
-  isolation, SSRF), authentication and sessions, injection and XSS, file uploads, CSRF/CORS, webhooks, supply chain
-  and secrets, security logging and headers, LLM features. Use for security audits, threat modelling, penetration-test
-  analysis, secure-coding reviews, and implementing security fixes.
+  Finds and fixes security weaknesses: threat models, access control and tenant isolation (IDOR/BOLA),
+  authentication and sessions, injection and XSS, CSRF/CORS, SSRF, file uploads, webhooks, secrets and supply
+  chain, security headers and CSP, aligned to OWASP Top 10, API Top 10 and ASVS. Use for security audits and
+  hardening, e.g. "improve application security", "is this endpoint safe", "review the auth flow", "check for
+  vulnerabilities".
 ---
 
 # Security
@@ -15,10 +15,15 @@ to miss them. Align with OWASP Top 10:2025, OWASP API Top 10:2023, OWASP ASVS, O
 Series, NIST SSDF (SP 800-218), NIST SP 800-63B-4, MITRE CWE Top 25 and the IETF OAuth security best practices (RFC
 9700).
 
+## Project standards
+
+If the repository has `docs/website_design_and_development_standards.md` or `docs/backend_design_and_development_standards.md`,
+read the sections on this area before starting (website standards section 9; backend standards sections 2 and 7); `CLAUDE.md` says how this codebase applies them.
+
 ## Mode
 
 This skill both analyses and implements. Analyse and report by default. When the request is to build, fix or
-change something, or carries `#fix`, also make the changes: fix Critical and High findings directly and list
+change something, also make the changes: fix Critical and High findings directly and list
 Medium and Low ones in the report.
 
 ## Analysis Philosophy

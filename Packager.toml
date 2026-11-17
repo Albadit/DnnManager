@@ -1,0 +1,45 @@
+# How cargo-packager makes DNN Manager's installers: .msi (WiX) on Windows, .dmg on macOS, .deb on Linux.
+# The release (.github/workflows/release.yml) and the VS Code task "Publish" (scripts/publish.ps1, Installer) run it
+# after `cargo build --release`, with the exe copied into the output folder first:
+#   cargo packager --release --formats wix --out-dir dist
+# See .docs/releasing.md.
+
+name = "dnnmanager"
+product-name = "DNN Manager"
+version = "1.8.7"
+identifier = "net.dnnmanager.app"
+publisher = "Albadit"
+authors = ["Albadit"]
+homepage = "https://github.com/Albadit/DnnManager.NET"
+license-file = "LICENSE"
+description = "Run DNN websites on IIS: create, clone, back up, upgrade and keep them warm"
+long-description = "DNN Manager runs DNN (DotNetNuke) websites on this PC's IIS: it creates them from a DNN release or a backup, clones, backs up, restores, upgrades and removes them, and shows their state, logs and database. IIS is Windows only: on macOS and Linux the app opens without it."
+copyright = "Copyright (c) Albadit"
+category = "DeveloperTool"
+icons = ["assets/dnn.ico", "assets/dnn-256.png"]
+binaries = [{ path = "DnnManager", main = true }]
+
+[wix]
+# The MSI installs for every user, as the WPF app's Setup did for all users; DNN Manager asks for administrator rights
+# itself when it starts (IIS needs them).
+languages = ["en-US"]
+# cargo-packager's template with ARM64 added (its own stops at x64) - see the file's header.
+template = "assets/wix/main.wxs"
+
+[deb]
+# What GPUI needs at run time (scripts/linux-deps.sh installs the -dev packages to build).
+depends = [
+    "libxkbcommon0",
+    "libxkbcommon-x11-0",
+    "libwayland-client0",
+    "libx11-xcb1",
+    "libxcb1",
+    "libfontconfig1",
+    "libfreetype6",
+    "libvulkan1",
+]
+section = "devel"
+priority = "optional"
+
+[macos]
+minimum-system-version = "11.0"

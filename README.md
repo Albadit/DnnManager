@@ -1,140 +1,48 @@
 # DNN Manager
 
-**Run DNN sites on your Windows PC without the IIS and SQL Server chores.**
+DNN Manager runs DNN (DotNetNuke) websites on your PC's IIS. It creates them from a DNN release or from a backup,
+clones, backs up, restores, upgrades and removes them, keeps them warm, and shows each site's state, logs, settings
+and database in one window. It is written in Rust with [GPUI](https://gpui.rs), Zed's UI framework.
 
-DNN Manager is a desktop app for DNN (DotNetNuke) developers. It creates a
-working DNN site in one step and then manages every site in your IIS from a
-single window - start, stop, logs, terminal, database - in the style of Docker
-Desktop.
+## Download
 
-[**Download**](https://github.com/Albadit/DnnManager.NET/releases/latest) ·
-[User guide](.docs/user-guide.md) ·
-[Development](.docs/development.md) ·
-[Architecture](.docs/architecture.md) ·
-[Changelog](CHANGELOG.md)
+Every [release](https://github.com/Albadit/DnnManager.NET/releases) has a package per system:
 
-## Why
+| System | Package |
+|---|---|
+| Windows 10/11, x64 | `DnnManager-windows-x86_64.msi` |
+| Windows 11, ARM | `DnnManager-windows-arm64.msi` |
+| macOS, Apple silicon | `DnnManager-macos-arm64.dmg` |
+| macOS, Intel | `DnnManager-macos-x86_64.dmg` |
+| Debian / Ubuntu, x64 | `DnnManager-linux-amd64.deb` (also as `-x86_64.deb`) |
+| Debian / Ubuntu, ARM | `DnnManager-linux-arm64.deb` (also as `-aarch64.deb`) |
 
-A local DNN site by hand means: download a release, unzip it, create an IIS
-site and app pool, set folder permissions, create a database and a login, edit
-`web.config` and click through DNN's install wizard. And once it runs, IIS puts
-it to sleep after 20 minutes, so the next page takes half a minute again.
+`SHA256SUMS.txt` lists every file's checksum. The packages aren't code-signed yet: Windows SmartScreen and macOS
+Gatekeeper ask before the first start.
 
-DNN Manager does all of that for you - and undoes it just as easily: removing a
-project takes its IIS site, folder and database with it.
-
-## What you get
-
-- **A new site in one click** - pick a DNN version from GitHub, give it a name,
-  **Create project**. The first visit shows your site, signed in as the host
-  account you chose - no install wizard.
-- **Every IIS site in one table** - live status, CPU, memory, DNN version and
-  database. Changes made in IIS Manager show up by themselves, no Refresh.
-- **Start, stop, restart or remove** one site or several at once.
-- **Keep warm** - no more slow first page: chosen sites are kept awake with a
-  tiny request every few minutes.
-- **Import, export and clone** sites as `.zip` + `.bacpac`, also from Azure SQL.
-- **Host an existing folder** - the IIS site and database for code you already
-  have.
-- **A bottom panel like VS Code's** - Output, live DNN / IIS / Windows logs, and
-  terminals (PowerShell, Command Prompt, Git Bash) opened in a project's folder.
-- **Open with…** Visual Studio, VS Code, Rider, Cursor and others, or SQL Server
-  Management Studio signed in to the site's database.
-- **Your choice of database** - a SQL Server container it sets up in Docker for
-  you, your own SQL Server / SQL Server Express, or a LocalDB file.
-- **Help built in, in plain words** - a step-by-step getting started guide on
-  the first start, a tour of the window, **F1** help for every page and
-  tooltips that say what each button does.
-- **Light and dark theme**, UI scaling, and an efficiency mode that keeps the
-  app idle while you aren't looking at it.
-
-## Quick start
-
-1. Download `DnnManager_Setup-<version>-x64.exe` from
-   [Releases](https://github.com/Albadit/DnnManager.NET/releases/latest)
-   and run it - it asks for administrator rights and installs for all users,
-   into Program Files.
-2. Start **DNN Manager** and accept the UAC prompt - it manages IIS, so it runs
-   as Administrator. The **Getting started** guide opens and explains the rest -
-   **Skip guide** if you know your way; the **?** at the top right opens it
-   again.
-3. Open **Settings** (the gear): **IIS → Set up IIS** enables the Windows
-   features DNN needs, and **Docker container → Set up docker-compose** creates
-   the SQL Server container. Using your own SQL Server instead? Pick it under
-   **Database server**.
-4. Click **New project**, enter a name, pick a DNN version and press **Create
-   project**. When it's done, open `http://<name>.dnndev.me` - `dnndev.me`
-   points to your own PC, and DNN Manager puts the name in the hosts file too,
-   so it opens without internet (a custom domain like `shop.test` works the
-   same way - see [Host names and working offline](.docs/user-guide.md#host-names-and-working-offline)).
-
-The [user guide](.docs/user-guide.md) walks through every page, menu and setting.
-
-## Requirements
-
-- Windows 10 / 11 or Windows Server, with IIS (DNN Manager can enable it)
-- An account that can run programs as Administrator
-- For the default database: Docker Desktop with Linux containers - or any SQL
-  Server, SQL Server Express or LocalDB instead
+**IIS is Windows only**, so managing websites needs Windows. On macOS and Linux DNN Manager opens and says IIS
+isn't available there - see the [user guide](.docs/user-guide.md#on-macos-and-linux).
 
 ## Build from source
 
-You need the [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0).
-
-```bash
-git clone https://github.com/Albadit/DnnManager.NET.git
-cd DnnManager.NET
-dotnet run                    # builds and starts the app (asks for admin rights)
-dotnet test tests/DnnManager.IntegrationTests --filter "TestCategory!=Integration"   # fast tests
+```powershell
+cargo build -p dnnmanager      # target\debug\DnnManager.exe
+cargo test --workspace         # no IIS, SQL Server or administrator rights needed
 ```
 
-Debugging, the conventions and how to extend it are in
-[.docs/development.md](.docs/development.md); the tests in
-[.docs/testing.md](.docs/testing.md); publishing and the installer in
-[.docs/releasing.md](.docs/releasing.md).
-
-## How it's built
-
-A WPF app on .NET 10, laid out as Clean Architecture in a single project:
-
-| Layer | What it holds |
-|---|---|
-| `DnnManager.Presentation` | WPF windows, pages, themes and the app's start-up |
-| `DnnManager.Application` | Use cases (new project, import, clone, remove…) and the interfaces they need |
-| `DnnManager.Infrastructure` | IIS, Docker, SQL Server, GitHub releases, settings, keep warm, logs |
-| `DnnManager.Domain` | Plain records, no dependencies |
-
-Domain and Application don't depend on WPF or Infrastructure (a test,
-`LayeringTests`, keeps it so); use cases reach IIS, SQL Server and the file
-system through interfaces. The layers, how an
-operation runs, how the window stays current and a map from each feature to its
-code are in [.docs/architecture.md](.docs/architecture.md).
+Prerequisites, running against a stand-in IIS and the project's layout: [.docs/development.md](.docs/development.md).
 
 ## Documentation
 
-| For | Document | What's in it |
-|---|---|---|
-| Users | [User guide](.docs/user-guide.md) | The window, every page and menu, automatic DNN setup, import / host / clone, keep warm, backups, limitations |
-| | [Configuration](.docs/configuration.md) | `Documents\DnnManager` and its database, every settings key, environment variables |
-| | [Troubleshooting](.docs/troubleshooting.md) | Known problems, their causes and fixes |
-| Developers | [Development](.docs/development.md) | Prerequisites, build, run, debugging, conventions, extending |
-| | [Architecture](.docs/architecture.md) | Layers, how an operation runs, live updates, project layout, design decisions, component map |
-| | [Upgrading DNN](.docs/dnn-upgrades.md) | DNN's upgrade path, the analyser, backups, each step, the checks, rollback, the knowledge base, what was tested |
-| | [Testing](.docs/testing.md) | The fast and the integration tests, adding a test |
-| | [Releasing](.docs/releasing.md) | Version, changelog, portable exe, installer and launcher; the release workflow (built, tested, tried and published from the tag, once a reviewer approves); code signing (off until set up); CI and checksums; what to do about a bad release |
-| | [Security](.docs/security.md) | Administrator rights, secrets, what DNN Manager deletes, network exposure, open risks |
-| Everyone | [Changelog](CHANGELOG.md) | What changed in each version |
-| | [Release notes](.docs/release-notes/) | The notes of every GitHub release, one file per version |
-
-## Contributing
-
-Issues and pull requests are welcome. Before opening a pull request, run the
-fast tests, add a line to [CHANGELOG.md](CHANGELOG.md) under *Unreleased*, and
-update the docs when behaviour changes. Follow the conventions in
-[.docs/development.md](.docs/development.md#conventions).
+| | |
+|---|---|
+| [User guide](.docs/user-guide.md) | Installing, the pages, settings, troubleshooting |
+| [Development](.docs/development.md) | Setting up, building, running, debugging, where code goes |
+| [Architecture](.docs/architecture.md) | Crates, data flow, IIS, shared data, decisions |
+| [Design system](.docs/design-system.md) | Colours, sizes and controls |
+| [Testing](.docs/testing.md) | The tests, the stand-in IIS, what was checked by hand |
+| [Releasing](.docs/releasing.md) | Versions, release notes, the release workflow and its packages |
 
 ## License
 
-[MIT](LICENSE). The terminal icons and keep warm's flame are
-[Codicons](https://github.com/microsoft/vscode-codicons) by Microsoft, licensed
-under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+[MIT](LICENSE)

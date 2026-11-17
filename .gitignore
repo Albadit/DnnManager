@@ -1,40 +1,12 @@
-# ---- DnnManager.NET .gitignore ----
+# Build output (cargo) and packages made on this PC
+/target/
+/dist/
 
-# Build output
-bin/
-obj/
-publish/
-# Temporary project WPF creates during markup compilation (left behind if a build is interrupted)
-*_wpftmp.csproj
-*.user
-*.suo
-*.pidb
-*.userprefs
-
-# Single-file publish output / single-file extracted bundles
-*.deps.json
-*.runtimeconfig.json
-*.pdb
-
-# Rider / VS / VS Code
+# Editors
 .vs/
 .idea/
 *.swp
 *.swo
-
-# NuGet
-*.nupkg
-*.snupkg
-project.lock.json
-project.fragment.lock.json
-packages/
-.nuget/
-
-# Test output
-TestResults/
-coverage/
-*.coverage
-*.coveragexml
 
 # OS junk
 Thumbs.db
@@ -44,19 +16,12 @@ Desktop.ini
 
 # Logs
 *.log
-logs/
 
-# Local secrets / overrides
-appsettings.*.local.json
-appsettings.Local.json
-secrets.json
+# Local secrets
 *.env
 .env.*
-!appsettings.json
 
-# Backups created at runtime by the tool itself
+# Backups DNN Manager makes while testing
 *.bak
-clone_*.bak
-developer_*.bak
-
+*.bacpac
 *.zip

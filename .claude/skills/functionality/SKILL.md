@@ -1,10 +1,10 @@
 ---
 name: functionality
 description: >-
-  Functional correctness analysis and bug fixing: business logic against an explicit reference model, equivalence
-  partitions, boundary values, decision tables, edge cases, state transitions, error and async paths, retries and
-  idempotency, integration contracts, and missing tests. Use for validating that a feature behaves as intended,
-  reviewing logic, finding and fixing bugs, and writing regression or property-based tests.
+  Checks that behaviour is correct and fixes logic bugs: business rules against requirements, edge cases and
+  boundary values, decision tables, state transitions, error and async paths, retries and idempotency, integration
+  contracts, and which behaviour lacks a test. Use for "why does X happen", bug hunts, reviewing logic or
+  calculations, and deciding what a regression test must prove.
 ---
 
 # Functionality
@@ -13,10 +13,15 @@ Verify that the implementation's observable behaviour matches the intended refer
 acceptance criteria. Use systematic, evidence-based techniques so no gap in functional coverage is left. Treat
 unclear expected behaviour as a defect risk, not as permission to assume.
 
+## Project standards
+
+If the repository has `docs/website_design_and_development_standards.md` or `docs/backend_design_and_development_standards.md`,
+read the sections on this area before starting (website standards sections 11 and 12; backend standards section 6); `CLAUDE.md` says how this codebase applies them.
+
 ## Mode
 
 This skill both analyses and implements. Analyse and report by default. When the request is to build, fix or
-change something, or carries `#fix`, also make the changes: fix Critical and High findings directly and list
+change something, also make the changes: fix Critical and High findings directly and list
 Medium and Low ones in the report.
 
 ## What to cover

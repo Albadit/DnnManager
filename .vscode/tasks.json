@@ -2,247 +2,199 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Build",
-            "detail": "Windows app, Debug",
+            "label": "Build: Debug",
+            "detail": "DNN Manager, debug (target/debug)",
             "type": "process",
-            "command": "dotnet",
-            "args": [
-                "build",
-                "${workspaceFolder}/DnnManager.csproj"
-            ],
+            "command": "cargo",
+            "args": ["build", "-p", "dnnmanager"],
+            // Every task is in the build group without a default, so Ctrl+Shift+B lists them all.
             "group": "build",
-            "problemMatcher": "$msCompile",
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared",
-                "clear": true
-            }
+            "problemMatcher": "$rustc",
+            "presentation": { "reveal": "always", "panel": "shared", "clear": true }
         },
         {
             "label": "Build: Release",
-            "detail": "Windows app, as a release",
+            "detail": "Optimised, no console window (target/release)",
             "type": "process",
-            "command": "dotnet",
-            "args": [
-                "build",
-                "${workspaceFolder}/DnnManager.csproj",
-                "-c",
-                "Release"
-            ],
+            "command": "cargo",
+            "args": ["build", "--release", "-p", "dnnmanager"],
             "group": "build",
-            "problemMatcher": "$msCompile",
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared",
-                "clear": true
-            }
+            "problemMatcher": "$rustc",
+            "presentation": { "reveal": "always", "panel": "shared", "clear": true }
         },
         {
-            "label": "Clean",
-            "detail": "Remove bin and obj",
+            "label": "Run",
+            "detail": "Build and start DNN Manager (asks for administrator rights on Windows)",
             "type": "process",
-            "command": "dotnet",
-            "args": [
-                "clean",
-                "${workspaceFolder}/DnnManager.csproj"
-            ],
+            "command": "cargo",
+            "args": ["run", "-p", "dnnmanager"],
             "group": "build",
-            "problemMatcher": "$msCompile",
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared",
-                "clear": true
-            }
+            "problemMatcher": "$rustc",
+            "presentation": { "reveal": "always", "panel": "shared", "clear": true }
         },
         {
-            // Builds DNN Manager on this PC into publish\: pick Portable or Setup, then tick Windows, macOS and/or Linux.
-            // Windows: DnnManager-<version>-x64.exe or DnnManager_Setup-<version>-x64.exe (Setup always without the
-            // launcher - for this PC; releases are built on GitHub, with it). macOS and Linux (switched off for now):
-            // the cross-platform app - portable from any system, its packages (.app zip, tar.gz) only on a Mac or Linux.
-            // .github/scripts/publish-local.ps1, see .docs/releasing.md.
+            "label": "Test",
+            "detail": "Every crate's tests - no IIS or administrator rights needed",
+            "type": "process",
+            "command": "cargo",
+            "args": ["test", "--workspace"],
+            "group": "build",
+            "problemMatcher": "$rustc",
+            "presentation": { "reveal": "always", "panel": "shared", "clear": true }
+        },
+        {
+            "label": "Clippy",
+            "type": "process",
+            "command": "cargo",
+            "args": ["clippy", "--workspace", "--all-targets"],
+            "group": "build",
+            "problemMatcher": "$rustc",
+            "presentation": { "reveal": "always", "panel": "shared", "clear": true }
+        },
+        {
+            // Executable or installer, then the systems - several at once (the multi-select comes from the extension
+            // Tasks Shell Input, augustocdias.tasks-shell-input). Into dist\ (scripts/publish.ps1). This PC compiles for
+            // its own operating system only; the others are skipped with a note - the release on GitHub builds all.
             "label": "Publish",
-            "detail": "Portable or Setup, per OS",
+            "detail": "Executable or installer, then the systems - into dist",
             "type": "process",
             "command": "powershell",
             "osx": { "command": "pwsh" },
             "linux": { "command": "pwsh" },
             "args": [
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}/.github/scripts/publish-local.ps1",
-                "-Kind",
-                "${input:publishKind}",
-                "-Platforms",
-                "${input:publishPlatforms}"
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}/scripts/publish.ps1",
+                "-Kind", "${input:publishKind}",
+                "-Platform", "${input:publishPlatforms}"
             ],
             "group": "build",
-            "problemMatcher": "$msCompile",
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared",
-                "clear": true
-            }
+            "problemMatcher": "$rustc",
+            "presentation": { "reveal": "always", "panel": "shared", "clear": true }
         },
         {
-            // A portable exe one version below GitHub's newest release (1.6.0 -> 1.5.9), so its Update button installs
-            // that release: publish\update-test\DnnManager-<version>-x64.exe. See .docs/releasing.md, The in-app update.
-            "label": "Publish: update test",
-            "detail": "One version below the latest release",
+            // 1. release type, 2. version (suggested from the type, any other can be typed), 3. commit, 4. confirm -
+            // each picker filled by scripts/release.ps1, which then tags the commit and pushes the tag. GitHub builds and
+            // tests on every system and publishes the installers only when all passed (.github/workflows/release.yml).
+            "label": "Release: Github",
+            "detail": "Type, version, commit, confirm - GitHub tests, builds and publishes",
             "type": "process",
             "command": "powershell",
+            "osx": { "command": "pwsh" },
+            "linux": { "command": "pwsh" },
             "args": [
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}/.github/scripts/build-update-test.ps1"
-            ],
-            "group": "build",
-            "problemMatcher": "$msCompile",
-            "presentation": {
-                "reveal": "always",
-                "panel": "shared",
-                "clear": true
-            }
-        },
-        {
-            // Pick .docs/release-notes/vX.Y.Z.md (its name is the tag and the title), the release label as GitHub names
-            // it (None, Pre-release, Latest), the platforms to build (Windows, macOS, Linux - tick one or more) and the commit
-            // on GitHub (newest first); it tags it with the label and the platforms in the tag's message and pushes it at once.
-            // On GitHub the release workflow (.github/workflows/release.yml) waits for CI on that commit, builds what was
-            // chosen only once CI has passed - nothing is tested twice - and publishes it with that label. See .docs/releasing.md.
-            // The notes, platform and commit pickers are filled by the extension Tasks Shell Input (augustocdias.tasks-shell-input).
-            "label": "Release",
-            "detail": "Tag a version, GitHub publishes it",
-            "type": "process",
-            "command": "powershell",
-            "args": [
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}/.github/scripts/publish-release.ps1",
-                "-NotesFile",
-                "${input:releaseNotes}",
-                "-Commit",
-                "${input:releaseCommit}",
-                "-Label",
-                "${input:releaseLabel}",
-                "-Platforms",
-                "${input:releasePlatforms}"
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", "${workspaceFolder}/scripts/release.ps1",
+                "-Label", "${input:releaseLabel}",
+                "-Version", "${input:releaseVersion}",
+                "-Commit", "${input:releaseCommit}",
+                "-Confirm", "${input:releaseConfirm}"
             ],
             "group": "build",
             "problemMatcher": [],
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated",
-                "focus": true,
-                "clear": true
-            }
-        },
-        {
-            // Moves the repository to the newest .NET SDK: installs it with winget when this PC doesn't have it, puts it
-            // in global.json and updates the lock files with it - then commit and push. See .docs/releasing.md.
-            "label": "Update .NET SDK",
-            "detail": "Newest SDK and lock files",
-            "type": "process",
-            "command": "powershell",
-            "args": [
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}/.github/scripts/update-sdk.ps1",
-                "-Install"
-            ],
-            "group": "build",
-            "problemMatcher": [],
-            "presentation": {
-                "reveal": "always",
-                "panel": "dedicated",
-                "focus": true,
-                "clear": true
-            }
+            "presentation": { "reveal": "always", "panel": "dedicated", "focus": true, "clear": true }
         }
     ],
     "inputs": [
         {
+            // One choice, shown like the systems below (Tasks Shell Input): each line is value|label|description|detail.
+            // VS Code's own pickString takes only label and value - no grey text or second line.
             "id": "publishKind",
-            "type": "pickString",
-            "description": "What to build",
-            "options": [
-                { "label": "Portable - one program, nothing to install", "value": "portable" },
-                { "label": "Setup - the installer (Windows), the .app zip (macOS), the tar.gz (Linux)", "value": "setup" }
-            ],
-            "default": "portable"
+            "type": "command",
+            "command": "shellCommand.execute",
+            "args": {
+                "command": "powershell",
+                "commandArgs": [
+                    "-NoProfile", "-Command",
+                    "'executable|$(file-binary) Executable|one program|Nothing to install: the .exe on Windows, the program on macOS and Linux',",
+                    "'installer|$(package) Installer|the executable and its package|The .msi (Windows), DNN Manager.app in a .dmg (macOS), the .deb (Linux)'"
+                ],
+                "description": "What to build",
+                "fieldSeparator": "|",
+                "rememberPrevious": true,
+                "taskId": "publishKind"
+            }
         },
         {
+            // Several at once (Tasks Shell Input's multiselect). The list is right here: each line is
+            // value|label|description|detail (shown as: icon and name, the architecture in grey, the detail under it);
+            // PowerShell only prints them back. The picked values go to publish.ps1 as one
+            // comma-separated -Platform. This PC builds its own operating system's; the others are skipped.
             "id": "publishPlatforms",
             "type": "command",
             "command": "shellCommand.execute",
             "args": {
                 "command": "powershell",
-                "commandArgs": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/.github/scripts/publish-local.ps1", "-List", "platforms"],
-                "cwd": "${workspaceFolder}",
-                "fieldSeparator": "||",
+                "commandArgs": [
+                    "-NoProfile", "-Command",
+                    "'windows-x86_64|$(device-desktop) Windows|x64|.exe / .msi - builds on Windows',",
+                    "'windows-arm64|$(device-desktop) Windows|ARM64|.exe / .msi - needs the MSVC ARM64 build tools',",
+                    "'macos-arm64|$(device-desktop) macOS|Apple Silicon|.dmg - builds on a Mac only',",
+                    "'macos-x86_64|$(device-desktop) macOS|Intel|.dmg - builds on a Mac only',",
+                    "'linux-amd64|$(terminal-linux) Linux|amd64|.deb - builds on Linux only',",
+                    "'linux-arm64|$(terminal-linux) Linux|arm64|.deb - builds on Linux only',",
+                    "'linux-x86_64|$(terminal-linux) Linux|x86_64|Same as amd64, other file name - Linux only',",
+                    "'linux-aarch64|$(terminal-linux) Linux|aarch64|Same as arm64, other file name - Linux only'"
+                ],
                 "description": "Platforms to build for - tick one or more",
+                "fieldSeparator": "|",
                 "multiselect": true,
                 "multiselectSeparator": ",",
-                "warnOnStderr": false
+                "rememberPrevious": true,
+                "taskId": "publishPlatforms"
             }
         },
         {
-            "id": "releaseNotes",
-            "type": "command",
-            "command": "shellCommand.execute",
-            "args": {
-                "command": "powershell",
-                "commandArgs": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/.github/scripts/publish-release.ps1", "-List", "notes"],
-                "cwd": "${workspaceFolder}",
-                "fieldSeparator": "||",
-                "description": "Release notes to publish - the file name is the tag and the release title",
-                "warnOnStderr": false
-            }
-        },
-        {
+            // Shown like the pickers above (Tasks Shell Input). Latest is first, so it is the one highlighted.
             "id": "releaseLabel",
-            "type": "pickString",
-            "description": "Release label - Latest is what every DNN Manager's Update button offers",
-            "options": [
-                { "label": "None - published, but not the latest", "value": "none" },
-                { "label": "Pre-release - label it as not ready for production", "value": "prerelease" },
-                { "label": "Latest - label it as the latest for this repository", "value": "latest" }
-            ],
-            "default": "latest"
-        },
-        {
-            "id": "releasePlatforms",
             "type": "command",
             "command": "shellCommand.execute",
             "args": {
                 "command": "powershell",
-                "commandArgs": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/.github/scripts/publish-release.ps1", "-List", "platforms"],
-                "cwd": "${workspaceFolder}",
-                "fieldSeparator": "||",
-                "description": "Platforms to build - tick one or more",
-                "multiselect": true,
-                "multiselectSeparator": ",",
-                "warnOnStderr": false
+                "commandArgs": [
+                    "-NoProfile", "-Command",
+                    "'latest|$(star-full) Latest|the latest for this repository|What every DNN Manager''s update check offers',",
+                    "'prerelease|$(beaker) Pre-release|not ready for production|Published, labelled as a pre-release; the update check doesn''t offer it',",
+                    "'none|$(circle-slash) None|published, but not the latest|Listed on the releases page without a label; the latest stays as it is'"
+                ],
+                "description": "1/4 Release type",
+                "fieldSeparator": "|"
             }
         },
         {
+            // The next versions after the newest release tag, for the type picked; any other can be typed.
+            "id": "releaseVersion",
+            "type": "command",
+            "command": "shellCommand.execute",
+            "args": {
+                "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1 -Suggest -Label ${input:releaseLabel}",
+                "cwd": "${workspaceFolder}",
+                "description": "2/4 Version - pick one, or type another (X.Y.Z, or X.Y.Z-rc1 for a pre-release)",
+                "fieldSeparator": "|",
+                "allowCustomValues": true
+            }
+        },
+        {
+            // The newest commits on the branch's remote: a release is made from a pushed commit only.
             "id": "releaseCommit",
             "type": "command",
             "command": "shellCommand.execute",
             "args": {
-                "command": "powershell",
-                "commandArgs": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/.github/scripts/publish-release.ps1", "-List", "commits"],
+                "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1 -Commits",
                 "cwd": "${workspaceFolder}",
-                "fieldSeparator": "||",
-                "description": "Commit to release (newest on GitHub first) - GitHub builds it once CI has passed on it",
-                "warnOnStderr": false
+                "description": "3/4 Commit to release",
+                "fieldSeparator": "|"
+            }
+        },
+        {
+            // The release spelled out - or, when something is wrong, only a way to stop, with the reason.
+            "id": "releaseConfirm",
+            "type": "command",
+            "command": "shellCommand.execute",
+            "args": {
+                "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1 -Summary -Label ${input:releaseLabel} -Version ${input:releaseVersion} -Commit ${input:releaseCommit}",
+                "cwd": "${workspaceFolder}",
+                "description": "4/4 Confirm the release",
+                "fieldSeparator": "|"
             }
         }
     ]

@@ -1,0 +1,36 @@
+[package]
+name = "dnnmanager"
+description = "DNN Manager's window, in GPUI (the C# DnnManager.Presentation)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "DnnManager"
+path = "src/main.rs"
+
+[dependencies]
+dnnm-application.workspace = true
+dnnm-infrastructure.workspace = true
+dnnm-keepwarm = { path = "../keepwarm" }
+dnnm-logs = { path = "../logs" }
+dnnm-system = { path = "../system" }
+dnnm-terminal = { path = "../terminal" }
+dnnm-ui = { path = "../ui" }
+dnnm-wiring = { path = "../wiring" }
+dnnm-openwith = { path = "../openwith" }
+dnnm-dialogs = { path = "../dialogs" }
+dnnm-diagnostics = { path = "../diagnostics" }
+dnnm-sql = { path = "../sql" }
+dnnm-dnn = { path = "../dnn" }
+dnnm-tray = { path = "../tray" }
+raw-window-handle = "0.6"
+gpui = "0.2.2"
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+schemars = "1"
+log.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

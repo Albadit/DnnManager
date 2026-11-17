@@ -1,6 +1,6 @@
 # Usability: checklists
 
-## Accessibility Checklist (WCAG 2.1 AA)
+## Accessibility Checklist (WCAG 2.2 AA)
 
 ### Perceivable
 - [ ] All informative images have meaningful, descriptive alt text (WCAG 1.1.1)
@@ -25,6 +25,10 @@
 - [ ] No auto-advancing without user control (WCAG 2.2.1)
 - [ ] Custom components keyboard-operable (dropdowns, modals, date pickers)
 - [ ] Focus managed on dynamic content (modal focus trap, return focus on close)
+- [ ] Focused element not hidden by sticky headers, banners or overlays (WCAG 2.4.11, new in 2.2)
+- [ ] Every drag action has a single-pointer alternative (WCAG 2.5.7, new in 2.2)
+- [ ] Pointer targets at least 24 x 24 CSS px, or spaced so a 24 px circle fits (WCAG 2.5.8, new in 2.2)
+- [ ] Accessible name contains the visible label text (WCAG 2.5.3)
 
 ### Understandable
 - [ ] `lang` attribute on `<html>` element (WCAG 3.1.1)
@@ -36,9 +40,12 @@
 - [ ] Errors identified in text, not just color (WCAG 3.3.1)
 - [ ] Error messages suggest how to fix the problem (WCAG 3.3.3)
 - [ ] Error prevention for legal/financial/data submissions (WCAG 3.3.4)
+- [ ] Help (contact, support link) in the same place on every page that has it (WCAG 3.2.6, new in 2.2)
+- [ ] Information already entered in a process is not asked for again (WCAG 3.3.7, new in 2.2)
+- [ ] Sign-in needs no cognitive test: paste and password managers allowed, or an alternative (WCAG 3.3.8, new in 2.2)
 
 ### Robust
-- [ ] Valid, semantic HTML (correct heading hierarchy, landmarks, lists, tables)
+- [ ] Valid, semantic HTML (correct heading hierarchy, landmarks, lists, tables); 4.1.1 Parsing is obsolete in WCAG 2.2
 - [ ] ARIA attributes correct - no conflicting or redundant ARIA
 - [ ] Custom components follow WAI-ARIA Authoring Practices
 - [ ] Tested with automated tools (axe, Lighthouse) AND manual screen reader testing

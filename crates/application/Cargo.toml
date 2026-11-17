@@ -1,0 +1,13 @@
+[package]
+name = "dnnm-application"
+description = "DNN Manager's use cases and the interfaces they see the system through (the C# DnnManager.Application)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+dnnm-domain.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

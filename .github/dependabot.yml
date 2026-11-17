@@ -1,12 +1,12 @@
 version: 2
-# Updates for the GitHub Actions the workflow pins to commits, and for the NuGet packages - proposed as pull requests,
+# Updates for the GitHub Actions the workflows pin to commits, and for the Rust crates - proposed as pull requests,
 # which CI builds and tests.
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
-  - package-ecosystem: nuget
+  - package-ecosystem: cargo
     directory: /
     schedule:
       interval: monthly

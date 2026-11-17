@@ -12,3 +12,7 @@ trim_trailing_whitespace = true
 [*.md]
 # Two trailing spaces can be a line break in Markdown.
 trim_trailing_whitespace = false
+
+[*.sh]
+# Run by bash on Linux and macOS (.gitattributes keeps them LF).
+end_of_line = lf

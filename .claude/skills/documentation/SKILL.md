@@ -1,13 +1,10 @@
 ---
 name: documentation
 description: >-
-  Writes and maintains a project's documentation for the people who use the application and the developers who
-  take it over: README, user guide, docs/ folder (configuration, troubleshooting, architecture, development,
-  database, API, testing, deployment, security), ADRs, changelog, code comments and Mermaid diagrams - all verified
-  against the code. Use when asked to document, write or update docs, a user guide or a README, set up or reorganize
-  a docs folder, explain the architecture or data flow, draw diagrams, prepare a handover, write release notes, or
-  when a code change affects documented behaviour, UI, architecture, configuration, APIs, the database, setup or
-  deployment. Works for any language or framework.
+  Writes and maintains documentation verified against the code: README, user guide, docs/ folder (setup,
+  configuration, architecture, API, database, testing, deployment, troubleshooting), ADRs, changelog, release notes,
+  code comments and Mermaid diagrams. Use when asked to document or explain something, write a guide or handover,
+  draw a diagram, or when a code change alters documented behaviour, configuration, APIs, setup or deployment.
 ---
 
 # Documentation
@@ -16,6 +13,11 @@ Documentation is part of the implementation, not a final chore. It has two reade
 **users**, who must install, use and troubleshoot the application from the user guide without asking anyone; and
 **developers** new to the project, who must run, understand, debug, extend and deploy it without the original
 developer.
+
+## Project standards
+
+If the repository has `docs/website_design_and_development_standards.md` (section 14) or
+`docs/backend_design_and_development_standards.md` (section 12), they list the documents this project expects.
 
 ## Workflow
 

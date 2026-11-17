@@ -1,0 +1,26 @@
+[package]
+name = "dnnm-dialogs"
+description = "DNN Manager's dialogs (src/DnnManager.Presentation/Controls/*Dialog.xaml) in GPUI."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+dnnm-domain.workspace = true
+dnnm-application.workspace = true
+dnnm-infrastructure.workspace = true
+# Settings and Troubleshoot (settings_page.rs, troubleshoot_page.rs): secrets, sign-in task, IIS features, Docker,
+# connection tests, the upgrade path, the terminal's shells; rusqlite for Clean up data's tables.
+dnnm-dnn = { path = "../dnn" }
+dnnm-sql = { path = "../sql" }
+dnnm-system = { path = "../system" }
+dnnm-terminal = { path = "../terminal" }
+rusqlite.workspace = true
+dnnm-ui = { path = "../ui" }
+gpui = "0.2.2"
+# Edit DNN upgrade path's Import / Export (dnn_upgrade_path.rs, the C#'s UpgradePathFile).
+serde_json = "1"
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,3 @@
+# GPUI supports only the MSVC toolchain on Windows (its shaders are compiled with the Windows SDK's fxc.exe).
+[toolchain]
+channel = "stable-x86_64-pc-windows-msvc"
