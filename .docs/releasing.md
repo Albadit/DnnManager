@@ -21,11 +21,11 @@ flowchart LR
    | Picker | What it offers |
    |---|---|
    | 1/4 Release type | **Latest** (what DNN Manager's update check finds), **Pre-release**, **None** |
-   | 2/4 Version | The versions whose notes are in `.docs/release-notes/` and that aren't released yet, of the type picked (`v2.0.0-rc2.md` → 2.0.0-rc2). Without any, the next patch, minor and major after the newest release on GitHub, marked *no release notes yet* (a pre-release gets the next free `rcN`). Any other can be typed. |
+   | 2/4 Version | The versions whose notes are in `.docs/release-notes/` and that have no published release yet, of the type picked (`v2.0.0-rc2.md` → 2.0.0-rc2). Nothing else is guessed: without notes for that type it says so - write the notes first. Any other version can be typed. |
    | 3/4 Commit | The newest 30 commits on the branch's remote - a release is made from a pushed commit only; a released one says so |
    | 4/4 Confirm | The release spelled out (version, type, commit, notes) - or, when something is wrong, only *Can't release* with the reason |
 
-   It refuses - before anything is pushed - a version that isn't newer than the newest release, a tag that exists, a
+   It refuses - before anything is pushed - a version that isn't newer than the newest release, a version that is published already, a
    pre-release without a suffix (`-rc1`) or a Latest with one, a commit that isn't on the remote, and a commit whose CI
    failed, was cancelled or never ran (the confirmation says whether CI passed or is still running). On **Release** it
    checks all of that again, tags the commit (an annotated tag whose message carries `Release-Label: <type>`) and
@@ -91,10 +91,10 @@ output folder, so the script copies it there first. Tried on Windows: `dist\DnnM
 
 ## Release a version again
 
-The tag exists but its run failed (CI, a package), so nothing was published. Fix it, push the fix, and either
-release the next version, or move the tag to the new commit:
-`powershell -File scripts/release.ps1 -Label <type> -Version X.Y.Z -Commit <sha> -Confirm yes -Redo`. `-Redo` refuses
-a tag whose release is published - DNN Manager offers only newer versions, so a published release is never redone.
+Only a published GitHub release counts as released. When a tag's run failed or was cancelled, nothing was published
+and the version is free again: fix it, push the fix, and run **Release: Github** with the same version and the new
+commit - the picker still offers it, and the release moves the tag to that commit. A published release is never
+redone: the picker refuses it, so release the next version instead.
 
 ## Updates inside the app
 

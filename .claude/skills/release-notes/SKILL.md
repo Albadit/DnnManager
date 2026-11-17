@@ -43,9 +43,9 @@ deciding whether to update and what changes for them - not developers.
 ## Redoing a release
 
 The tag exists but its run failed, so nothing was published. Update the notes in place, have the owner commit and
-push, then either release the next version, or move the tag:
-`scripts/release.ps1 -Label <type> -Version X.Y.Z -Commit <sha> -Confirm yes -Redo`. `-Redo` refuses a published
-release - DNN Manager offers only *newer* versions; recommend the next one then.
+push, then run **Release: Github** again with the same version and the new commit: only a published release counts
+as released, so the picker still offers it and the release moves the tag. A published release is refused - DNN
+Manager offers only *newer* versions; recommend the next one then.
 
 ## Structure
 

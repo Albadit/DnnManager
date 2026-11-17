@@ -2,8 +2,8 @@
 # script, then runs it to tag and push:
 #
 #   1. type      -Label latest | prerelease | none           (how GitHub labels the release)
-#   2. version   -Suggest -Label <type>                       next versions after the newest release tag; any other
-#                                                             can be typed (the picker allows custom values)
+#   2. version   -Suggest -Label <type>                       the versions with release notes not published yet;
+#                                                             any other can be typed
 #   3. commit    -Commits                                     the newest commits on the branch's remote
 #   4. confirm   -Summary -Label -Version -Commit             the release spelled out, or why it can't be made
 #
@@ -13,7 +13,8 @@
 # commit whose CI failed is refused here already), packages the installers, and publishes the release only when all of
 # that passed - nothing built on this PC is uploaded.
 #
-#   -Redo   moves an existing tag that has no published release (a failed run) to the commit picked
+# A version counts as released only when GitHub has a published release for it. A tag without one (a failed or
+# cancelled run) is free again: releasing that version moves the tag to the commit picked.
 param(
     [ValidateSet("latest", "prerelease", "none")][string]$Label = "latest",
     [string]$Version = "",
@@ -21,8 +22,7 @@ param(
     [string]$Confirm = "",
     [switch]$Suggest,
     [switch]$Commits,
-    [switch]$Summary,
-    [switch]$Redo
+    [switch]$Summary
 )
 
 $ErrorActionPreference = "Stop"
@@ -64,6 +64,25 @@ function Tags {
     return $names | ForEach-Object { Parse-Version $_ } | Where-Object { $_ }
 }
 
+# The published releases on GitHub as versions; $null when GitHub can't be asked. Drafts aren't listed without a
+# token, and a tag whose run failed has no release - neither counts as released.
+function Released {
+    try {
+        $list = Invoke-RestMethod "https://api.github.com/repos/$(Repo-Slug)/releases?per_page=100" `
+            -Headers @{ "User-Agent" = "DnnManager-release" }
+    } catch {
+        return $null
+    }
+    return @($list | Where-Object { -not $_.draft } | ForEach-Object { Parse-Version $_.tag_name } | Where-Object { $_ })
+}
+
+# Whether the tag exists here or on GitHub.
+function Tag-Exists([string]$tag) {
+    $local = git tag --list $tag
+    $remote = Git-Quiet ls-remote --tags origin "refs/tags/$tag"
+    return [bool]($local -or $remote)
+}
+
 function Newest-Stable($tags) {
     return $tags | Where-Object { -not $_.Suffix } | Sort-Object { Base-Key $_ } | Select-Object -Last 1
 }
@@ -85,8 +104,11 @@ function Ci-State([string]$commit) {
 }
 
 # Everything that would make the release wrong - empty when it can be made.
-function Problems([string]$label, [string]$version, [string]$commit, [switch]$redo) {
+function Problems([string]$label, [string]$version, [string]$commit) {
     $issues = @()
+    if ($version -eq "no-notes") {
+        return @("No release notes for this type yet: write .docs/release-notes/vX.Y.Z.md first, or type a version.")
+    }
     $v = Parse-Version $version
     if (-not $v) {
         return @("'$version' isn't a version: use X.Y.Z, or X.Y.Z-rc1 for a pre-release.")
@@ -97,16 +119,16 @@ function Problems([string]$label, [string]$version, [string]$commit, [switch]$re
     if ($label -ne "prerelease" -and $v.Suffix) {
         $issues += "$($v.Text) has a suffix, which makes it a pre-release: pick Pre-release, or drop the suffix."
     }
-    $tags = Tags
-    $newest = Newest-Stable $tags
+    $released = Released
+    if ($null -eq $released) {
+        return @("GitHub can't be reached to see what is released - try again in a minute.")
+    }
+    $newest = Newest-Stable $released
     if ($newest -and (Base-Key $v) -le (Base-Key $newest)) {
         $issues += "v$($newest.Text) is released already: the version must be newer."
     }
-    $tag = "v$($v.Text)"
-    $local = git tag --list $tag
-    $remote = Git-Quiet ls-remote --tags origin "refs/tags/$tag"
-    if (($local -or $remote) -and -not $redo) {
-        $issues += "$tag exists already. Pick another version (or run the script with -Redo to move it)."
+    if (@($released | ForEach-Object { $_.Text }) -contains $v.Text) {
+        $issues += "v$($v.Text) is published already: a published release is never redone - pick a newer version."
     }
     if (-not $commit) {
         $issues += "No commit picked."
@@ -138,9 +160,11 @@ function Notes-Line([string]$version) {
     return "No $notes - GitHub writes the notes from the commits"
 }
 
-# -- 2. version: the versions with release notes waiting; without any, what comes after the newest release --
+# -- 2. version: the versions with release notes waiting (only those - nothing is guessed) --
 if ($Suggest) {
-    $tags = Tags
+    # Published releases; when GitHub can't be asked, the tags (a failed run's tag then looks released).
+    $tags = Released
+    if ($null -eq $tags) { $tags = @(Tags) }
     $newest = Newest-Stable $tags
     if (-not $newest) { $newest = @{ Major = 0; Minor = 0; Patch = 0; Text = "0.0.0" } }
     $released = @($tags | ForEach-Object { $_.Text })
@@ -154,29 +178,16 @@ if ($Suggest) {
     if ($ready.Count) {
         foreach ($v in $ready) {
             $icon = if ($v.Suffix) { "`$(beaker)" } else { "`$(tag)" }
-            Write-Output "$($v.Text)|$icon $($v.Text)|release notes ready|.docs/release-notes/v$($v.Text).md - or type another version"
+            $detail = ".docs/release-notes/v$($v.Text).md - or type another version"
+            if (Tag-Exists "v$($v.Text)") { $detail = "Its tag exists without a release: it moves to the commit you pick" }
+            Write-Output "$($v.Text)|$icon $($v.Text)|release notes ready|$detail"
         }
         exit 0
     }
 
-    # No notes for this type yet: the next versions, said to have none.
-    $bases = @(
-        @{ Kind = "patch"; Detail = "fixes and small changes"; V = "$($newest.Major).$($newest.Minor).$($newest.Patch + 1)" },
-        @{ Kind = "minor"; Detail = "new features, nothing removed"; V = "$($newest.Major).$($newest.Minor + 1).0" },
-        @{ Kind = "major"; Detail = "changes that break something"; V = "$($newest.Major + 1).0.0" }
-    )
-    foreach ($b in $bases) {
-        if ($Label -eq "prerelease") {
-            # The next rcN for that version.
-            $existing = @($tags | Where-Object { $_.Suffix -match "^rc(\d+)$" -and "$($_.Major).$($_.Minor).$($_.Patch)" -eq $b.V } |
-                ForEach-Object { [int]($_.Suffix -replace "^rc", "") })
-            $n = 1 + ($existing + 0 | Measure-Object -Maximum).Maximum
-            $value = "$($b.V)-rc$n"
-            Write-Output "$value|`$(beaker) $value|$($b.Kind) pre-release, no release notes yet|After v$($newest.Text): $($b.Detail) - or type another version"
-        } else {
-            Write-Output "$($b.V)|`$(tag) $($b.V)|$($b.Kind), no release notes yet|After v$($newest.Text): $($b.Detail) - or type another version"
-        }
-    }
+    # No notes for this type: nothing is guessed. A version can still be typed.
+    $kind = if ($Label -eq "prerelease") { "pre-release, e.g. v2.1.0-rc1.md" } else { "release, e.g. v2.1.0.md" }
+    Write-Output "no-notes|`$(info) No release notes for a $($labelNames[$Label]) release|write them first in .docs/release-notes/|One file per $kind - or type a version here"
     exit 0
 }
 
@@ -211,7 +222,8 @@ if ($Summary) {
         "running" { "CI still running - the release waits for it" }
         default { "CI state unknown - the release checks it" }
     }
-    Write-Output "yes|`$(rocket) Release v$($v.Text)|$($labelNames[$Label]) - $short|$ciText. $(Notes-Line $Version). GitHub packages and publishes the installers once CI passed."
+    $moves = if (Tag-Exists "v$($v.Text)") { " The tag v$($v.Text) (no release) moves to this commit." } else { "" }
+    Write-Output "yes|`$(rocket) Release v$($v.Text)|$($labelNames[$Label]) - $short|$ciText.$moves $(Notes-Line $Version). GitHub packages and publishes the installers once CI passed."
     Write-Output "no|`$(close) Cancel|nothing is tagged or pushed|"
     exit 0
 }
@@ -221,7 +233,7 @@ if ($Confirm -ne "yes") {
     Write-Host "Cancelled - nothing was tagged or pushed."
     exit 0
 }
-$issues = @(Problems $Label $Version $Commit -redo:$Redo)
+$issues = @(Problems $Label $Version $Commit)
 if ($issues.Count) {
     $issues | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
     throw "The release can't be made - nothing was tagged or pushed."
@@ -230,17 +242,12 @@ $v = Parse-Version $Version
 $tag = "v$($v.Text)"
 $slug = Repo-Slug
 
-if ($Redo) {
-    $published = $true
-    try {
-        Invoke-RestMethod "https://api.github.com/repos/$slug/releases/tags/$tag" -Headers @{ "User-Agent" = "DnnManager-release" } | Out-Null
-    } catch {
-        # 404: no published release - the tag may move.
-        $published = $false
-    }
-    if ($published) { throw "$tag is published already: a published release is never redone - pick a newer version." }
+# A tag without a published release (Problems refused a published one): move it to the commit picked.
+if (Tag-Exists $tag) {
+    Write-Host "$tag exists without a published release - moving it to the commit picked."
     Git-Quiet tag -d $tag | Out-Null
     Git-Quiet push origin ":refs/tags/$tag" | Out-Null
+    if (Git-Quiet ls-remote --tags origin "refs/tags/$tag") { throw "Removing the old $tag from GitHub failed - nothing was released." }
 }
 
 Write-Host "Release $tag ($($labelNames[$Label])) from $(git log -1 '--format=%h %s' $Commit)"
