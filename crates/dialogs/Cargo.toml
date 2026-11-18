@@ -19,6 +19,8 @@ dnnm-terminal = { path = "../terminal" }
 rusqlite.workspace = true
 dnnm-ui = { path = "../ui" }
 gpui = "0.2.2"
+# The Open dialog's owner window (file_prompt.rs).
+raw-window-handle = "0.6"
 # Edit DNN upgrade path's Import / Export (dnn_upgrade_path.rs, the C#'s UpgradePathFile).
 serde_json = "1"
 

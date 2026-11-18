@@ -8,6 +8,8 @@
 #[cfg(windows)]
 pub mod acl;
 #[cfg(windows)]
+pub mod file_picker;
+#[cfg(windows)]
 pub mod files;
 pub mod hosts;
 pub mod motion;

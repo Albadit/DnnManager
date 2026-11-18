@@ -10,7 +10,7 @@
 //! OS dialog): they have no file-type filter, so the title says it is a `.json` and the export suggests its name.
 
 use dnnm_ui::px;
-use gpui::{AnyElement, App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, PathPromptOptions, SharedString, Subscription, Window, div, prelude::*};
+use gpui::{AnyElement, App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, SharedString, Subscription, Window, div, prelude::*};
 
 use dnnm_application::settings::Settings;
 use dnnm_dnn::upgrades::{
@@ -577,17 +577,10 @@ impl DnnUpgradePathDialog {
         }
     }
 
-    fn import(&mut self, cx: &mut Context<Self>) {
-        let chosen = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some(format!("{IMPORT_TITLE} (.json)").into()),
-        });
+    fn import(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let chosen = crate::file_prompt::open_file(window, cx, IMPORT_TITLE, "Upgrade path", "json");
         cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = chosen.await
-                && let Some(file) = paths.into_iter().next()
-            {
+            if let Some(file) = chosen.await {
                 let _ = this.update(cx, |this, cx| this.import_from(&file, cx));
             }
         })
@@ -642,36 +635,32 @@ impl DnnUpgradePathDialog {
         let open = self.open == Some((index, which));
         let key = if which == Minimum::NetFramework { "net" } else { "sql" };
         let shown = choices.iter().find(|c| c.0 == value).map(|c| c.1.clone()).unwrap_or_default();
-        let options = choices
-            .iter()
-            .enumerate()
-            .map(|(i, (choice, label))| {
-                let choice = *choice;
-                dialog::option(SharedString::from(format!("{key}-{id}-{i}")), label.clone(), choice == value, cx)
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        if let Some(at) = this.ids.iter().position(|x| *x == id) {
-                            match which {
-                                Minimum::NetFramework => this.rows[at].net_framework = choice,
-                                Minimum::SqlServer => this.rows[at].sql_server = choice,
-                            }
-                        }
-                        this.open = None;
-                        cx.stop_propagation();
-                        cx.notify();
-                    }))
-                    .into_any_element()
-            })
-            .collect();
+        let options = choices.iter().map(|(choice, label)| (SharedString::from(label.clone()), *choice == value)).collect();
+        let values: Vec<_> = choices.iter().map(|c| c.0).collect();
+        let toggle = cx.listener(move |this, open: &bool, _, cx| {
+            let Some(at) = this.ids.iter().position(|x| *x == id) else { return };
+            if *open {
+                this.open = Some((at, which));
+            } else if this.open == Some((at, which)) {
+                this.open = None;
+            } else {
+                return;
+            }
+            cx.notify();
+        });
+        let choose = cx.listener(move |this, i: &usize, _, cx| {
+            let (Some(at), Some(&choice)) = (this.ids.iter().position(|x| *x == id), values.get(*i)) else { return };
+            match which {
+                Minimum::NetFramework => this.rows[at].net_framework = choice,
+                Minimum::SqlServer => this.rows[at].sql_server = choice,
+            }
+            cx.notify();
+        });
         div()
             .id(SharedString::from(format!("{key}-{id}")))
             .w(px(170.0))
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                let Some(at) = this.ids.iter().position(|x| *x == id) else { return };
-                this.open = if this.open == Some((at, which)) { None } else { Some((at, which)) };
-                cx.notify();
-            }))
             .when_some(tip.clone(), |d, tip| d.tip(tip))
-            .child(dialog::select(SharedString::from(format!("{key}-{id}-box")), shown, open, options, cx))
+            .child(dialog::select(SharedString::from(format!("{key}-{id}-box")), shown, open, options, toggle, choose, cx))
             .into_any_element()
     }
 
@@ -841,7 +830,7 @@ impl Render for DnnUpgradePathDialog {
                         ui::button("path-import", "Import…", ui::ButtonKind::Secondary, true, cx)
                             .min_w(px(80.0))
                             .tip("Fill the path from a file exported before - Save keeps it")
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.import(cx))),
+                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.import(window, cx))),
                     )
                     .child(
                         ui::button("path-export", "Export…", ui::ButtonKind::Secondary, can_export, cx)

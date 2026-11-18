@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{AnyElement, App, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent, PathPromptOptions, SharedString, Stateful, Subscription, Window, anchored, deferred, div, prelude::*};
+use gpui::{AnyElement, App, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent, PathPromptOptions, SharedString, Stateful, Subscription, Window, div, prelude::*};
 
 use dnnm_application::settings::Settings;
 use dnnm_sql::{DatabaseCheckOptions, DatabaseCheckReport, DatabaseConnection, DockerOptions, DockerStatus};
@@ -233,8 +233,6 @@ pub struct SettingsPage {
     release_inputs: Vec<Entity<TextInput>>,
     release_subscriptions: Vec<Subscription>,
     open_select: Option<&'static str>,
-    /// The open select's list's scroll position (its scroll bar).
-    select_scroll: gpui::ScrollHandle,
     error: Option<String>,
     env_warning: Option<String>,
     // Start at sign-in: whether the task is there (None until read), the box, and what is said under it.
@@ -352,7 +350,6 @@ impl SettingsPage {
             release_inputs: Vec::new(),
             release_subscriptions: Vec::new(),
             open_select: None,
-            select_scroll: gpui::ScrollHandle::new(),
             error: None,
             env_warning,
             starts_at_sign_in: None,
@@ -1118,74 +1115,31 @@ impl SettingsPage {
         pick: fn(&mut SettingsPage, String, &mut Context<SettingsPage>),
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = Theme::get(cx).clone();
-        let c = theme.colors;
         let open = self.open_select == Some(id);
         let label = options.iter().find(|(_, v)| v == current).map_or_else(|| current.to_string(), |(l, _)| l.clone());
-        let trigger = div()
-            .id(id)
-            .flex()
-            .items_center()
-            .justify_between()
-            .h(theme.metrics.control_height)
-            .pad(px(0.0), px(6.0))
-            .rounded(theme.metrics.control_radius)
-            .border_1()
-            .border_color(if open { c.focus_border } else { c.field_border })
-            .bg(c.input_bg)
-            .cursor_pointer()
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                    this.open_select = if this.open_select == Some(id) { None } else { Some(id) };
-                    cx.stop_propagation();
-                    cx.notify();
-                }),
-            )
-            .child(ui::one_line(label))
-            .child(ui::icon(icons::CHEVRON_DOWN, icons::SIZE_SMALL, c.text_primary, cx));
-        let mut root = div().relative().when_some(width, |d, w| d.w(px(w))).when(width.is_none(), |d| d.w_full());
-        root = root.child(trigger);
-        if open {
-            let mut menu = div()
-                .id(SharedString::from(format!("{id}-menu")))
-                .occlude()
-                .min_w(px(width.unwrap_or(220.0)))
-                .max_h(px(320.0))
-                .overflow_y_scroll()
-                .pad(px(4.0), px(0.0))
-                .rounded(theme.metrics.control_radius)
-                .border_1()
-                .border_color(c.card_border)
-                .bg(c.card_bg)
-                .shadow_lg()
-                .text_color(c.text_primary);
-            for (i, (text, value)) in options.into_iter().enumerate() {
-                let chosen = value == current;
-                menu = menu.child(
-                    dialog::option(SharedString::from(format!("{id}-{i}")), text, chosen, cx).on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
-                            this.open_select = None;
-                            pick(this, value.clone(), cx);
-                            cx.stop_propagation();
-                            cx.notify();
-                        }),
-                    ),
-                );
+        let items = options.iter().map(|(text, value)| (SharedString::from(text.clone()), value == current)).collect();
+        let values: Vec<String> = options.into_iter().map(|(_, value)| value).collect();
+        let toggle = cx.listener(move |this, open: &bool, _, cx| {
+            if *open {
+                this.open_select = Some(id);
+            } else if this.open_select == Some(id) {
+                this.open_select = None;
+            } else {
+                return;
             }
-            root = root.child(
-                div()
-                    .absolute()
-                    .top(theme.metrics.control_height + px(2.0))
-                    .left_0()
-                    .child(
-                        deferred(anchored().snap_to_window().child(ui::with_scrollbar(menu, &self.select_scroll, cx)))
-                            .with_priority(2),
-                    ),
-            );
-        }
-        root.into_any_element()
+            cx.notify();
+        });
+        let choose = cx.listener(move |this, i: &usize, _, cx| {
+            if let Some(value) = values.get(*i) {
+                pick(this, value.clone(), cx);
+                cx.notify();
+            }
+        });
+        div()
+            .when_some(width, |d, w| d.w(px(w)))
+            .when(width.is_none(), |d| d.w_full())
+            .child(dialog::select(id, label, open, items, toggle, choose, cx))
+            .into_any_element()
     }
 
     fn check_box(

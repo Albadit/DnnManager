@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use gpui::{AnyElement, App, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, MouseButton, MouseDownEvent, PathPromptOptions, SharedString, Subscription, Task, Window, div, prelude::*};
+use gpui::{AnyElement, App, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, SharedString, Subscription, Task, Window, div, prelude::*};
 
 use dnnm_application::iis::IisSiteRuntime;
 use dnnm_application::operation::CancelToken;
@@ -28,7 +28,7 @@ use dnnm_application::use_cases::setup_project::{
     site_using,
 };
 use dnnm_domain::{DnnRelease, DnnReleaseList, validate_project_name};
-use dnnm_ui::dialog::{self, option, radio, select};
+use dnnm_ui::dialog::{self, radio, select};
 use dnnm_ui::text_input::{TextChanged, TextInput};
 use dnnm_ui::theme::Theme;
 use dnnm_ui::{self as ui, ButtonKind, Pad, Tip as _};
@@ -1242,17 +1242,14 @@ impl SetupPage {
         })));
     }
 
-    fn browse(&mut self, zip: bool, cx: &mut Context<Self>) {
-        let title = if zip { "Site .zip" } else { "Database .bacpac" };
-        let paths = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: Some(title.into()),
-        });
+    fn browse(&mut self, zip: bool, window: &Window, cx: &mut Context<Self>) {
+        let chosen = if zip {
+            crate::file_prompt::open_file(window, cx, "Choose the site's .zip", "Site archive", "zip")
+        } else {
+            crate::file_prompt::open_file(window, cx, "Choose the database's .bacpac", "Database backup", "bacpac")
+        };
         cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = paths.await else { return };
-            let Some(path) = paths.into_iter().next() else { return };
+            let Some(path) = chosen.await else { return };
             let _ = this.update(cx, |page, cx| {
                 let text = path.to_string_lossy().into_owned();
                 let field = if zip { Field::Zip } else { Field::Backup };
@@ -1505,37 +1502,19 @@ impl SetupPage {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let open = self.open == Some(list) && enabled;
-        let items: Vec<AnyElement> = options
-            .into_iter()
-            .enumerate()
-            .map(|(i, (label, chosen))| {
-                // On the press: the list is an overlay outside the box, and a press outside the box closes the list
-                // before a click could arrive.
-                option((id, i), label, chosen, cx)
-                    .on_mouse_down(MouseButton::Left, cx.listener(move |page, _: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        page.open = None;
-                        page.choose(list, i, cx);
-                    }))
-                    .into_any_element()
-            })
-            .collect();
+        let items = options.into_iter().map(|(label, chosen)| (SharedString::from(label), chosen)).collect();
+        let toggle = cx.listener(move |page, open: &bool, _, cx| {
+            let open = *open && enabled;
+            if open || page.open == Some(list) {
+                page.open = open.then_some(list);
+                cx.notify();
+            }
+        });
+        let choose = cx.listener(move |page, i: &usize, _, cx| page.choose(list, *i, cx));
         div()
             .id(id)
             .when(!enabled, |d| d.opacity(0.5))
-            .when(enabled, |d| {
-                d.on_click(cx.listener(move |page, _: &ClickEvent, _, cx| {
-                    page.open = if page.open == Some(list) { None } else { Some(list) };
-                    cx.notify();
-                }))
-            })
-            .on_mouse_down_out(cx.listener(move |page, _, _, cx| {
-                if page.open == Some(list) {
-                    page.open = None;
-                    cx.notify();
-                }
-            }))
-            .child(select(SharedString::from(format!("{id}-box")), value, open, items, cx))
+            .child(select(SharedString::from(format!("{id}-box")), value, open, items, toggle, choose, cx))
             .into_any_element()
     }
 
@@ -1728,7 +1707,7 @@ impl Render for SetupPage {
             let browse = |id: &'static str, zip: bool, cx: &mut Context<Self>| {
                 ui::button(id, "Browse…", ButtonKind::Secondary, true, cx)
                     .tip("Browse")
-                    .on_click(cx.listener(move |page, _: &ClickEvent, _, cx| page.browse(zip, cx)))
+                    .on_click(cx.listener(move |page, _: &ClickEvent, window, cx| page.browse(zip, window, cx)))
             };
             import = import
                 .child(

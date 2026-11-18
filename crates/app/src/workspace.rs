@@ -1163,9 +1163,13 @@ impl Render for Workspace {
                 }
                 div().flex().flex_none().h_full().children(both)
             });
+            // With the side bar shut, the gap stays between the activity bar and the page (and the panel) - its sash
+            // gave it. While the side bar slides, the gap before it shrinks with it, so the page doesn't jump at the end.
             let mut parts: Vec<gpui::AnyElement> = Vec::new();
             if let Some(a) = activity {
                 parts.push(a.into_any_element());
+                let spacer = if side.is_some() { gap * primary_out } else { gap };
+                parts.push(div().flex_none().w(spacer).into_any_element());
             }
             if let Some(side) = side {
                 parts.push(side.into_any_element());
@@ -1173,7 +1177,7 @@ impl Render for Workspace {
             if sidebar_right {
                 parts.reverse();
             }
-            div().flex().flex_none().h_full().gap(gap).children(parts)
+            div().flex().flex_none().h_full().children(parts)
         });
         // The secondary side: its sash and the secondary side bar - from the page outwards.
         let secondary_group = (secondary_out > 0.0).then(|| {

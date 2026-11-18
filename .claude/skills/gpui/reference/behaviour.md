@@ -92,3 +92,9 @@ Re-check when GPUI is upgraded; add new findings here with how they were verifie
   whole pixels or a 1.3 stroke the line is smeared over two pixels.
 - **The title bar drag**: an element with `window_control_area(Drag)` must `occlude()`, and buttons inside it
   occlude too - else the root's focus handling swallows the drag, or a click becomes a drag.
+
+### Select keys and a draggable scroll bar (measured 2026-11-18)
+
+- `dialog::select`'s keys are actions in a "Select" key context on the box (`track_focus`). Deeper than the dialogs' "Modal", so its `escape` wins; with the list shut the handler calls `cx.propagate()` and the keymap tries the next binding (Modal's CloseView) - window.rs:3834-3846. Checked in the window: Esc shut the list and left the page; Down / Page Down / Home / Enter moved and chose as expected.
+- `ui::scrollbar` is a `canvas` that inserts a `BlockMouseExceptScroll` hitbox in prepaint (only while there is something to scroll) and registers window mouse listeners in paint; the drag (one at a time) lives in a thread-local and moves the `ScrollHandle` with `set_offset`. Checked: a 150 px drag scrolled the version list ~55 rows, the list stayed open and no row was chosen.
+- A view's own "pressed elsewhere" close must not run on a press on the overlay: `on_mouse_down_out` is capture and geometric, so the select now does the closing itself and checks the list's measured bounds.

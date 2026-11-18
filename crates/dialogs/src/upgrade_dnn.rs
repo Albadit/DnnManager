@@ -404,47 +404,43 @@ impl Render for UpgradeDnnDialog {
         let ok = self.can_start();
 
         let repository = self.source.and_then(|i| self.sources.get(i)).map(|s| s.0.clone()).unwrap_or_default();
-        let repositories: Vec<AnyElement> = self
+        let repositories = self
             .sources
             .iter()
             .enumerate()
-            .map(|(i, (label, _))| {
-                dialog::option(("repository", i), label.clone(), Some(i) == self.source, cx)
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.open = Open::None;
-                        cx.stop_propagation();
-                        if Some(i) != this.source {
-                            this.choose_repository(i, cx);
-                        }
-                        cx.notify();
-                    }))
-                    .into_any_element()
-            })
+            .map(|(i, (label, _))| (SharedString::from(label.clone()), Some(i) == self.source))
             .collect();
         let version = self.version.and_then(|i| self.options.get(i)).map(|o| o.1.clone()).unwrap_or_default();
-        let versions: Vec<AnyElement> = self
+        let versions = self
             .options
             .iter()
             .enumerate()
-            .map(|(i, (_, label))| {
-                dialog::option(("version", i), label.clone(), Some(i) == self.version, cx)
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.open = Open::None;
-                        cx.stop_propagation();
-                        if Some(i) != this.version {
-                            this.choose_version(i, cx);
-                        }
-                        cx.notify();
-                    }))
-                    .into_any_element()
-            })
+            .map(|(i, (_, label))| (SharedString::from(label.clone()), Some(i) == self.version))
             .collect();
         let toggle = |which: Open| {
-            cx.listener(move |this: &mut Self, _: &ClickEvent, _, cx| {
-                this.open = if this.open == which { Open::None } else { which };
+            cx.listener(move |this: &mut Self, open: &bool, _, cx| {
+                if *open {
+                    this.open = which;
+                } else if this.open == which {
+                    this.open = Open::None;
+                } else {
+                    return;
+                }
                 cx.notify();
             })
         };
+        let choose_repository = cx.listener(|this, i: &usize, _, cx| {
+            if Some(*i) != this.source {
+                this.choose_repository(*i, cx);
+            }
+            cx.notify();
+        });
+        let choose_version = cx.listener(|this, i: &usize, _, cx| {
+            if Some(*i) != this.version {
+                this.choose_version(*i, cx);
+            }
+            cx.notify();
+        });
 
         let current = self.current_text.clone();
         let lines: Vec<AnyElement> = self.lines.iter().enumerate().map(|(i, l)| self.line(i, l, cx)).collect();
@@ -454,28 +450,30 @@ impl Render for UpgradeDnnDialog {
             .flex_col()
             .gap(px(12.0))
             .when(self.sources.len() > 1, |d| {
-                d.child(stack(4.0).child(dialog::label("Repository", cx)).child(
-                    div().id("repository-box").on_click(toggle(Open::Repository)).child(dialog::select(
-                        "repository",
-                        repository,
-                        self.open == Open::Repository,
-                        repositories,
-                        cx,
-                    )),
-                ))
+                d.child(stack(4.0).child(dialog::label("Repository", cx)).child(dialog::select(
+                    "repository",
+                    repository,
+                    self.open == Open::Repository,
+                    repositories,
+                    toggle(Open::Repository),
+                    choose_repository,
+                    cx,
+                )))
             })
             .child(
                 stack(14.0)
                     .child(
                         stack(4.0)
                             .child(dialog::label("Upgrade to", cx))
-                            .child(div().id("version-box").on_click(toggle(Open::Version)).child(dialog::select(
+                            .child(dialog::select(
                                 "version",
                                 version,
                                 self.open == Open::Version,
                                 versions,
+                                toggle(Open::Version),
+                                choose_version,
                                 cx,
-                            )))
+                            ))
                             .child(dialog::hint(self.hint.clone(), cx)),
                     )
                     .child(

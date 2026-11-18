@@ -33,6 +33,7 @@ pub(crate) const AFTER_ARGUMENT: &str = "--after";
 /// Every default key binding - made again, with the user's changes, when Settings saves its shortcuts.
 pub(crate) fn bind_default_keys(cx: &mut App) {
     dnnm_ui::text_input::bind_keys(cx);
+    dnnm_ui::dialog::bind_keys(cx);
     workspace::bind_keys(cx);
     palette::bind_keys(cx);
     pages::projects::bind_keys(cx);

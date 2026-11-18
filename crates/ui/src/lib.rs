@@ -344,16 +344,31 @@ fn info_tip_lowered(id: impl Into<ElementId>, text: impl Into<SharedString>, dro
         )
 }
 
-/// A vertical scroll bar for the scroll area `handle` tracks: a 4 px thumb at the right, as tall as the share that is
-/// seen, where the view is - none while everything fits. Put it as a sibling after the scrolled element inside a
-/// `relative()` box. GPUI 0.2.2 has no scroll bar of its own; this draws in the paint phase, reading the handle after
-/// the scrolled element was laid out, so the thumb is where the list is this frame (not the last).
+/// How wide a [`scrollbar`]'s track is: the strip at the right of a list where its thumb runs and can be grabbed.
+pub const SCROLLBAR_WIDTH: f32 = 12.0;
+
+/// A vertical scroll bar for the scroll area `handle` tracks: a 6 px thumb at the right (8 px while the mouse is on
+/// it or it is dragged), as tall as the share that is seen, where the view is - none while everything fits. Drag the
+/// thumb to scroll; a press beside it jumps there and drags from the middle of the thumb. Put it as a sibling after the
+/// scrolled element inside a `relative()` box. GPUI 0.2.2 has no scroll bar of its own; this draws in the paint phase,
+/// reading the handle after the scrolled element was laid out, so the thumb is where the list is this frame (not the
+/// last).
 pub fn scrollbar(handle: &gpui::ScrollHandle, cx: &App) -> impl IntoElement {
     let handle = handle.clone();
-    let color = Theme::get(cx).colors.scroll_thumb;
+    let colors = Theme::get(cx).colors;
+    let (rest, active) = (colors.scroll_thumb, colors.scroll_thumb_hover);
     gpui::canvas(
-        |_, _, _| {},
-        move |track, _, window, _| {
+        {
+            let handle = handle.clone();
+            // A hitbox only while there is something to scroll: the strip takes the presses over the list's right edge
+            // (the wheel still scrolls the list under it).
+            move |track, window, _| {
+                (handle.max_offset().height > px(0.0))
+                    .then(|| window.insert_hitbox(track, gpui::HitboxBehavior::BlockMouseExceptScroll))
+            }
+        },
+        move |track, hitbox, window, _| {
+            let Some(hitbox) = hitbox else { return };
             let seen = handle.bounds().size.height;
             let hidden = handle.max_offset().height;
             if hidden <= px(0.0) || seen <= px(0.0) {
@@ -362,15 +377,95 @@ pub fn scrollbar(handle: &gpui::ScrollHandle, cx: &App) -> impl IntoElement {
             let length = (track.size.height * (seen / (seen + hidden))).max(px(20.0)).min(track.size.height);
             let along = (-handle.offset().y / hidden).clamp(0.0, 1.0);
             let top = track.top() + (track.size.height - length) * along;
-            let thumb = gpui::Bounds::new(gpui::point(track.right() - px(6.0), top), gpui::size(px(4.0), length));
-            window.paint_quad(gpui::fill(thumb, color).corner_radii(px(2.0)));
+            let dragging = THUMB_DRAG.with(|d| d.borrow().as_ref().is_some_and(|d| d.track == track));
+            let hovered = hitbox.is_hovered(window);
+            let width = if hovered || dragging { px(8.0) } else { px(6.0) };
+            let thumb = gpui::Bounds::new(gpui::point(track.right() - width - px(2.0), top), gpui::size(width, length));
+            window.paint_quad(gpui::fill(thumb, if hovered || dragging { active } else { rest }).corner_radii(width / 2.0));
+            window.set_cursor_style(gpui::CursorStyle::Arrow, &hitbox);
+
+            // Drawn again when the mouse comes onto the strip or leaves it.
+            window.on_mouse_event({
+                let hitbox = hitbox.clone();
+                move |_: &gpui::MouseMoveEvent, phase, window, _| {
+                    if phase == gpui::DispatchPhase::Bubble && hitbox.is_hovered(window) != hovered {
+                        window.refresh();
+                    }
+                }
+            });
+            window.on_mouse_event({
+                let handle = handle.clone();
+                move |e: &gpui::MouseDownEvent, phase, window, cx| {
+                    if phase != gpui::DispatchPhase::Bubble || e.button != gpui::MouseButton::Left || !hitbox.is_hovered(window) {
+                        return;
+                    }
+                    let on_thumb = e.position.y >= thumb.top() && e.position.y <= thumb.bottom();
+                    let grab = if on_thumb { e.position.y - thumb.top() } else { length / 2.0 };
+                    let drag = ThumbDrag { handle: handle.clone(), grab, track, length };
+                    drag.move_to(e.position.y);
+                    THUMB_DRAG.with(|d| *d.borrow_mut() = Some(drag));
+                    window.refresh();
+                    // The press is the scroll bar's - not a choice of the row under it, nor a press outside a popup.
+                    cx.stop_propagation();
+                }
+            });
+            if dragging {
+                // Anywhere in the window while the button is held, so the thumb follows a mouse that leaves the strip.
+                window.on_mouse_event(|e: &gpui::MouseMoveEvent, phase, window, _| {
+                    if phase != gpui::DispatchPhase::Capture {
+                        return;
+                    }
+                    let held = e.pressed_button == Some(gpui::MouseButton::Left);
+                    THUMB_DRAG.with(|d| {
+                        let mut d = d.borrow_mut();
+                        match d.as_ref() {
+                            Some(drag) if held => drag.move_to(e.position.y),
+                            _ => *d = None,
+                        }
+                    });
+                    window.refresh();
+                });
+                window.on_mouse_event(|e: &gpui::MouseUpEvent, phase, window, _| {
+                    if phase == gpui::DispatchPhase::Capture && e.button == gpui::MouseButton::Left {
+                        THUMB_DRAG.with(|d| d.borrow_mut().take());
+                        window.refresh();
+                    }
+                });
+            }
         },
     )
     .absolute()
     .top(px(4.0))
     .bottom(px(4.0))
     .right_0()
-    .w(px(8.0))
+    .w(px(SCROLLBAR_WIDTH))
+}
+
+/// A [`scrollbar`]'s thumb being dragged: the list it scrolls, how far below the thumb's top it was grabbed, and the
+/// track and thumb length when it was (both stay put while the button is held).
+struct ThumbDrag {
+    handle: gpui::ScrollHandle,
+    grab: Pixels,
+    track: gpui::Bounds<Pixels>,
+    length: Pixels,
+}
+
+impl ThumbDrag {
+    /// Scrolls the list so the thumb's grabbed point is at `y`.
+    fn move_to(&self, y: Pixels) {
+        let room = self.track.size.height - self.length;
+        let hidden = self.handle.max_offset().height;
+        if room <= px(0.0) || hidden <= px(0.0) {
+            return;
+        }
+        let along = ((y - self.grab - self.track.top()) / room).clamp(0.0, 1.0);
+        self.handle.set_offset(gpui::point(self.handle.offset().x, -(hidden * along)));
+    }
+}
+
+thread_local! {
+    /// The one scroll bar thumb being dragged, if any - there is one mouse.
+    static THUMB_DRAG: std::cell::RefCell<Option<ThumbDrag>> = const { std::cell::RefCell::new(None) };
 }
 
 /// `list` - an element that scrolls up and down (`overflow_y_scroll`) - tracked by `handle`, with a [`scrollbar`] over

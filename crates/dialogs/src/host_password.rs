@@ -147,16 +147,7 @@ impl Render for HostPasswordDialog {
             .hosts
             .iter()
             .enumerate()
-            .map(|(i, host)| {
-                dialog::option(SharedString::from(format!("host-{i}")), host.clone(), self.chosen == Some(i), cx)
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.chosen = Some(i);
-                        this.open = false;
-                        this.refused = None;
-                        cx.notify();
-                    }))
-                    .into_any_element()
-            })
+            .map(|(i, host)| (SharedString::from(host.clone()), self.chosen == Some(i)))
             .collect();
         let chosen = self.chosen.and_then(|i| self.hosts.get(i)).cloned().unwrap_or_default();
 
@@ -170,15 +161,22 @@ impl Render for HostPasswordDialog {
             // Only when there is a choice: a site with one host account names it in the intro instead.
             .when(self.hosts.len() != 1, |d| {
                 d.child(
-                    stack(4.0).child(dialog::label("Host account", cx)).child(
-                        div()
-                            .id("host-account")
-                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                                this.open = !this.open;
-                                cx.notify();
-                            }))
-                            .child(dialog::select("host-account-box", chosen, self.open, options, cx)),
-                    ),
+                    stack(4.0).child(dialog::label("Host account", cx)).child(dialog::select(
+                        "host-account-box",
+                        chosen,
+                        self.open,
+                        options,
+                        cx.listener(|this, open: &bool, _, cx| {
+                            this.open = *open;
+                            cx.notify();
+                        }),
+                        cx.listener(|this, i: &usize, _, cx| {
+                            this.chosen = Some(*i);
+                            this.refused = None;
+                            cx.notify();
+                        }),
+                        cx,
+                    )),
                 )
             })
             .child(

@@ -221,35 +221,33 @@ impl AppPoolDialog {
     fn list(&mut self, list: List, id: &'static str, enabled: bool, cx: &mut Context<Self>) -> AnyElement {
         let open = self.open == Some(list);
         let choices = self.choices_mut(list).clone();
-        let options = choices
+        let items = choices
             .items
             .iter()
             .enumerate()
-            .map(|(i, (text, _))| {
-                dialog::option(SharedString::from(format!("{id}-{i}")), text.clone(), i == choices.selected, cx)
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.choices_mut(list).selected = i;
-                        this.open = None;
-                        cx.stop_propagation();
-                        cx.notify();
-                    }))
-                    .into_any_element()
-            })
+            .map(|(i, (text, _))| (SharedString::from(text.clone()), i == choices.selected))
             .collect();
+        let toggle = cx.listener(move |this, open: &bool, _, cx| {
+            let open = *open && enabled;
+            if open || this.open == Some(list) {
+                this.open = open.then_some(list);
+                cx.notify();
+            }
+        });
+        let choose = cx.listener(move |this, i: &usize, _, cx| {
+            this.choices_mut(list).selected = *i;
+            cx.notify();
+        });
         div()
             .id(id)
             .when(!enabled, |d| d.opacity(0.5))
-            .when(enabled, |d| {
-                d.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.open = if this.open == Some(list) { None } else { Some(list) };
-                    cx.notify();
-                }))
-            })
             .child(dialog::select(
                 SharedString::from(format!("{id}-box")),
                 choices.text().to_string(),
                 open,
-                options,
+                items,
+                toggle,
+                choose,
                 cx,
             ))
             .into_any_element()

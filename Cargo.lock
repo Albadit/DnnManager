@@ -1532,6 +1532,7 @@ dependencies = [
  "dnnm-terminal",
  "dnnm-ui",
  "gpui",
+ "raw-window-handle",
  "rusqlite",
  "serde_json",
  "tempfile",

@@ -6,6 +6,7 @@ pub mod tour;
 pub mod whats_new;
 pub mod help_menu;
 pub mod deployment_export;
+pub mod file_prompt;
 pub mod database_check_list;
 pub mod database_connection;
 pub mod host_password;

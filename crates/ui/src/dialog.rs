@@ -6,7 +6,9 @@
 //! and acts on what it returns.
 
 use crate::px;
-use gpui::{AnyElement, App, ClickEvent, Div, ElementId, Entity, Focusable, FontWeight, SharedString, Stateful, Window, anchored, canvas, deferred, div, prelude::*};
+use std::rc::Rc;
+
+use gpui::{App, ClickEvent, Div, ElementId, Entity, FocusHandle, Focusable, FontWeight, KeyBinding, MouseButton, MouseDownEvent, SharedString, Stateful, Window, actions, anchored, canvas, deferred, div, prelude::*};
 
 use crate::Pad;
 use crate::text_input::TextInput;
@@ -207,29 +209,127 @@ pub fn radio(id: impl Into<ElementId>, chosen: bool, text: impl Into<SharedStrin
         .child(text.into())
 }
 
-/// A choice from a list (`ComboBox`): the value shown with a chevron; the options open under it while `open`, over
-/// whatever comes after it (an overlay, as wide as the box at least, scrolling past 320 px).
+actions!(select, [SelectNext, SelectPrevious, SelectFirst, SelectLast, SelectPageDown, SelectPageUp, SelectConfirm, SelectClose]);
+
+/// The keys of a [`select`] that has the focus, in its "Select" context. That context is deeper than a dialog's
+/// "Modal", so Esc closes an open list before it closes the dialog (and goes on to the dialog when the list is shut).
+pub fn bind_keys(cx: &mut App) {
+    let context = Some("Select");
+    cx.bind_keys([
+        KeyBinding::new("down", SelectNext, context),
+        KeyBinding::new("up", SelectPrevious, context),
+        KeyBinding::new("home", SelectFirst, context),
+        KeyBinding::new("end", SelectLast, context),
+        KeyBinding::new("pagedown", SelectPageDown, context),
+        KeyBinding::new("pageup", SelectPageUp, context),
+        KeyBinding::new("enter", SelectConfirm, context),
+        KeyBinding::new("space", SelectConfirm, context),
+        KeyBinding::new("escape", SelectClose, context),
+    ]);
+}
+
+/// A choice from a list (`ComboBox`): the value shown with a chevron; the `items` (each its text and whether it is
+/// the value now) open under it while `open`, over whatever comes after it (an overlay, as wide as the box at least,
+/// scrolling past 320 px, with a scroll bar that can be dragged).
+///
+/// The select asks for its list to open or shut through `on_toggle` - a press on the box, a press anywhere outside
+/// the box and its list, and the keys - and reports the row chosen (by a press or Enter) through `on_choose`, then
+/// asks to shut. The caller keeps `open`. A press on the box gives it the focus; then Down / Up / Enter / Space open
+/// the list, Up / Down / Home / End / Page Up / Page Down move the highlight, Enter or Space choose it and Esc shuts.
 pub fn select(
     id: impl Into<ElementId>,
     value: impl Into<SharedString>,
     open: bool,
-    options: Vec<AnyElement>,
+    items: Vec<(SharedString, bool)>,
+    on_toggle: impl Fn(&bool, &mut Window, &mut App) + 'static,
+    on_choose: impl Fn(&usize, &mut Window, &mut App) + 'static,
     cx: &App,
 ) -> Div {
     let theme = Theme::get(cx);
     let c = theme.colors;
     let id: ElementId = id.into();
-    let key = id.to_string();
-    let placed = SELECT_PLACES.with(|w| w.borrow().get(&key).copied());
-    // Its list's scroll position, kept while the list is open (and its scroll bar drawn from it).
-    let scroll = SELECT_SCROLLS.with(|s| s.borrow_mut().entry(key.clone()).or_default().clone());
+    let key = SharedString::from(id.to_string());
+    let count = items.len();
+    let chosen = items.iter().position(|(_, chosen)| *chosen);
+    let (scroll, focus, highlight, placed) = SELECTS.with(|s| {
+        let mut s = s.borrow_mut();
+        let state = s.entry(key.to_string()).or_insert_with(|| SelectState::new(cx));
+        state.follow(open, chosen, count);
+        (state.scroll.clone(), state.focus.clone(), state.highlight, state.place)
+    });
+    let on_toggle: Handler<bool> = Rc::new(on_toggle);
+    let on_choose: Handler<usize> = Rc::new(on_choose);
+
+    // Up, Down and the rest: open a shut list; in an open one, move the highlight to `to(highlight, page, count)`.
+    let nav = |to: fn(Option<usize>, usize, usize) -> usize| {
+        let (key, toggle) = (key.clone(), on_toggle.clone());
+        move |window: &mut Window, cx: &mut App| {
+            if open {
+                move_highlight(&key, count, to, window);
+            } else {
+                toggle(&true, window, cx);
+            }
+        }
+    };
+    let next = nav(|h, _, _| h.map_or(0, |h| h + 1));
+    let previous = nav(|h, _, _| h.map_or(0, |h| h.saturating_sub(1)));
+    let first = nav(|_, _, _| 0);
+    let last = nav(|_, _, count| count.saturating_sub(1));
+    let page_down = nav(|h, page, _| h.map_or(0, |h| h + page));
+    let page_up = nav(|h, page, _| h.map_or(0, |h| h.saturating_sub(page)));
+    let confirm = {
+        let (key, toggle, choose) = (key.clone(), on_toggle.clone(), on_choose.clone());
+        move |_: &SelectConfirm, window: &mut Window, cx: &mut App| {
+            if !open {
+                return toggle(&true, window, cx);
+            }
+            if let Some(i) = SELECTS.with(|s| s.borrow().get(key.as_ref()).and_then(|s| s.highlight)) {
+                choose(&i, window, cx);
+            }
+            toggle(&false, window, cx);
+        }
+    };
+    let close = {
+        let toggle = on_toggle.clone();
+        move |_: &SelectClose, window: &mut Window, cx: &mut App| {
+            if open {
+                toggle(&false, window, cx);
+            } else {
+                // A shut list: Esc is the dialog's.
+                cx.propagate();
+            }
+        }
+    };
+    let press = {
+        let (toggle, focus) = (on_toggle.clone(), focus.clone());
+        move |_: &MouseDownEvent, window: &mut Window, cx: &mut App| {
+            window.focus(&focus);
+            toggle(&!open, window, cx);
+            // The press is the box's: a view's own "pressed elsewhere, close it" mustn't shut what it just opened.
+            cx.stop_propagation();
+        }
+    };
+    let press_out = {
+        let (key, toggle) = (key.clone(), on_toggle.clone());
+        move |_: &MouseDownEvent, window: &mut Window, cx: &mut App| {
+            if !open {
+                return;
+            }
+            let list = SELECTS.with(|s| s.borrow().get(key.as_ref()).and_then(|s| s.place).and_then(|p| p.list));
+            if !list.is_some_and(|list| list.contains(&window.mouse_position())) {
+                toggle(&false, window, cx);
+            }
+        }
+    };
+
     let measured = key.clone();
-    let list_key = key.clone();
     div()
         .relative()
         .child(
             div()
                 .id(id)
+                .key_context("Select")
+                .track_focus(&focus)
                 .relative()
                 .flex()
                 .items_center()
@@ -239,17 +339,29 @@ pub fn select(
                 .rounded(theme.metrics.control_radius)
                 .border_1()
                 .border_color(if open { c.focus_border } else { c.field_border })
+                .focus(move |s| s.border_color(c.focus_border))
                 .bg(c.input_bg)
                 .cursor_pointer()
+                .on_mouse_down(MouseButton::Left, press)
+                .on_mouse_down_out(press_out)
+                .on_action(move |_: &SelectNext, window, cx| next(window, cx))
+                .on_action(move |_: &SelectPrevious, window, cx| previous(window, cx))
+                .on_action(move |_: &SelectFirst, window, cx| first(window, cx))
+                .on_action(move |_: &SelectLast, window, cx| last(window, cx))
+                .on_action(move |_: &SelectPageDown, window, cx| page_down(window, cx))
+                .on_action(move |_: &SelectPageUp, window, cx| page_up(window, cx))
+                .on_action(confirm)
+                .on_action(close)
                 // Where it is and how tall the window is, for the list's place and width.
                 .child(
                     canvas(
                         move |bounds, window, _| {
-                            let place = Place { bounds, window_height: window.viewport_size().height, list_height: None };
-                            SELECT_PLACES.with(|w| {
-                                let mut w = w.borrow_mut();
-                                let list_height = w.get(&measured).and_then(|p| p.list_height);
-                                w.insert(measured.clone(), Place { list_height, ..place });
+                            let window_height = window.viewport_size().height;
+                            SELECTS.with(|s| {
+                                if let Some(state) = s.borrow_mut().get_mut(measured.as_ref()) {
+                                    let list = state.place.and_then(|p| p.list);
+                                    state.place = Some(Place { bounds, window_height, list });
+                                }
                             });
                         },
                         |_, _, _, _| {},
@@ -261,23 +373,70 @@ pub fn select(
                 .child(icon(icons::CHEVRON_DOWN, icons::SIZE_SMALL, c.text_primary, cx)),
         )
         .when(open, |d| {
+            let rows = items.into_iter().enumerate().map(|(i, (text, chosen))| {
+                let lit = highlight == Some(i);
+                let (choose, toggle, hover_key) = (on_choose.clone(), on_toggle.clone(), key.clone());
+                div()
+                    .id((SharedString::from(format!("{key}-option")), i))
+                    .flex()
+                    .pad(px(3.0), px(8.0))
+                    .cursor_pointer()
+                    .when(chosen, |d| d.bg(c.selection_bg))
+                    // The highlight - the row under the mouse or picked with the keys - over the chosen row as well.
+                    .when(lit, |d| d.bg(if chosen { c.selection_bg.blend(c.command_center_hover_bg) } else { c.hover_bg }))
+                    .on_mouse_move(move |_, window, _| {
+                        let moved = SELECTS.with(|s| {
+                            let mut s = s.borrow_mut();
+                            let Some(state) = s.get_mut(hover_key.as_ref()) else { return false };
+                            let moved = state.highlight != Some(i);
+                            state.highlight = Some(i);
+                            moved
+                        });
+                        if moved {
+                            window.refresh();
+                        }
+                    })
+                    // On the press: a view may close its lists on a press elsewhere, before a click could arrive.
+                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                        cx.stop_propagation();
+                        choose(&i, window, cx);
+                        toggle(&false, window, cx);
+                    })
+                    .child(div().flex_1().min_w_0().child(text))
+                    // Clear of the scroll bar over the right edge.
+                    .child(div().flex_none().w(px(crate::SCROLLBAR_WIDTH - 4.0)))
+            });
             // The frame (border, shadow) around the scrolled options and the scroll bar over their right edge.
             let scrolled = div()
                 .id(SharedString::from(format!("{key}-list")))
-                .relative()
                 .max_h(px(320.0))
                 .overflow_y_scroll()
                 .track_scroll(&scroll)
                 .pad(px(4.0), px(0.0))
-                .children(options)
+                .children(rows);
+            let list_key = key.clone();
+            let list = div()
+                .relative()
+                .occlude()
+                .min_w(placed.map_or(px(220.0), |p| p.bounds.size.width))
+                .rounded(theme.metrics.control_radius)
+                .border_1()
+                .border_color(c.card_border)
+                .bg(c.card_bg)
+                .shadow_lg()
+                .text_color(c.text_primary)
+                .child(scrolled)
+                .child(crate::scrollbar(&scroll, cx))
                 .child(
                     canvas(
                         move |bounds, window, cx| {
-                            let changed = SELECT_PLACES.with(|w| {
-                                let mut places = w.borrow_mut();
-                                let Some(p) = places.get_mut(&list_key) else { return false };
-                                let changed = p.list_height != Some(bounds.size.height);
-                                p.list_height = Some(bounds.size.height);
+                            let changed = SELECTS.with(|s| {
+                                let mut s = s.borrow_mut();
+                                let Some(place) = s.get_mut(list_key.as_ref()).and_then(|s| s.place.as_mut()) else {
+                                    return false;
+                                };
+                                let changed = place.list.map(|l| l.size.height) != Some(bounds.size.height);
+                                place.list = Some(bounds);
                                 changed
                             });
                             // Placed again with its height (above the box when it doesn't fit below) once this frame
@@ -294,22 +453,10 @@ pub fn select(
                     .absolute()
                     .inset_0(),
                 );
-            let list = div()
-                .relative()
-                .occlude()
-                .min_w(placed.map_or(px(220.0), |p| p.bounds.size.width))
-                .rounded(theme.metrics.control_radius)
-                .border_1()
-                .border_color(c.card_border)
-                .bg(c.card_bg)
-                .shadow_lg()
-                .text_color(c.text_primary)
-                .child(scrolled)
-                .child(crate::scrollbar(&scroll, cx));
             // Under the box; above it when the window has no room below and more above.
             let anchored = match placed {
                 Some(p) => {
-                    let height = p.list_height.unwrap_or(px(320.0));
+                    let height = p.list.map_or(px(320.0), |l| l.size.height);
                     let below = p.window_height - p.bounds.bottom() - px(2.0);
                     let above = p.bounds.top() - px(2.0);
                     if height > below && above > below {
@@ -326,29 +473,72 @@ pub fn select(
         })
 }
 
-/// Where a select's box was last laid out, the window's height then, and its open list's height.
+/// A select's `on_toggle` or `on_choose`, shared by the box, its keys and its rows.
+type Handler<T> = Rc<dyn Fn(&T, &mut Window, &mut App)>;
+
+/// Moves a select's highlight to `to(highlight, rows in a page, count)` and scrolls it into view.
+fn move_highlight(key: &str, count: usize, to: fn(Option<usize>, usize, usize) -> usize, window: &mut Window) {
+    if count == 0 {
+        return;
+    }
+    SELECTS.with(|s| {
+        let mut s = s.borrow_mut();
+        let Some(state) = s.get_mut(key) else { return };
+        let seen = state.scroll.bounds().size.height;
+        let row = state.scroll.bounds_for_item(0).map_or(px(0.0), |b| b.size.height);
+        let page = if row > px(0.0) { ((seen / row).floor() as usize).saturating_sub(1).max(1) } else { 1 };
+        let next = to(state.highlight, page, count).min(count - 1);
+        state.highlight = Some(next);
+        state.scroll.scroll_to_item(next);
+    });
+    window.refresh();
+}
+
+/// What a select keeps between frames.
+struct SelectState {
+    /// Its list's scroll position, kept while the list is open (and its scroll bar drawn from it).
+    scroll: gpui::ScrollHandle,
+    /// The box's focus, for the keys.
+    focus: FocusHandle,
+    /// The row the keys or the mouse are on, while the list is open.
+    highlight: Option<usize>,
+    /// Whether the list was open the last time it was drawn.
+    was_open: bool,
+    /// Where it was laid out.
+    place: Option<Place>,
+}
+
+impl SelectState {
+    fn new(cx: &App) -> Self {
+        Self { scroll: gpui::ScrollHandle::new(), focus: cx.focus_handle(), highlight: None, was_open: false, place: None }
+    }
+
+    /// Opened: the highlight starts on the chosen row, scrolled into view. Shut: no highlight.
+    fn follow(&mut self, open: bool, chosen: Option<usize>, count: usize) {
+        if open && !self.was_open {
+            self.highlight = chosen;
+            match chosen {
+                Some(i) => self.scroll.scroll_to_item(i),
+                None => self.scroll.set_offset(gpui::point(px(0.0), px(0.0))),
+            }
+        }
+        if !open {
+            self.highlight = None;
+        }
+        self.highlight = self.highlight.filter(|h| *h < count);
+        self.was_open = open;
+    }
+}
+
+/// Where a select's box was last laid out, the window's height then, and where its open list was.
 #[derive(Clone, Copy)]
 struct Place {
     bounds: gpui::Bounds<gpui::Pixels>,
     window_height: gpui::Pixels,
-    list_height: Option<gpui::Pixels>,
+    list: Option<gpui::Bounds<gpui::Pixels>>,
 }
 
 thread_local! {
-    /// Each select's place, by its id.
-    static SELECT_PLACES: std::cell::RefCell<std::collections::HashMap<String, Place>> = Default::default();
-    /// Each select's list's scroll handle, by its id.
-    static SELECT_SCROLLS: std::cell::RefCell<std::collections::HashMap<String, gpui::ScrollHandle>> = Default::default();
-}
-
-/// One option of [`select`].
-pub fn option(id: impl Into<ElementId>, text: impl Into<SharedString>, chosen: bool, cx: &App) -> Stateful<Div> {
-    let c = Theme::get(cx).colors;
-    div()
-        .id(id)
-        .pad(px(3.0), px(8.0))
-        .cursor_pointer()
-        .when(chosen, |d| d.bg(c.selection_bg))
-        .hover(move |s| s.bg(c.hover_bg))
-        .child(text.into())
+    /// Each select's state, by its id.
+    static SELECTS: std::cell::RefCell<std::collections::HashMap<String, SelectState>> = Default::default();
 }
