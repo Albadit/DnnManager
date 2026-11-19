@@ -71,6 +71,13 @@ changes, compare its `src/package/wix/main.wxs` with ours.
 The installers are **not code-signed**. Signing needs a certificate (Windows) and an Apple Developer ID (macOS) stored
 as repository secrets - not set up.
 
+The macOS app is **signed ad hoc** (no certificate) by the release step "Ad-hoc sign the app": it copies the `.dmg`'s
+contents out, runs `codesign --force --deep --sign -` on the app, checks it with `codesign --verify --deep --strict`
+and makes the `.dmg` again under the same volume name. Without it, a Mac that downloads the app says it "is damaged
+and can't be opened"; with it, macOS says Apple can't check it and **System Settings → Privacy & Security → Open
+Anyway** opens it. Gatekeeper still warns until the app is signed with a Developer ID and notarized. cargo-packager's
+own signing (`signing-identity = "-"`) isn't used: it always adds `--timestamp` and the hardened runtime.
+
 ## A build on this PC
 
 The VS Code task **Publish** (`scripts/publish.ps1`) asks **executable** or **installer**, then which systems -

@@ -17,7 +17,8 @@
 #             (.docs/release-notes/<tag>.md, else GitHub's notes from the commits). A failure removes the draft:
 #             no release is ever left half made.
 #
-# The installers are not code-signed: Windows SmartScreen and macOS Gatekeeper warn on first start.
+# The installers are not code-signed: Windows SmartScreen and macOS Gatekeeper warn on first start. The macOS app is
+# signed ad hoc (step "Ad-hoc sign the app"), so Gatekeeper offers Open Anyway instead of calling it damaged.
 name: Release
 
 on:
@@ -218,6 +219,38 @@ jobs:
           mkdir -p dist
           cp target/${{ matrix.target }}/release/DnnManager${{ runner.os == 'Windows' && '.exe' || '' }} dist/
           cargo packager --release --target ${{ matrix.target }} --formats ${{ matrix.format }} --out-dir dist
+
+      - name: Ad-hoc sign the app (macOS)
+        # Without a signature that seals the whole bundle, macOS says a downloaded DNN Manager "is damaged and can't be
+        # opened" and offers only Move to Bin. Signed ad hoc (no Apple Developer ID), it says Apple can't check it and
+        # System Settings -> Privacy & Security offers Open Anyway. cargo-packager's own signing (signing-identity "-")
+        # always adds --timestamp and the hardened runtime, so the app is signed here instead: the .dmg's contents are
+        # copied out (its window layout, background and Applications link with them), the app signed and checked, and
+        # the .dmg made again under the same volume name.
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          dmg=$(find dist -maxdepth 2 -name '*.dmg' | head -n 1)
+          if [ -z "$dmg" ]; then echo "::error::No .dmg to sign"; ls -R dist; exit 1; fi
+          mnt=$(hdiutil attach -nobrowse -noautoopen -readonly "$dmg" | awk -F'\t' '/\/Volumes\//{print $NF}')
+          if [ -z "$mnt" ]; then echo "::error::$dmg did not mount"; exit 1; fi
+          volname=$(basename "$mnt")
+          stage="$RUNNER_TEMP/dmg-stage"
+          rm -rf "$stage"
+          ditto "$mnt" "$stage"
+          hdiutil detach "$mnt"
+          app=$(find "$stage" -maxdepth 1 -name '*.app' | head -n 1)
+          if [ -z "$app" ]; then echo "::error::No .app in $dmg"; ls -la "$stage"; exit 1; fi
+          xattr -cr "$app"
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --display --verbose=2 "$app" 2>&1 | grep -E '^(Identifier|Format|Signature|Sealed Resources)'
+          rm -f "$dmg"
+          hdiutil create -volname "$volname" -srcfolder "$stage" -format UDZO -ov "$dmg"
+          # The app in the new .dmg is checked again, as a Mac that downloads it will see it.
+          mnt=$(hdiutil attach -nobrowse -noautoopen -readonly "$dmg" | awk -F'\t' '/\/Volumes\//{print $NF}')
+          codesign --verify --deep --strict --verbose=2 "$mnt/$(basename "$app")"
+          hdiutil detach "$mnt"
 
       - name: Name and check the installer
         run: |

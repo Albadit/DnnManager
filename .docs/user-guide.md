@@ -10,8 +10,14 @@ Download the package for your system from the [releases](https://github.com/Alba
 
 - **Windows**: `DnnManager-windows-x86_64.msi` (or `-arm64.msi` on an ARM PC). Run it; DNN Manager is then in the
   Start menu. The package isn't code-signed yet, so SmartScreen may ask first - **More info → Run anyway**.
-- **macOS**: open the `.dmg` and drag DNN Manager to Applications. The first time, right-click it and choose
-  **Open** (Gatekeeper asks because it isn't signed).
+- **macOS**: open the `.dmg` and drag DNN Manager to Applications. The package isn't signed by Apple, so the first
+  start is blocked: macOS says it can't check DNN Manager. Choose **Done**, then **System Settings → Privacy &
+  Security → Open Anyway**. If macOS says instead that DNN Manager **"is damaged and can't be opened"** (releases up
+  to 1.8.7 do), the app is fine: run this once in Terminal, then open it as usual:
+
+  ```sh
+  xattr -dr com.apple.quarantine "/Applications/DNN Manager.app"
+  ```
 - **Debian / Ubuntu**: `sudo apt install ./DnnManager-linux-amd64.deb` (or `-arm64.deb`).
 
 To update, install the newer package over the old one. **Settings → About** and **Check for Updates** (the gear

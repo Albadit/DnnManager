@@ -18,7 +18,9 @@ Every [release](https://github.com/Albadit/DnnManager.NET/releases) has a packag
 | Debian / Ubuntu, ARM | `DnnManager-linux-arm64.deb` (also as `-aarch64.deb`) |
 
 `SHA256SUMS.txt` lists every file's checksum. The packages aren't code-signed yet: Windows SmartScreen and macOS
-Gatekeeper ask before the first start.
+Gatekeeper ask before the first start (on macOS: **System Settings → Privacy & Security → Open Anyway**). If macOS
+calls the app "damaged" (releases up to 1.8.7), run `xattr -dr com.apple.quarantine "/Applications/DNN Manager.app"`
+once - see the [user guide](.docs/user-guide.md#install).
 
 **IIS is Windows only**, so managing websites needs Windows. On macOS and Linux DNN Manager opens and says IIS
 isn't available there - see the [user guide](.docs/user-guide.md#on-macos-and-linux).
