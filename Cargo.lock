@@ -1716,6 +1716,7 @@ dependencies = [
  "dnnm-tray",
  "dnnm-ui",
  "dnnm-wiring",
+ "embed-resource",
  "futures",
  "gpui",
  "log",

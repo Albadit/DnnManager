@@ -34,3 +34,8 @@ log.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+# The exe's icon (build.rs): Explorer, the shortcuts and the taskbar show it, and GPUI loads it as the window's icon
+# (resource 1).
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3.0"

@@ -1,0 +1,2 @@
+// The exe's icon - see build.rs. GPUI loads ID 1 as the window icon.
+1 ICON "../../assets/dnn.ico"
