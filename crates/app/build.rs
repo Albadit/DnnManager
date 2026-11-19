@@ -6,9 +6,10 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=resources/windows/app.rc");
     println!("cargo:rerun-if-changed=../../assets/dnn.ico");
-    // The build script runs on the host, so ask Cargo which OS the exe is for.
+    // The build script runs on the host: embed-resource is there only on Windows (Cargo.toml), and the exe gets the
+    // icon only when it is for Windows too. Elsewhere this is compiled out whole.
+    #[cfg(windows)]
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        #[cfg(windows)]
         embed_resource::compile("resources/windows/app.rc", embed_resource::NONE)
             .manifest_optional()
             .expect("embedding the exe's icon");

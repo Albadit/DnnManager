@@ -4,13 +4,15 @@
 
 use std::path::PathBuf;
 
-use gpui::{App, AppContext, PathPromptOptions, Task, Window};
+use gpui::{App, PathPromptOptions, Task, Window};
 
 /// Asks for one existing file of the kind `kind` ("Site archive") with the extension `extension` ("zip"), titled
 /// `title`. None when cancelled.
 pub fn open_file(window: &Window, cx: &mut App, title: &str, kind: &str, extension: &str) -> Task<Option<PathBuf>> {
     #[cfg(windows)]
     {
+        // background_spawn is AppContext's; only this branch uses it (elsewhere the import would be unused).
+        use gpui::AppContext;
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         let owner = match HasWindowHandle::window_handle(window).map(|h| h.as_raw()) {
             Ok(RawWindowHandle::Win32(handle)) => handle.hwnd.get(),
