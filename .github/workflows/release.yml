@@ -230,9 +230,16 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
+          # Packager.toml's license-file puts the LICENSE in the .dmg as an agreement: attaching it asks "Agree Y/N?"
+          # and is canceled when nobody answers. yes answers it; the mount point is read from hdiutil's /dev/ lines
+          # only, not from the licence text printed before them.
+          mount_dmg() {
+            { yes || true; } | PAGER=cat hdiutil attach -nobrowse -noautoopen -readonly "$1" \
+              | awk -F'\t' '/^\/dev\/.*\/Volumes\//{print $NF}' | tail -n 1
+          }
           dmg=$(find dist -maxdepth 2 -name '*.dmg' | head -n 1)
           if [ -z "$dmg" ]; then echo "::error::No .dmg to sign"; ls -R dist; exit 1; fi
-          mnt=$(hdiutil attach -nobrowse -noautoopen -readonly "$dmg" | awk -F'\t' '/\/Volumes\//{print $NF}')
+          mnt=$(mount_dmg "$dmg")
           if [ -z "$mnt" ]; then echo "::error::$dmg did not mount"; exit 1; fi
           volname=$(basename "$mnt")
           stage="$RUNNER_TEMP/dmg-stage"
@@ -248,7 +255,7 @@ jobs:
           rm -f "$dmg"
           hdiutil create -volname "$volname" -srcfolder "$stage" -format UDZO -ov "$dmg"
           # The app in the new .dmg is checked again, as a Mac that downloads it will see it.
-          mnt=$(hdiutil attach -nobrowse -noautoopen -readonly "$dmg" | awk -F'\t' '/\/Volumes\//{print $NF}')
+          mnt=$(mount_dmg "$dmg")
           codesign --verify --deep --strict --verbose=2 "$mnt/$(basename "$app")"
           hdiutil detach "$mnt"
 

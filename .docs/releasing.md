@@ -77,6 +77,8 @@ and makes the `.dmg` again under the same volume name. Without it, a Mac that do
 and can't be opened"; with it, macOS says Apple can't check it and **System Settings → Privacy & Security → Open
 Anyway** opens it. Gatekeeper still warns until the app is signed with a Developer ID and notarized. cargo-packager's
 own signing (`signing-identity = "-"`) isn't used: it always adds `--timestamp` and the hardened runtime.
+cargo-packager puts `LICENSE` (`license-file`) in its `.dmg` as an agreement, which a mount must answer: the step
+answers it with `yes`. The `.dmg` made again doesn't carry the agreement: the released one opens without it.
 
 ## A build on this PC
 
