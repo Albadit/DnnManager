@@ -2,7 +2,7 @@
 
 ## Skills
 
-This repository has seventeen skills in `.claude/skills/`. For every prompt, decide which of them the request needs, use
+This repository has eighteen skills in `.claude/skills/`. For every prompt, decide which of them the request needs, use
 each one that applies, and name them in the first line of the reply (e.g. "Skills: functionality, documentation" or
 "Skills: none"). **orchestrator** does that choosing: at the start of a task it matches the task against every
 skill's description and loads only the ones that fit; `#<skill-name>` in a message (e.g. `#security`) loads that
@@ -28,12 +28,13 @@ skill as well.
 | **operations** | touches CI, the release workflow, the packages (`Packager.toml`), the VS Code tasks, self-update, logging or settings storage |
 | **orchestrator** | starts any task: picks and loads the skills above that fit it |
 
-**Docs and releases.**
+**Docs, releases and commits.**
 
 | Skill | Use it when the prompt… |
 |---|---|
 | **documentation** | writes or updates docs: README, `.docs/`, diagrams, a handover - or a code change alters documented behaviour, configuration, setup or architecture |
 | **release-notes** | writes or reviews the notes for a release (`.docs/release-notes/vX.Y.Z.md`) - "the release notes for 2.0.0", "prepare the next release" - or redoes a release whose tag is made (a failed release workflow) |
+| **commit** | makes a commit or writes its message - "commit this", amending, rewording: `type: summary` subject, a body per area, never a Co-Authored-By trailer |
 
 A code skill and documentation apply together when a code change touches something the docs describe. None of them
 applies to a quick question or a one-off command.
@@ -49,5 +50,6 @@ applies to a quick question or a one-off command.
 - The UI can be tried against a stand-in IIS: `DNNMANAGER_GPUI_FIXTURE` - see [.docs/testing.md](.docs/testing.md).
 - Packages: `.msi` (Windows), `.dmg` (macOS), `.deb` (Linux) by cargo-packager (`Packager.toml`), built and published by
   `.github/workflows/release.yml` when a version tag is pushed - [.docs/releasing.md](.docs/releasing.md).
-- The owner commits; don't commit or push unless asked.
+- The owner commits; don't commit or push unless asked. A commit never gets a `Co-Authored-By` trailer (the **commit**
+  skill; `.claude/settings.json` turns Claude Code's own off).
 - Architecture, conventions and how to debug: [.docs/development.md](.docs/development.md).
