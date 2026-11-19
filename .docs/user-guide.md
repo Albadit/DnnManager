@@ -12,8 +12,8 @@ Download the package for your system from the [releases](https://github.com/Alba
   Start menu. The package isn't code-signed yet, so SmartScreen may ask first - **More info → Run anyway**.
 - **macOS**: open the `.dmg` and drag DNN Manager to Applications. The package isn't signed by Apple, so the first
   start is blocked: macOS says it can't check DNN Manager. Choose **Done**, then **System Settings → Privacy &
-  Security → Open Anyway**. If macOS says instead that DNN Manager **"is damaged and can't be opened"** (releases up
-  to 1.8.7 do), the app is fine: run this once in Terminal, then open it as usual:
+  Security → Open Anyway**. If macOS says instead that DNN Manager **"is damaged and can't be opened"** (releases
+  before 2.0.0-rc3 do), the app is fine: run this once in Terminal, then open it as usual:
 
   ```sh
   xattr -dr com.apple.quarantine "/Applications/DNN Manager.app"
