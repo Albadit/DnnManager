@@ -6,14 +6,15 @@
 //! and acts on what it returns.
 
 use crate::px;
+use crate::{Icon, IconSize};
 use std::rc::Rc;
 
 use gpui::{App, ClickEvent, Div, ElementId, Entity, FocusHandle, Focusable, FontWeight, KeyBinding, MouseButton, MouseDownEvent, SharedString, Stateful, Window, actions, anchored, canvas, deferred, div, prelude::*};
 
-use crate::Pad;
 use crate::text_input::TextInput;
+use crate::{Pad, Tip};
 use crate::theme::Theme;
-use crate::{ButtonKind, button, icon, icons};
+use crate::{ButtonKind, button, icon_sized, icons};
 
 /// How a dialog ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,7 +133,7 @@ pub fn field_error(problem: Option<SharedString>, cx: &App) -> Option<Div> {
             .items_start()
             .gap(px(icons::LABEL_GAP))
             .text_color(c.error_text)
-            .child(crate::line_icon(icons::ERROR, icons::SIZE, c.error_text, cx))
+            .child(crate::line_icon(Icon::Error, IconSize::Medium, c.error_text, cx))
             .child(p)
     })
 }
@@ -154,12 +155,12 @@ pub fn text_field(input: &Entity<TextInput>, window: &Window, cx: &App) -> Div {
         .child(input.clone())
 }
 
-/// A check box with its text (`CheckBox`), clickable on both.
+/// A check box with its text (`CheckBox`), clickable on both; Tab reaches it and Space ticks it.
 pub fn check(id: impl Into<ElementId>, checked: bool, text: impl Into<SharedString>, cx: &App) -> Stateful<Div> {
     let theme = Theme::get(cx);
     let c = theme.colors;
-    div()
-        .id(id)
+    crate::focusable_bare(div().id(id), cx)
+        .rounded(theme.metrics.control_radius)
         .flex()
         .items_center()
         .gap(px(8.0))
@@ -175,19 +176,19 @@ pub fn check(id: impl Into<ElementId>, checked: bool, text: impl Into<SharedStri
                 .rounded(theme.metrics.small_radius)
                 .border_1()
                 .when(checked, |d| {
-                    d.bg(c.accent).border_color(c.accent).child(icon(icons::CHECK, icons::SIZE_SMALL, c.on_accent, cx))
+                    d.bg(c.accent).border_color(c.accent).child(icon_sized(Icon::Check, IconSize::Small, c.on_accent, cx))
                 })
                 .when(!checked, |d| d.bg(c.input_bg).border_color(c.input_border)),
         )
         .child(text.into())
 }
 
-/// A radio button with its text (`RadioButton`).
+/// A radio button with its text (`RadioButton`); Tab reaches it and Space chooses it.
 pub fn radio(id: impl Into<ElementId>, chosen: bool, text: impl Into<SharedString>, cx: &App) -> Stateful<Div> {
     let theme = Theme::get(cx);
     let c = theme.colors;
-    div()
-        .id(id)
+    crate::focusable_bare(div().id(id), cx)
+        .rounded(theme.metrics.control_radius)
         .flex()
         .items_center()
         .gap(px(8.0))
@@ -245,23 +246,75 @@ pub fn select(
     on_choose: impl Fn(&usize, &mut Window, &mut App) + 'static,
     cx: &App,
 ) -> Div {
+    let rows = items.into_iter().map(|(text, chosen)| SelectRow::option(text, chosen)).collect();
+    select_rows(id, value, open, rows, SelectLook::default(), on_toggle, on_choose, cx)
+}
+
+/// One row of a select's list: an option to choose, or a heading over the options after it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectRow {
+    /// An option: its text, whether it is the value now, and a tip shown over it under the mouse.
+    Option { text: SharedString, chosen: bool, tip: Option<SharedString> },
+    /// A group's heading: muted and bold, skipped by the keys and the mouse.
+    Heading(SharedString),
+}
+
+impl SelectRow {
+    /// An option without a tip.
+    pub fn option(text: impl Into<SharedString>, chosen: bool) -> Self {
+        SelectRow::Option { text: text.into(), chosen, tip: None }
+    }
+}
+
+/// How a select looks apart from its rows: the dialogs' size, or the smaller one of a tab's header (the Logs
+/// pickers); and a tip over the box while its list is shut.
+#[derive(Debug, Clone, Default)]
+pub struct SelectLook {
+    /// 24 px high with caption text (box and list) instead of the theme's control height and body text.
+    pub compact: bool,
+    /// Shown over the box under the mouse; left out while the list is open (it would cover the list).
+    pub tip: Option<SharedString>,
+}
+
+/// The height of a [`SelectLook::compact`] select.
+const COMPACT_HEIGHT: f32 = 24.0;
+
+/// [`select`] with headings among its rows, tips on its options and a [`SelectLook`]. `on_choose` gets the option's
+/// place among the options - headings don't count - so the keys, the mouse and the caller agree on which is which.
+/// Options under headings are indented.
+#[allow(clippy::too_many_arguments)]
+pub fn select_rows(
+    id: impl Into<ElementId>,
+    value: impl Into<SharedString>,
+    open: bool,
+    rows: Vec<SelectRow>,
+    look: SelectLook,
+    on_toggle: impl Fn(&bool, &mut Window, &mut App) + 'static,
+    on_choose: impl Fn(&usize, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> Div {
     let theme = Theme::get(cx);
     let c = theme.colors;
     let id: ElementId = id.into();
     let key = SharedString::from(id.to_string());
-    let count = items.len();
-    let chosen = items.iter().position(|(_, chosen)| *chosen);
+    let row_of = option_rows(&rows);
+    let count = row_of.len();
+    let chosen = chosen_option(&rows);
+    let grouped = rows.iter().any(|r| matches!(r, SelectRow::Heading(_)));
+    let (height, text_size) =
+        if look.compact { (px(COMPACT_HEIGHT), theme.text.caption) } else { (theme.metrics.control_height, theme.text.body) };
     let (scroll, focus, highlight, placed) = SELECTS.with(|s| {
         let mut s = s.borrow_mut();
         let state = s.entry(key.to_string()).or_insert_with(|| SelectState::new(cx));
-        state.follow(open, chosen, count);
+        state.row_of = row_of;
+        state.follow(open, chosen);
         (state.scroll.clone(), state.focus.clone(), state.highlight, state.place)
     });
     let on_toggle: Handler<bool> = Rc::new(on_toggle);
     let on_choose: Handler<usize> = Rc::new(on_choose);
 
-    // Up, Down and the rest: open a shut list; in an open one, move the highlight to `to(highlight, page, count)`.
-    let nav = |to: fn(Option<usize>, usize, usize) -> usize| {
+    // Up, Down and the rest: open a shut list; in an open one, move the highlight.
+    let nav = |to: Move| {
         let (key, toggle) = (key.clone(), on_toggle.clone());
         move |window: &mut Window, cx: &mut App| {
             if open {
@@ -271,12 +324,12 @@ pub fn select(
             }
         }
     };
-    let next = nav(|h, _, _| h.map_or(0, |h| h + 1));
-    let previous = nav(|h, _, _| h.map_or(0, |h| h.saturating_sub(1)));
-    let first = nav(|_, _, _| 0);
-    let last = nav(|_, _, count| count.saturating_sub(1));
-    let page_down = nav(|h, page, _| h.map_or(0, |h| h + page));
-    let page_up = nav(|h, page, _| h.map_or(0, |h| h.saturating_sub(page)));
+    let next = nav(Move::Next);
+    let previous = nav(Move::Previous);
+    let first = nav(Move::First);
+    let last = nav(Move::Last);
+    let page_down = nav(Move::PageDown);
+    let page_up = nav(Move::PageUp);
     let confirm = {
         let (key, toggle, choose) = (key.clone(), on_toggle.clone(), on_choose.clone());
         move |_: &SelectConfirm, window: &mut Window, cx: &mut App| {
@@ -334,14 +387,17 @@ pub fn select(
                 .flex()
                 .items_center()
                 .justify_between()
-                .h(theme.metrics.control_height)
+                .gap(px(6.0))
+                .h(height)
                 .pad(px(0.0), px(6.0))
                 .rounded(theme.metrics.control_radius)
                 .border_1()
                 .border_color(if open { c.focus_border } else { c.field_border })
                 .focus(move |s| s.border_color(c.focus_border))
                 .bg(c.input_bg)
+                .text_size(text_size)
                 .cursor_pointer()
+                .when_some(look.tip.filter(|_| !open), |d, tip| d.tip(tip))
                 .on_mouse_down(MouseButton::Left, press)
                 .on_mouse_down_out(press_out)
                 .on_action(move |_: &SelectNext, window, cx| next(window, cx))
@@ -370,17 +426,32 @@ pub fn select(
                     .inset_0(),
                 )
                 .child(crate::one_line(value.into()))
-                .child(icon(icons::CHEVRON_DOWN, icons::SIZE_SMALL, c.text_primary, cx)),
+                .child(icon_sized(Icon::ChevronDown, IconSize::Small, c.text_primary, cx)),
         )
         .when(open, |d| {
-            let rows = items.into_iter().enumerate().map(|(i, (text, chosen))| {
+            let mut option = 0;
+            let rows = rows.into_iter().map(|row| {
+                let (text, chosen, tip) = match row {
+                    SelectRow::Heading(text) => {
+                        return div()
+                            .pad(px(4.0), px(8.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(c.text_muted)
+                            .child(text)
+                            .into_any_element();
+                    }
+                    SelectRow::Option { text, chosen, tip } => (text, chosen, tip),
+                };
+                let i = option;
+                option += 1;
                 let lit = highlight == Some(i);
                 let (choose, toggle, hover_key) = (on_choose.clone(), on_toggle.clone(), key.clone());
                 div()
                     .id((SharedString::from(format!("{key}-option")), i))
                     .flex()
-                    .pad(px(3.0), px(8.0))
+                    .pad(px(3.0), px(if grouped { 20.0 } else { 8.0 }))
                     .cursor_pointer()
+                    .when_some(tip, |d, tip| d.tip(tip))
                     .when(chosen, |d| d.bg(c.selection_bg))
                     // The highlight - the row under the mouse or picked with the keys - over the chosen row as well.
                     .when(lit, |d| d.bg(if chosen { c.selection_bg.blend(c.command_center_hover_bg) } else { c.hover_bg }))
@@ -405,6 +476,7 @@ pub fn select(
                     .child(div().flex_1().min_w_0().child(text))
                     // Clear of the scroll bar over the right edge.
                     .child(div().flex_none().w(px(crate::SCROLLBAR_WIDTH - 4.0)))
+                    .into_any_element()
             });
             // The frame (border, shadow) around the scrolled options and the scroll bar over their right edge.
             let scrolled = div()
@@ -424,6 +496,7 @@ pub fn select(
                 .border_color(c.card_border)
                 .bg(c.card_bg)
                 .shadow_lg()
+                .text_size(text_size)
                 .text_color(c.text_primary)
                 .child(scrolled)
                 .child(crate::scrollbar(&scroll, cx))
@@ -476,20 +549,47 @@ pub fn select(
 /// A select's `on_toggle` or `on_choose`, shared by the box, its keys and its rows.
 type Handler<T> = Rc<dyn Fn(&T, &mut Window, &mut App)>;
 
-/// Moves a select's highlight to `to(highlight, rows in a page, count)` and scrolls it into view.
-fn move_highlight(key: &str, count: usize, to: fn(Option<usize>, usize, usize) -> usize, window: &mut Window) {
-    if count == 0 {
-        return;
+/// A key's move of a select's highlight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Move {
+    Next,
+    Previous,
+    First,
+    Last,
+    PageDown,
+    PageUp,
+}
+
+impl Move {
+    /// The option highlighted after this move from `highlight`, among `count` options, `page` of them seen at once.
+    /// Nothing highlighted yet: End goes to the last, any other move to the first. It stops at either end (no
+    /// wrapping round). No options: nothing.
+    fn from(self, highlight: Option<usize>, page: usize, count: usize) -> Option<usize> {
+        let last = count.checked_sub(1)?;
+        let to = match (self, highlight) {
+            (Move::Last, _) => last,
+            (Move::First, _) | (_, None) => 0,
+            (Move::Next, Some(h)) => h + 1,
+            (Move::Previous, Some(h)) => h.saturating_sub(1),
+            (Move::PageDown, Some(h)) => h + page,
+            (Move::PageUp, Some(h)) => h.saturating_sub(page),
+        };
+        Some(to.min(last))
     }
+}
+
+/// Moves a select's highlight by `to` and scrolls it into view.
+fn move_highlight(key: &str, count: usize, to: Move, window: &mut Window) {
     SELECTS.with(|s| {
         let mut s = s.borrow_mut();
         let Some(state) = s.get_mut(key) else { return };
         let seen = state.scroll.bounds().size.height;
         let row = state.scroll.bounds_for_item(0).map_or(px(0.0), |b| b.size.height);
         let page = if row > px(0.0) { ((seen / row).floor() as usize).saturating_sub(1).max(1) } else { 1 };
-        let next = to(state.highlight, page, count).min(count - 1);
-        state.highlight = Some(next);
-        state.scroll.scroll_to_item(next);
+        if let Some(next) = to.from(state.highlight, page, count) {
+            state.highlight = Some(next);
+            state.scroll.scroll_to_item(state.row(next));
+        }
     });
     window.refresh();
 }
@@ -506,28 +606,58 @@ struct SelectState {
     was_open: bool,
     /// Where it was laid out.
     place: Option<Place>,
+    /// Each option's row in the list (headings take rows too), for scrolling an option into view.
+    row_of: Vec<usize>,
 }
 
 impl SelectState {
     fn new(cx: &App) -> Self {
-        Self { scroll: gpui::ScrollHandle::new(), focus: cx.focus_handle(), highlight: None, was_open: false, place: None }
+        Self {
+            scroll: gpui::ScrollHandle::new(),
+            // A tab stop: Tab reaches the box, then Down / Up / Enter / Space open it.
+            focus: cx.focus_handle().tab_stop(true),
+            highlight: None,
+            was_open: false,
+            place: None,
+            row_of: Vec::new(),
+        }
     }
 
-    /// Opened: the highlight starts on the chosen row, scrolled into view. Shut: no highlight.
-    fn follow(&mut self, open: bool, chosen: Option<usize>, count: usize) {
+    /// The list row of option `i`.
+    fn row(&self, i: usize) -> usize {
+        self.row_of.get(i).copied().unwrap_or(i)
+    }
+
+    /// Opened: the highlight starts on the chosen option, scrolled into view. Shut: no highlight.
+    fn follow(&mut self, open: bool, chosen: Option<usize>) {
         if open && !self.was_open {
             self.highlight = chosen;
             match chosen {
-                Some(i) => self.scroll.scroll_to_item(i),
+                Some(i) => self.scroll.scroll_to_item(self.row(i)),
                 None => self.scroll.set_offset(gpui::point(px(0.0), px(0.0))),
             }
         }
         if !open {
             self.highlight = None;
         }
-        self.highlight = self.highlight.filter(|h| *h < count);
+        self.highlight = self.highlight.filter(|h| *h < self.row_of.len());
         self.was_open = open;
     }
+}
+
+/// The list row of each option in `rows`, in order: the options' places with the headings counted.
+fn option_rows(rows: &[SelectRow]) -> Vec<usize> {
+    rows.iter().enumerate().filter(|(_, r)| matches!(r, SelectRow::Option { .. })).map(|(i, _)| i).collect()
+}
+
+/// Which option (among the options, headings not counted) is the value now.
+fn chosen_option(rows: &[SelectRow]) -> Option<usize> {
+    rows.iter()
+        .filter_map(|r| match r {
+            SelectRow::Option { chosen, .. } => Some(*chosen),
+            SelectRow::Heading(_) => None,
+        })
+        .position(|chosen| chosen)
 }
 
 /// Where a select's box was last laid out, the window's height then, and where its open list was.
@@ -541,4 +671,62 @@ struct Place {
 thread_local! {
     /// Each select's state, by its id.
     static SELECTS: std::cell::RefCell<std::collections::HashMap<String, SelectState>> = Default::default();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Move, SelectRow, chosen_option, option_rows};
+
+    #[test]
+    fn up_and_down_move_one_option_and_stop_at_the_ends() {
+        assert_eq!(Move::Next.from(Some(0), 5, 3), Some(1));
+        assert_eq!(Move::Next.from(Some(2), 5, 3), Some(2));
+        assert_eq!(Move::Previous.from(Some(1), 5, 3), Some(0));
+        assert_eq!(Move::Previous.from(Some(0), 5, 3), Some(0));
+    }
+
+    #[test]
+    fn nothing_highlighted_starts_at_the_first_or_with_end_the_last() {
+        for to in [Move::Next, Move::Previous, Move::First, Move::PageDown, Move::PageUp] {
+            assert_eq!(to.from(None, 5, 3), Some(0), "{to:?}");
+        }
+        assert_eq!(Move::Last.from(None, 5, 3), Some(2));
+    }
+
+    #[test]
+    fn home_end_and_the_page_keys() {
+        assert_eq!(Move::First.from(Some(7), 5, 10), Some(0));
+        assert_eq!(Move::Last.from(Some(1), 5, 10), Some(9));
+        assert_eq!(Move::PageDown.from(Some(1), 5, 10), Some(6));
+        assert_eq!(Move::PageDown.from(Some(8), 5, 10), Some(9));
+        assert_eq!(Move::PageUp.from(Some(6), 5, 10), Some(1));
+        assert_eq!(Move::PageUp.from(Some(3), 5, 10), Some(0));
+    }
+
+    #[test]
+    fn an_empty_list_has_nothing_to_highlight() {
+        assert_eq!(Move::Next.from(None, 5, 0), None);
+        assert_eq!(Move::Last.from(Some(0), 5, 0), None);
+    }
+
+    #[test]
+    fn headings_take_a_row_but_are_not_options() {
+        let rows = vec![
+            SelectRow::Heading("DNN".into()),
+            SelectRow::option("Log4Net", false),
+            SelectRow::option("Event log", true),
+            SelectRow::Heading("IIS".into()),
+            SelectRow::option("Requests", false),
+        ];
+        // Options 0, 1, 2 are rows 1, 2, 4: the keys count options, the list scrolls to rows.
+        assert_eq!(option_rows(&rows), vec![1, 2, 4]);
+        assert_eq!(chosen_option(&rows), Some(1));
+    }
+
+    #[test]
+    fn nothing_chosen_without_a_chosen_option() {
+        let rows = vec![SelectRow::Heading("Sites".into()), SelectRow::option("a", false)];
+        assert_eq!(chosen_option(&rows), None);
+        assert!(option_rows(&[SelectRow::Heading("x".into())]).is_empty());
+    }
 }

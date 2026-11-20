@@ -27,7 +27,7 @@ const DOT: char = '•';
 
 impl PasswordInput {
     pub fn new(cx: &mut Context<Self>) -> Self {
-        Self { focus_handle: cx.focus_handle(), content: String::new(), all_selected: false }
+        Self { focus_handle: cx.focus_handle().tab_stop(true), content: String::new(), all_selected: false }
     }
 
     pub fn password(&self) -> &str {

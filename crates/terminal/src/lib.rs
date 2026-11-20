@@ -27,7 +27,17 @@ mod trust;
 pub mod view;
 
 pub use buffer::TerminalBuffer;
-pub use panel::{PanelColors, TerminalPanelEvent, TerminalPanelView};
+pub use panel::{PanelColors, PanelIcons, TerminalPanelEvent, TerminalPanelView};
 pub use session::{SessionEvent, TerminalSession};
 pub use shells::{Shells, TerminalShell, find_shells};
 pub use view::{TerminalStyle, TerminalView, TerminalViewEvent};
+
+/// Tab and Shift+Tab go to the shell (completion), not to the window's next control: the app binds them to moving the
+/// focus everywhere else, and a binding wins over the terminal's own key handler - `NoAction` in the terminal's
+/// context, deeper than the window's, takes them back. Ctrl+J (hide the panel) leaves the terminal.
+pub fn bind_keys(cx: &mut gpui::App) {
+    cx.bind_keys([
+        gpui::KeyBinding::new("tab", gpui::NoAction, Some("Terminal")),
+        gpui::KeyBinding::new("shift-tab", gpui::NoAction, Some("Terminal")),
+    ]);
+}

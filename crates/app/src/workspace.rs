@@ -3,6 +3,7 @@
 //! Troubleshoot over the page, the dialogs and the tour.
 
 use dnnm_ui::px;
+use dnnm_ui::{Icon, IconSize};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -110,6 +111,21 @@ pub fn bind_keys(cx: &mut App) {
 }
 
 const APP_ICON: &[u8] = include_bytes!("../assets/dnn-32.png");
+
+/// The layers over the page that hold the keyboard while open - Tab goes round their controls only.
+struct Layers {
+    /// Settings or Troubleshoot.
+    modal: FocusHandle,
+    dialog: FocusHandle,
+    palette: FocusHandle,
+    prompt: FocusHandle,
+}
+
+impl Layers {
+    fn new(cx: &mut App) -> Self {
+        Self { modal: cx.focus_handle(), dialog: cx.focus_handle(), palette: cx.focus_handle(), prompt: cx.focus_handle() }
+    }
+}
 
 /// The bottom panel's tabs (`TerminalPanel`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -299,6 +315,8 @@ pub struct Workspace {
     /// The Terminal tab - once the shells on this PC are known (read off the UI thread at start).
     terminal: Option<Entity<TerminalPanelView>>,
     focus: FocusHandle,
+    /// The focus of each layer over the page that keeps the keyboard inside it ([`ui::focus::trap`]).
+    layers: Layers,
     icon: Arc<Image>,
     _subscriptions: Vec<Subscription>,
 }
@@ -453,6 +471,7 @@ impl Workspace {
             logs: cx.new(|_| LogsView::new(store_for_logs)),
             terminal: None,
             focus,
+            layers: Layers::new(cx),
             icon: Arc::new(Image::from_bytes(ImageFormat::Png, APP_ICON.to_vec())),
             _subscriptions: subscriptions,
         }
@@ -698,7 +717,7 @@ impl Workspace {
         if self.settings.is_some() {
             self.close_modal(window, cx);
         } else {
-            self.projects.update(cx, |p, cx| p.close_details(cx));
+            self.projects.update(cx, |p, cx| p.close_details(window, cx));
         }
     }
 
@@ -976,6 +995,7 @@ impl Focusable for Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        ui::focus::begin_frame(&self.focus, window);
         self.keep_output_clock(cx);
         self.update_find(cx);
         let theme = Theme::get(cx).clone();
@@ -1299,6 +1319,10 @@ impl Render for Workspace {
                 },
             )
             .track_focus(&self.focus)
+            // Tab / Shift+Tab: the next or previous control, inside the dialog or menu that is open.
+            .on_action(|_: &ui::focus::FocusNext, window, cx| ui::focus::move_focus(true, window, cx))
+            .on_action(|_: &ui::focus::FocusPrevious, window, cx| ui::focus::move_focus(false, window, cx))
+            .child(ui::focus::watch_mouse())
             .on_mouse_move(cx.listener(move |this, e: &gpui::MouseMoveEvent, window, cx| {
                 let Some(drag) = this.drag else { return };
                 // The button let go outside the window: the drag is over (its sash no longer lit).
@@ -1385,7 +1409,7 @@ impl Render for Workspace {
                     this.store.update(cx, |s, cx| s.answer_prompt(None, cx));
                     return;
                 }
-                if this.settings.is_none() && this.projects.update(cx, |p, cx| p.close_details(cx)) {
+                if this.settings.is_none() && this.projects.update(cx, |p, cx| p.close_details(window, cx)) {
                     return;
                 }
                 this.close_modal(window, cx);
@@ -1430,8 +1454,7 @@ impl Render for Workspace {
                         .child(
                             // The box's column, the box in it 20 px under its top and 28 px over its bottom.
                             div().relative().w_full().max_w(px(1280.0)).child(
-                                div()
-                                    .id("modal-box")
+                                ui::focus::trap(div().id("modal-box"), &self.layers.modal)
                                     .absolute()
                                     .top(px(20.0))
                                     .bottom(px(28.0))
@@ -1453,11 +1476,10 @@ impl Render for Workspace {
                 ))
             })
             .when(maximized, |d| d.child(self.render_toasts(cx)))
-            .when_some(self.render_menu(cx), |d, menu| d.child(menu))
+            .when_some(self.render_menu(window, cx), |d, menu| d.child(menu))
             .when_some(self.dialog.as_ref().map(|(view, _)| view.clone()), |d, view| {
                 d.child(ui::fade_in(
-                    div()
-                        .id("dialog-backdrop")
+                    ui::focus::trap(div().id("dialog-backdrop"), &self.layers.dialog)
                         .absolute()
                         .inset_0()
                         .flex()
@@ -1471,7 +1493,11 @@ impl Render for Workspace {
                 ))
             })
             .when_some(self.palette.clone(), |d, palette| {
-                d.child(ui::fade_in(div().absolute().inset_0().child(palette), "palette-fade", cx))
+                d.child(ui::fade_in(
+                    ui::focus::trap(div().absolute().inset_0(), &self.layers.palette).child(palette),
+                    "palette-fade",
+                    cx,
+                ))
             })
             .when_some(self.tour.as_ref().map(|(t, _)| t.clone()), |d, tour| d.child(tour))
             .when(has_prompt, |d| d.child(self.render_prompt(cx)))
@@ -1481,6 +1507,9 @@ impl Render for Workspace {
 impl Workspace {
     /// The title bar: icon and name, the command center in the middle, Help and the layout buttons, then the window's.
     fn render_title_bar(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // macOS has its own window buttons at the left (the traffic lights, placed in `main`): ours are left out there,
+        // and the logo moves past them. Windows and Linux get ours at the right.
+        let mac = cfg!(target_os = "macos");
         let theme = Theme::get(cx).clone();
         let c = theme.colors;
         let h = theme.metrics.title_bar_height;
@@ -1489,21 +1518,24 @@ impl Workspace {
         let sidebar_right =
             self.store.read(cx).settings.sidebar_position() == dnnm_application::settings::SidebarPosition::Right;
         let layout_button = |id: &'static str, tip: &'static str| {
-            div()
-                .id(id)
-                .flex()
-                .items_center()
-                .justify_center()
-                .w(theme.metrics.layout_button_width)
-                .h(theme.metrics.layout_button_height)
-                .rounded(px(5.0))
-                .cursor_pointer()
-                .hover(move |s| s.bg(c.hover_bg))
-                .tip(tip)
-                // Out of the caption's drag area: a press here is a click, not the start of a move.
-                .occlude()
+            ui::focusable_bare(
+                div()
+                    .id(id)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .w(theme.metrics.layout_button_width)
+                    .h(theme.metrics.layout_button_height)
+                    .rounded(px(5.0))
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(c.hover_bg))
+                    .tip(tip)
+                    // Out of the caption's drag area: a press here is a click, not the start of a move.
+                    .occlude(),
+                cx,
+            )
         };
-        let caption = |id: &'static str, glyph: &'static str, area: WindowControlArea, hover| {
+        let caption = |id: &'static str, glyph: Icon, area: WindowControlArea, hover| {
             div()
                 .id(id)
                 .flex()
@@ -1515,7 +1547,7 @@ impl Workspace {
                 // Only its own area under the mouse - not the caption's drag area too.
                 .occlude()
                 .hover(move |s| s.bg(hover))
-                .child(ui::icon(glyph, icons::SIZE_SMALL, c.text_primary, cx))
+                .child(ui::icon_sized(glyph, IconSize::Small, c.text_primary, cx))
         };
         div()
             .relative()
@@ -1534,8 +1566,7 @@ impl Workspace {
             // The command center, centred on the window.
             .child(
                 div().absolute().inset_0().flex().items_center().justify_center().child(
-                    div()
-                        .id("command-center")
+                    ui::focusable(div().id("command-center"), cx)
                         .flex()
                         .items_center()
                         .gap(px(icons::LABEL_GAP))
@@ -1556,7 +1587,7 @@ impl Workspace {
                         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.show_palette(false, window, cx)))
                         .relative()
                         .child(dnnm_dialogs::tour::target(dnnm_dialogs::tour::TourPart::CommandCenter, &self.tour_targets))
-                        .child(ui::icon(icons::SEARCH, icons::SIZE, c.command_center_fg, cx))
+                        .child(ui::icon(Icon::Search, c.command_center_fg, cx))
                         .child(
                             div()
                                 .overflow_hidden()
@@ -1572,6 +1603,9 @@ impl Workspace {
                     .items_center()
                     .gap(px(10.0))
                     .pad(px(0.0), px(12.0))
+                    // Room for the traffic lights: up to `MAC_CAPTION` with the padding and gap in front of the logo. Native
+                    // pixels, not the UI scale - the traffic lights don't grow with it.
+                    .when(mac, |d| d.child(div().flex_none().w(gpui::px(MAC_CAPTION) - px(12.0) - px(10.0))))
                     .child(img(self.icon.clone()).size(px(16.0)))
                     .when(menu_bar, |d| {
                         d.child(
@@ -1603,9 +1637,20 @@ impl Workspace {
                                     }
                                 }),
                             )
+                            // Enter or Space on it (the mouse opens it on the press, above).
+                            .on_click(cx.listener(|this, e: &ClickEvent, _, cx| {
+                                if e.is_keyboard() {
+                                    let (position, corner) = this.help_anchor.below(false);
+                                    this.open_help_menu(position, cx);
+                                    if let Some(menu) = this.menu.as_mut() {
+                                        menu.anchor = corner;
+                                    }
+                                }
+                            }))
                             .child(self.help_anchor.measure())
                             .child(dnnm_dialogs::tour::target(dnnm_dialogs::tour::TourPart::HelpButton, &self.tour_targets))
-                            .child(ui::icon(icons::QUESTION, icons::SIZE, c.text_primary, cx)),
+                            // The size of the layout icons beside it: at 13 px the ? in its ring was a smudge.
+                            .child(ui::icon_sized(Icon::Question, IconSize::Nav, c.text_primary, cx)),
                     )
                     .child(div().w(px(1.0)).h(px(16.0)).bg(c.sidebar_divider))
                     .child(
@@ -1668,20 +1713,23 @@ impl Workspace {
                                 )),
                             ),
                     )
-                    .child(div().w(px(1.0)).h(px(16.0)).bg(c.sidebar_divider))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .child(caption("minimize", icons::MINIMIZE, WindowControlArea::Min, c.hover_bg))
-                            .child(caption(
-                                "maximize",
-                                if maximized { icons::RESTORE } else { icons::MAXIMIZE },
-                                WindowControlArea::Max,
-                                c.hover_bg,
-                            ))
-                            .child(caption("close", icons::CLOSE, WindowControlArea::Close, c.close_hover)),
-                    ),
+                    // Without our window buttons the help and layout buttons end 12 px from the edge (5 + the 7 px gap).
+                    .when(mac, |d| d.child(div().flex_none().w(px(5.0))))
+                    .when(!mac, |d| {
+                        d.child(div().w(px(1.0)).h(px(16.0)).bg(c.sidebar_divider)).child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .child(caption("minimize", Icon::Minimize, WindowControlArea::Min, c.hover_bg))
+                                .child(caption(
+                                    "maximize",
+                                    if maximized { Icon::Restore } else { Icon::Maximize },
+                                    WindowControlArea::Max,
+                                    c.hover_bg,
+                                ))
+                                .child(caption("close", Icon::Close, WindowControlArea::Close, c.close_hover)),
+                        )
+                    }),
             )
     }
 
@@ -1700,9 +1748,8 @@ impl Workspace {
         // The gear's menu opens upwards from it; Help's opens down from the title bar.
         let gear_open = self.menu.as_ref().is_some_and(|m| m.anchor != gpui::Corner::TopLeft);
         // An entry: its icon alone, what it is in its tooltip (VS Code's activity bar).
-        let entry = |id: &'static str, glyph: &'static str, tip: &'static str, selected: bool| {
-            div()
-                .id(id)
+        let entry = |id: &'static str, glyph: Icon, tip: &'static str, selected: bool| {
+            ui::focusable_bare(div().id(id), cx)
                 .flex()
                 .items_center()
                 .justify_center()
@@ -1715,7 +1762,7 @@ impl Workspace {
                 .when(selected, |d| d.bg(c.sidebar_selected))
                 .when(!selected, |d| d.hover(move |s| s.bg(c.sidebar_hover)))
                 .tip_beside(tip)
-                .child(ui::icon(glyph, icons::SIZE_NAV, if selected { c.sidebar_active_fg } else { c.sidebar_fg }, cx))
+                .child(ui::icon_sized(glyph, IconSize::Nav, if selected { c.sidebar_active_fg } else { c.sidebar_fg }, cx))
         };
         // The entries' groups: as much room above the first and below the last as beside them (the bar's width less
         // its edge lines and the entry, halved), 4 px between them.
@@ -1739,7 +1786,7 @@ impl Workspace {
                     .child(
                         entry(
                             "nav-projects",
-                            icons::LIST,
+                            Icon::List,
                             "Projects - every website on this computer (Ctrl+1)",
                             self.page == Page::Projects,
                         )
@@ -1748,7 +1795,7 @@ impl Workspace {
                     .child(
                         entry(
                             "nav-new",
-                            icons::ADD,
+                            Icon::Add,
                             "New project - create a website, or one from a backup (Ctrl+2)",
                             self.page == Page::NewProject,
                         )
@@ -1758,32 +1805,49 @@ impl Workspace {
                     ),
             )
             .child(group().child(
-                entry("nav-gear", icons::SETTINGS, "Settings, themes, Troubleshoot and updates", gear_open)
+                entry("nav-gear", Icon::Settings, "Settings, themes, Troubleshoot and updates", gear_open)
                     .relative()
                     .child(self.gear_anchor.measure())
                     .child(dnnm_dialogs::tour::target(dnnm_dialogs::tour::TourPart::ManageButton, &self.tour_targets))
+                    // Enter or Space on it: as a press of the mouse (below).
+                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                        if e.is_keyboard() {
+                            this.toggle_gear_menu(e.position(), sidebar_right, sidebar_edge, window, cx);
+                        }
+                    }))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
                             cx.stop_propagation();
-                            if this.menu.take().is_none() {
-                                // Beside the gear - right of the sidebar (left of it on the right) - its bottom level
-                                // with the gear's (`Manage_Click`).
-                                let bottom = this.gear_anchor.bounds().map_or(e.position.y + px(17.0), |b| b.bottom());
-                                let (x, corner) = if sidebar_right {
-                                    (window.viewport_size().width - sidebar_edge - px(6.0), gpui::Corner::BottomRight)
-                                } else {
-                                    (sidebar_edge + px(6.0), gpui::Corner::BottomLeft)
-                                };
-                                this.open_gear_menu(gpui::point(x, bottom), cx);
-                                if let Some(menu) = this.menu.as_mut() {
-                                    menu.anchor = corner;
-                                }
-                            }
-                            cx.notify();
+                            this.toggle_gear_menu(e.position, sidebar_right, sidebar_edge, window, cx);
                         }),
                     ),
             ))
+    }
+
+    /// Opens the gear's menu, or closes it when open: beside the gear - right of the sidebar (left of it on the
+    /// right) - its bottom level with the gear's (`Manage_Click`). `at` is where it was pressed.
+    fn toggle_gear_menu(
+        &mut self,
+        at: gpui::Point<gpui::Pixels>,
+        sidebar_right: bool,
+        sidebar_edge: gpui::Pixels,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.menu.take().is_none() {
+            let bottom = self.gear_anchor.bounds().map_or(at.y + px(17.0), |b| b.bottom());
+            let (x, corner) = if sidebar_right {
+                (window.viewport_size().width - sidebar_edge - px(6.0), gpui::Corner::BottomRight)
+            } else {
+                (sidebar_edge + px(6.0), gpui::Corner::BottomLeft)
+            };
+            self.open_gear_menu(gpui::point(x, bottom), cx);
+            if let Some(menu) = self.menu.as_mut() {
+                menu.anchor = corner;
+            }
+        }
+        cx.notify();
     }
 
     /// The running operation's question (`MessageDialog`): its glyph - a question, or a warning in red when the yes
@@ -1794,7 +1858,7 @@ impl Workspace {
         let store = self.store.read(cx);
         let Some(prompt) = store.prompt.as_ref() else { return div().into_any_element() };
         let (glyph, glyph_color) =
-            if prompt.danger { (icons::WARNING, c.error_text) } else { (icons::QUESTION, c.accent) };
+            if prompt.danger { (Icon::Warning, c.error_text) } else { (Icon::Question, c.accent) };
         let question = prompt.question.clone();
         let answers = prompt.answers.clone();
         let danger = prompt.danger;
@@ -1813,8 +1877,7 @@ impl Workspace {
                     }),
                 ));
         }
-        div()
-            .id("prompt-backdrop")
+        ui::focus::trap(div().id("prompt-backdrop"), &self.layers.prompt)
             .absolute()
             .inset_0()
             .flex()
@@ -1839,7 +1902,7 @@ impl Workspace {
                             .gap(px(14.0))
                             .pad(px(19.0), px(20.0))
                             // Centred on the question's first line, however many lines it takes.
-                            .child(ui::line_icon(glyph, icons::SIZE_LARGE, glyph_color, cx))
+                            .child(ui::line_icon(glyph, IconSize::Large, glyph_color, cx))
                             .child(
                                 // `min_w_0`: without it a long line (a path) widens the text past the dialog instead of wrapping.
                                 div().id("prompt-text").flex_1().min_w_0().max_h(px(360.0)).overflow_y_scroll().child(question),
@@ -1858,7 +1921,7 @@ impl Workspace {
     }
 
     /// The gear's or Help's menu, with a backdrop that closes it.
-    fn render_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    fn render_menu(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let menu = self.menu.as_ref()?;
         let (close, hover) = (cx.entity().downgrade(), cx.entity().downgrade());
         Some(
@@ -1891,6 +1954,7 @@ impl Workspace {
                             }
                         });
                     },
+                    window,
                     cx,
                 ))
                 .into_any_element(),
@@ -2074,8 +2138,7 @@ impl Workspace {
         let theme = Theme::get(cx).clone();
         let c = theme.colors;
         let option = |id: &'static str, label: &'static str, tip: &'static str, on: bool| {
-            div()
-                .id(id)
+            ui::focusable_bare(div().id(id), cx)
                 .flex()
                 .flex_none()
                 .items_center()
@@ -2104,9 +2167,8 @@ impl Workspace {
         } else {
             format!("{} of {}", find.current + 1, find.count).into()
         };
-        let nav = |id: &'static str, glyph: &'static str, size: f32, tip: &'static str| {
-            div()
-                .id(id)
+        let nav = |id: &'static str, glyph: Icon, tip: &'static str| {
+            ui::focusable_bare(div().id(id), cx)
                 .flex()
                 .flex_none()
                 .items_center()
@@ -2116,7 +2178,7 @@ impl Workspace {
                 .cursor_pointer()
                 .hover(move |s| s.bg(c.hover_bg))
                 .tip(tip)
-                .child(ui::icon(glyph, size, c.log_muted, cx))
+                .child(ui::icon(glyph, c.log_muted, cx))
         };
         div()
             .id("panel-find")
@@ -2180,15 +2242,15 @@ impl Workspace {
                     .child(count_text),
             )
             .child(
-                nav("find-previous", icons::CHEVRON_UP, icons::SIZE, "Previous match (Shift+Enter)")
+                nav("find-previous", Icon::ChevronUp, "Previous match (Shift+Enter)")
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.step_find(-1, cx))),
             )
             .child(
-                nav("find-next", icons::CHEVRON_DOWN, icons::SIZE, "Next match (Enter)")
+                nav("find-next", Icon::ChevronDown, "Next match (Enter)")
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.step_find(1, cx))),
             )
             .child(
-                nav("find-close", icons::CLOSE, icons::SIZE_CLOSE, "Close (Esc)")
+                nav("find-close", Icon::Close, "Close (Esc)")
                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.close_find(window, cx))),
             )
             .into_any_element()
@@ -2201,10 +2263,14 @@ impl Workspace {
         let unseen = store.output_unseen_failure;
         let run = store.runs.last().cloned();
         let busy = store.is_busy();
+        let on_terminal = self.panel_tab == PanelTab::Terminal && self.terminal.is_some();
+        let on_logs = self.panel_tab == PanelTab::Logs;
+        // The logs are followed only while they are seen (`LogsView.Paused`).
+        let logs_seen = on_logs && self.panel_visible;
+        self.logs.update(cx, |l, _| l.shown = logs_seen);
 
         let tab = |id: &'static str, label: &'static str, tip: &'static str, chosen: bool| {
-            div()
-                .id(id)
+            ui::focusable_bare(div().id(id), cx)
                 .flex()
                 .items_center()
                 .gap(px(5.0))
@@ -2218,11 +2284,6 @@ impl Workspace {
                 .tip(tip)
                 .child(label)
         };
-        let on_terminal = self.panel_tab == PanelTab::Terminal && self.terminal.is_some();
-        let on_logs = self.panel_tab == PanelTab::Logs;
-        // The logs are followed only while they are seen (`LogsView.Paused`).
-        let logs_seen = on_logs && self.panel_visible;
-        self.logs.update(cx, |l, _| l.shown = logs_seen);
         // A panel button (`PanelButton`): 26 x 26, transparent until hovered, the icon in LogMuted.
         let panel_button = |id: &'static str, icon: gpui::Div, enabled: bool| {
             div()
@@ -2234,6 +2295,7 @@ impl Workspace {
                 .size(px(26.0))
                 .rounded(theme.metrics.control_radius)
                 .when(enabled, |d| d.cursor_pointer().hover(move |s| s.bg(c.hover_bg)))
+                .when(enabled, |d| ui::focusable_bare(d, cx))
                 .when(!enabled, |d| d.opacity(0.35))
                 .child(icon)
         };
@@ -2289,7 +2351,7 @@ impl Workspace {
                     })
                     .when(!on_terminal && !on_logs, |d| {
                         d.child(
-                            panel_button("clear-output", ui::icon(icons::DELETE, icons::SIZE, c.log_muted, cx), !busy)
+                            panel_button("clear-output", ui::icon(Icon::Delete, c.log_muted, cx), !busy)
                                 .tip("Clear output")
                                 .when(!busy, |b| {
                                     b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -2299,7 +2361,7 @@ impl Workspace {
                         )
                     })
                     .child(
-                        panel_button("find-in-panel", ui::icon(icons::SEARCH, icons::SIZE, c.log_muted, cx), true)
+                        panel_button("find-in-panel", ui::icon(Icon::Search, c.log_muted, cx), true)
                             .tip("Find (Ctrl+F)")
                             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_find(window, cx))),
                     )
@@ -2308,10 +2370,10 @@ impl Workspace {
                         let maximized = self.panel_maximized;
                         panel_button(
                             "maximize-panel",
-                            ui::shape_icon(
-                                if maximized { dnnm_ui::shapes::RESTORE_PATH } else { dnnm_ui::shapes::MAXIMIZE_PATH },
-                                12.0,
+                            ui::icon(
+                                if maximized { Icon::PanelRestore } else { Icon::PanelMaximize },
                                 c.log_muted,
+                                cx,
                             ),
                             true,
                         )
@@ -2326,7 +2388,7 @@ impl Workspace {
                         }))
                     })
                     .child(
-                        panel_button("hide-panel", ui::icon(icons::CLOSE, icons::SIZE_CLOSE, c.log_muted, cx), true)
+                        panel_button("hide-panel", ui::icon(Icon::Close, c.log_muted, cx), true)
                             .tip("Hide panel (Ctrl+J)")
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                 this.panel_visible = false;
@@ -2377,9 +2439,9 @@ impl Workspace {
         // The pill (`PipelineView`): a spinner while it runs, else how it ended.
         let (pill, pill_bg, pill_fg, pill_glyph) = match run.status {
             RunStatus::Running => ("Running", c.out_pill_running_bg, c.out_pill_running_fg, None),
-            RunStatus::Finished => ("Finished", c.out_pill_ok_bg, c.out_pill_ok_fg, Some(icons::CHECK)),
-            RunStatus::Failed => ("Failed", c.out_pill_fail_bg, c.out_pill_fail_fg, Some(icons::CLOSE)),
-            RunStatus::Cancelled => ("Cancelled", c.out_pill_neutral_bg, c.out_pill_neutral_fg, Some(icons::CLOSE)),
+            RunStatus::Finished => ("Finished", c.out_pill_ok_bg, c.out_pill_ok_fg, Some(Icon::Check)),
+            RunStatus::Failed => ("Failed", c.out_pill_fail_bg, c.out_pill_fail_fg, Some(Icon::Close)),
+            RunStatus::Cancelled => ("Cancelled", c.out_pill_neutral_bg, c.out_pill_neutral_fg, Some(Icon::Close)),
         };
         let now = SystemTime::now();
         let warnings = run.lines.iter().filter(|l| l.kind == LineKind::Warn).count();
@@ -2433,7 +2495,7 @@ impl Workspace {
                                     .rounded(px(10.0))
                                     .bg(pill_bg)
                                     .child(match pill_glyph {
-                                        Some(glyph) => ui::icon(glyph, icons::SIZE_SMALL, pill_fg, cx).into_any_element(),
+                                        Some(glyph) => ui::icon_sized(glyph, IconSize::Small, pill_fg, cx).into_any_element(),
                                         None => ui::spinner("output-pill-spinner", icons::SIZE_SMALL, pill_fg, cx),
                                     })
                                     .child(
@@ -2457,7 +2519,7 @@ impl Workspace {
                                 .flex_none()
                                 .items_center()
                                 .gap(px(icons::LABEL_GAP))
-                                .child(ui::icon(icons::WARNING, icons::SIZE, color, cx))
+                                .child(ui::icon(Icon::Warning, color, cx))
                                 .child(div().text_color(color).child(text)),
                         )
                     }),
@@ -2509,10 +2571,10 @@ impl Workspace {
         for (i, (name, state)) in stage_list.into_iter().enumerate() {
             let running = state == LineKind::Info;
             let mark = match state {
-                LineKind::Fail => ui::icon(icons::ERROR, icons::SIZE, c.out_error, cx).into_any_element(),
-                LineKind::Warn => ui::icon(icons::WARNING, icons::SIZE, c.log_warn, cx).into_any_element(),
+                LineKind::Fail => ui::icon(Icon::Error, c.out_error, cx).into_any_element(),
+                LineKind::Warn => ui::icon(Icon::Warning, c.log_warn, cx).into_any_element(),
                 LineKind::Info => ui::spinner(("stage-spinner", i), icons::SIZE, c.out_pill_running_fg, cx),
-                _ => ui::icon(icons::CHECK, icons::SIZE, c.success_text, cx).into_any_element(),
+                _ => ui::icon(Icon::Check, c.success_text, cx).into_any_element(),
             };
             let took = run.stage_duration(i, now).map(|d| span(d, running)).unwrap_or_default();
             stages = stages.child(
@@ -2693,7 +2755,7 @@ impl Workspace {
             IisServerState::NotInstalled => ("IIS not installed", c.text_muted, false),
             IisServerState::Unknown => ("IIS unknown", c.text_muted, false),
         };
-        let iis_button = |id: &'static str, glyph: &'static str, tip: &'static str| {
+        let iis_button = |id: &'static str, glyph: Icon, tip: &'static str| {
             div()
                 .id(id)
                 .flex()
@@ -2702,9 +2764,10 @@ impl Workspace {
                 .size(px(22.0))
                 .rounded(px(3.0))
                 .when(!busy, |d| d.cursor_pointer().hover(move |s| s.bg(c.hover_bg)))
+                .when(!busy, |d| ui::focusable_bare(d, cx))
                 .when(busy, |d| d.opacity(0.35))
                 .tip(tip)
-                .child(ui::icon(glyph, icons::SIZE, c.text_primary, cx))
+                .child(ui::icon(glyph, c.text_primary, cx))
         };
         let iis = div()
             .relative()
@@ -2720,7 +2783,7 @@ impl Workspace {
                 d.child(
                     iis_button(
                         "iis-restart",
-                        icons::REFRESH,
+                        Icon::Refresh,
                         "Restart IIS - every website on this computer is unavailable for a few seconds; asks first",
                     )
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -2730,7 +2793,7 @@ impl Workspace {
                 .child(
                     iis_button(
                         "iis-stop",
-                        icons::STOP,
+                        Icon::Stop,
                         "Stop IIS - every website on this computer stops until you start it again; asks first",
                     )
                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -2740,7 +2803,7 @@ impl Workspace {
             })
             .when(state == IisServerState::Stopped && !busy, |d| {
                 d.child(
-                    iis_button("iis-start", icons::PLAY, "Start IIS, the web server, so your websites can be opened")
+                    iis_button("iis-start", Icon::Play, "Start IIS, the web server, so your websites can be opened")
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                             this.store.update(cx, |s, cx| s.control_iis(IisServerAction::Start, cx))
                         })),
@@ -2818,8 +2881,7 @@ impl Workspace {
         let mut stack = div().absolute().right(px(16.0)).bottom(px(16.0)).flex().flex_col().items_end().gap(px(8.0));
         if let Some(title) = running {
             stack = stack.child(
-                div()
-                    .id("operation-toast")
+                ui::focusable(div().id("operation-toast"), cx)
                     .w(px(340.0))
                     .flex()
                     .flex_col()
@@ -2873,9 +2935,9 @@ impl Workspace {
         let waiting = toasts.len().saturating_sub(1);
         for toast in toasts.into_iter().take(1) {
             let (glyph, color) = match toast.kind {
-                ToastKind::Success => (icons::CHECK, c.success_text),
-                ToastKind::Warning => (icons::WARNING, c.log_warn),
-                ToastKind::Error => (icons::ERROR, c.error_text),
+                ToastKind::Success => (Icon::Check, c.success_text),
+                ToastKind::Warning => (Icon::Warning, c.log_warn),
+                ToastKind::Error => (Icon::Error, c.error_text),
             };
             let id = toast.id;
             stack = stack.child(
@@ -2892,7 +2954,7 @@ impl Workspace {
                     .border_color(c.card_border)
                     .shadow_lg()
                     .occlude()
-                    .child(ui::line_icon(glyph, icons::SIZE, color, cx))
+                    .child(ui::line_icon(glyph, IconSize::Medium, color, cx))
                     // `min_w_0`: the text wraps in the toast's width instead of running past it.
                     .child(div().flex_1().min_w_0().flex().flex_col().gap(px(8.0)).child(toast.text.clone())
                             .when(waiting > 0, |d| {
@@ -2922,7 +2984,7 @@ impl Workspace {
                     .child(
                         ui::icon_button(
                             SharedString::from(format!("toast-close-{id}")),
-                            icons::CLOSE,
+                            Icon::Close,
                             c.text_muted,
                             true,
                             cx,
@@ -3124,12 +3186,21 @@ fn terminal_style(settings: &dnnm_application::settings::Settings, cx: &App) -> 
         warn_banner_border: c.warn_banner_border,
         out_warn_text: c.log_warn,
         font: theme.font.clone(),
-        icon_font: theme.icon_font.clone(),
+        icons: dnnm_terminal::PanelIcons {
+            add: Icon::Add.path(IconSize::Medium),
+            chevron_down: Icon::ChevronDown.path(IconSize::Small),
+            delete: Icon::Delete.path(IconSize::Medium),
+            shell: Icon::Terminal.path(IconSize::Medium),
+        },
         caption_size: theme.text.caption,
         body_size: theme.text.body,
     };
     (style, colors)
 }
+
+/// How far the title bar's logo starts on macOS: past the traffic lights (12 px in, three 14 px buttons 6 px apart)
+/// and a gap as wide as the one in front of them.
+pub const MAC_CAPTION: f32 = 78.0;
 
 /// The command center's width: a share of the window, at most `max` (`SizeCommandCenter`).
 fn relative_width(window: &Window, share: f32, max: f32) -> gpui::Pixels {

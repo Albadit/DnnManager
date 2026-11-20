@@ -3,13 +3,14 @@
 //! `DialogEvent::Done(features)` only when something changed and every row is right.
 
 use dnnm_ui::px;
+use dnnm_ui::Icon;
 use gpui::{App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, SharedString, Subscription, Window, div, prelude::*};
 
 use dnnm_system::prereq::{IisFeature, default_features, is_iis_feature_name};
 use dnnm_ui::dialog::{self, DialogEvent};
 use dnnm_ui::text_input::{TextChanged, TextInput};
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{self as ui, Tip, icons};
+use dnnm_ui::{self as ui, Tip};
 
 /// A row as typed: (shown as, Windows feature name).
 pub type FeatureRow = (String, String);
@@ -145,7 +146,7 @@ impl Render for IisFeaturesDialog {
                         div().child(
                             ui::icon_button(
                                 SharedString::from(format!("remove-feature-{i}")),
-                                icons::DELETE,
+                                Icon::Delete,
                                 c.text_primary,
                                 true,
                                 cx,

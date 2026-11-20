@@ -32,6 +32,10 @@ pub(crate) const AFTER_ARGUMENT: &str = "--after";
 
 /// Every default key binding - made again, with the user's changes, when Settings saves its shortcuts.
 pub(crate) fn bind_default_keys(cx: &mut App) {
+    // First: the later bindings of the same context win, so a page's own keys go over Tab's and the menus'.
+    dnnm_ui::focus::bind_keys(cx);
+    dnnm_ui::menu::bind_keys(cx);
+    dnnm_terminal::bind_keys(cx);
     dnnm_ui::text_input::bind_keys(cx);
     dnnm_ui::dialog::bind_keys(cx);
     workspace::bind_keys(cx);
@@ -183,7 +187,9 @@ fn main() {
             titlebar: Some(TitlebarOptions {
                 title: Some("DNN Manager".into()),
                 appears_transparent: true,
-                traffic_light_position: None,
+                // macOS draws its own close / minimize / zoom at the left: centred in the 36 px title bar (they are
+                // 14 px high), 12 px in from the side. The title bar leaves room for them (`workspace::MAC_CAPTION`).
+                traffic_light_position: cfg!(target_os = "macos").then(|| point(gpui::px(12.0), gpui::px(11.0))),
             }),
             window_min_size: Some(size(gpui::px(400.0), gpui::px(270.0))),
             app_id: Some("DnnManager.NET".into()),

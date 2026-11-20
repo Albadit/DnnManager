@@ -1,15 +1,33 @@
 //! A context menu (`Themes/Controls/MenuStyles.xaml`): items with their state, bold for the default one, separators,
 //! and submenus that open beside their item under the mouse. Placed where the mouse was, in window coordinates.
+//!
+//! From the keyboard: the menu takes the focus as it opens (its first item while the keyboard is in use), Down / Up
+//! and Tab / Shift+Tab go from item to item - a submenu's items follow its entry -, Enter or Space runs one or opens
+//! its submenu, Esc closes it; the focus goes back to what opened it ([`crate::focus::trap`]).
 
 use crate::px;
+use crate::{Icon, IconSize};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use gpui::{App, Bounds, ClickEvent, ElementId, FontWeight, Pixels, Point, SharedString, Window, anchored, canvas, deferred, div, point, prelude::*};
+use gpui::{App, Bounds, ClickEvent, ElementId, FontWeight, KeyBinding, Pixels, Point, SharedString, Window, actions, anchored, canvas, deferred, div, point, prelude::*};
 
+use crate::focus::{FocusNext, FocusPrevious};
 use crate::theme::Theme;
-use crate::{Pad, Tip, icon, icons};
+use crate::{Pad, Tip, focus, icon_sized};
+
+actions!(menu, [CloseMenu]);
+
+/// The keys of an open menu, in its "Menu" context: deeper than the page's, so its Esc closes the menu first.
+pub fn bind_keys(cx: &mut App) {
+    let context = Some("Menu");
+    cx.bind_keys([
+        KeyBinding::new("down", FocusNext, context),
+        KeyBinding::new("up", FocusPrevious, context),
+        KeyBinding::new("escape", CloseMenu, context),
+    ]);
+}
 
 pub type MenuAction = Rc<dyn Fn(&mut Window, &mut App)>;
 
@@ -147,7 +165,7 @@ fn list(
         .font_family(theme.font.clone());
     for (i, item) in items.iter().enumerate() {
         let row = |enabled: bool| {
-            div()
+            let row = div()
                 .id(SharedString::from(format!("{id}-{i}")))
                 .flex()
                 .items_center()
@@ -156,7 +174,9 @@ fn list(
                 .pad(px(4.0), px(10.0))
                 .rounded(theme.metrics.control_radius)
                 .when(enabled, |d| d.cursor_pointer().hover(move |s| s.bg(c.hover_bg)))
-                .when(!enabled, |d| d.text_color(c.text_muted))
+                .when(!enabled, |d| d.text_color(c.text_muted));
+            // A greyed item is passed over by the keys, as Windows' menus do.
+            if enabled { focus::focusable_bare(row, cx) } else { row }
         };
         // A row's 4 px inset from the menu's sides; separators run edge to edge.
         let inset = || div().pad(px(0.0), px(4.0));
@@ -201,6 +221,7 @@ fn list(
                     entries.borrow_mut().insert(i, bounds);
                     window_width.set(width);
                 }));
+                let press = on_hover_submenu.clone();
                 entry = entry.child(
                     row(enabled)
                         .when(is_open, |d| d.bg(c.hover_bg))
@@ -209,8 +230,12 @@ fn list(
                                 hover(Some(i), window, cx);
                             }
                         })
+                        // Enter or Space (or a click) opens it - or shuts it again; its items come next for Tab.
+                        .when(enabled, |d| {
+                            d.on_click(move |_: &ClickEvent, window, cx| press((!is_open).then_some(i), window, cx))
+                        })
                         .child(label.clone())
-                        .child(icon(icons::CHEVRON_RIGHT, icons::SIZE_SMALL, c.text_muted, cx)),
+                        .child(icon_sized(Icon::ChevronRight, IconSize::Small, c.text_muted, cx)),
                 );
                 if is_open && let Some(at) = placement.entries.borrow().get(&i).copied() {
                     let noop: HoverSubmenu = Rc::new(|_, _, _| {});
@@ -245,14 +270,19 @@ fn list(
     menu
 }
 
-/// The menu over everything, at its position (kept inside the window).
+/// The menu over everything, at its position (kept inside the window). It holds the focus while it is open
+/// ([`focus::trap`]); Esc closes it.
 pub fn render(
     menu: &ContextMenu,
     on_close: impl Fn(&mut Window, &mut App) + 'static,
     on_hover_submenu: impl Fn(Option<usize>, &mut Window, &mut App) + 'static,
-    cx: &App,
+    window: &mut Window,
+    cx: &mut App,
 ) -> impl IntoElement {
     let on_close: MenuAction = Rc::new(on_close);
+    // The menu's own focus, kept while it is drawn - a new one each time a menu opens.
+    let handle = window.use_keyed_state("context-menu-focus", cx, |_, cx| cx.focus_handle()).read(cx).clone();
+    let escape = on_close.clone();
     let content = list(
         "context-menu",
         &menu.items,
@@ -261,8 +291,10 @@ pub fn render(
         Rc::new(on_hover_submenu),
         &menu.placement,
         cx,
-    );
-    let content = crate::fade_in(content, "context-menu-fade", cx);
+    )
+    .key_context("Menu")
+    .on_action(move |_: &CloseMenu, window, cx| escape(window, cx));
+    let content = crate::fade_in(focus::trap(content, &handle), "context-menu-fade", cx);
     // Under the menu, over everything else: a layer as large as the window that closes it at a press anywhere - the
     // panel, the title bar, wherever it was opened from. (Its submenus are inside the menu, so a press there is not
     // outside it.)

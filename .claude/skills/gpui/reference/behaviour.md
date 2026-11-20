@@ -90,6 +90,11 @@ Re-check when GPUI is upgraded; add new findings here with how they were verifie
   `ui::info_tip_drop` to sit in the letters' visual middle.
 - **Crisp 1 px lines in an SVG**: put the path on half pixels (`M1.5,…`) with `stroke-width="1"` at 1:1 size; on
   whole pixels or a 1.3 stroke the line is smeared over two pixels.
+  An SVG drawn smaller than its grid (16 grid at 13 px) loses that: `ui::icons` redraws each icon in the pixels of
+  its size and snaps the points (`fit`). GPUI rasterises an svg at 2x (`SMOOTH_SVG_SCALE_FACTOR`, svg_renderer.rs:9)
+  and places it at its layout box (window.rs `paint_svg`); checked by screenshots at 100 % display scaling.
+- **An svg doesn't take its parent's text colour**: `Svg::paint` reads only its own `style.text.color`
+  (elements/svg.rs:110) - without one it draws nothing. For a hover colour, set it on the svg with `group_hover`.
 - **The title bar drag**: an element with `window_control_area(Drag)` must `occlude()`, and buttons inside it
   occlude too - else the root's focus handling swallows the drag, or a click becomes a drag.
 
@@ -98,3 +103,22 @@ Re-check when GPUI is upgraded; add new findings here with how they were verifie
 - `dialog::select`'s keys are actions in a "Select" key context on the box (`track_focus`). Deeper than the dialogs' "Modal", so its `escape` wins; with the list shut the handler calls `cx.propagate()` and the keymap tries the next binding (Modal's CloseView) - window.rs:3834-3846. Checked in the window: Esc shut the list and left the page; Down / Page Down / Home / Enter moved and chose as expected.
 - `ui::scrollbar` is a `canvas` that inserts a `BlockMouseExceptScroll` hitbox in prepaint (only while there is something to scroll) and registers window mouse listeners in paint; the drag (one at a time) lives in a thread-local and moves the `ScrollHandle` with `set_offset`. Checked: a 150 px drag scrolled the version list ~55 rows, the list stayed open and no row was chosen.
 - A view's own "pressed elsewhere" close must not run on a press on the overlay: `on_mouse_down_out` is capture and geometric, so the select now does the closing itself and checks the list's measured bounds.
+
+### Keyboard navigation (measured 2026-11-20, in the window with the stand-in IIS)
+
+- **No Tab by itself**: 0.2.2 has tab stops (`tab_index`, div.rs:637), `focus_next` / `focus_prev` (window.rs:1413)
+  and clicks a focused element with `on_click` when Enter or Space comes *up* (div.rs:2183) - nothing binds Tab.
+  `ui::focus` binds it and the workspace handles it. A binding wins over `on_key_down`, so the terminal takes Tab back
+  with `NoAction` in its context (keymap.rs:173: a `NoAction` stops shallower bindings).
+- **A shadow with no blur draws nothing on Windows**: the shadow shader integrates over `blur_radius`
+  (shaders.hlsl, `shadow_fragment`), so a crisp "outline" shadow (blur 0, spread 2) is invisible. The focus ring is
+  the border instead.
+- **A mouse press focuses a focusable element** (div.rs:2025) unless an earlier listener `prevent_default`s - and
+  the element's own `on_mouse_down` runs first in the bubble phase. `ui::focus` does that, so clicks don't move the
+  focus (the projects table keeps its arrows).
+- **A removed element's focus handle lives a frame longer**: `window.focused()` still returns it, but
+  `root.contains_focused()` is false - test that to see the focus was left on nothing.
+- **Two draws can happen before an `on_next_frame` callback runs**: comparing "this frame" with "the frame before"
+  missed a menu that closed; compare with what the last check saw.
+- `window.use_keyed_state(id, cx, |_, cx| cx.focus_handle())` gives a free-function element (a menu) a focus handle
+  that lives while it is drawn and is new each time it opens.

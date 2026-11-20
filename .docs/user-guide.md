@@ -41,6 +41,11 @@ menu) say whether there is a newer release.
 | Bottom panel | **Output** (what an operation does, step by step), **Logs** (the sites' and DNN Manager's logs), **Terminal**. **Ctrl+J** opens and closes it; drag its top edge to resize it (it stops at its smallest size), or the corner where it meets the primary side bar to resize both. **Ctrl+F** (or 🔍) finds text in the tab shown: **Aa** match case, **ab** whole word, **.\*** regular expression; **Enter** / **Shift+Enter** go to the next / previous match, **Esc** closes it. |
 | Status bar | IIS's state with Start / Stop / Restart (these affect every site), memory, processor and disk. |
 
+**Without a mouse**: **Tab** and **Shift+Tab** go from control to control, **Enter** or **Space** presses the one
+with the blue ring. A menu opens on its first item - **Up** / **Down** move, **Esc** closes it. Settings, a dialog or
+a menu keeps **Tab** inside it while open, and **Esc** takes you back to where you were. In the projects list, **Up**
+/ **Down** choose a project and **Enter** opens it. In the terminal, **Tab** goes to the shell; **Ctrl+J** leaves it.
+
 ## Projects
 
 One row per website: the dot is green when it runs, an empty circle when stopped, orange while it changes. Click a

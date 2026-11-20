@@ -10,6 +10,7 @@
 //! OS dialog): they have no file-type filter, so the title says it is a `.json` and the export suggests its name.
 
 use dnnm_ui::px;
+use dnnm_ui::Icon;
 use gpui::{AnyElement, App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, SharedString, Subscription, Window, div, prelude::*};
 
 use dnnm_application::settings::Settings;
@@ -22,7 +23,7 @@ use dnnm_dnn::version::Version;
 use dnnm_ui::dialog::{self, DialogEvent};
 use dnnm_ui::text_input::{TextChanged, TextInput};
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{self as ui, Pad, Tip, icons};
+use dnnm_ui::{self as ui, Pad, Tip};
 
 /// "No new minimum".
 const NO_NEW_MINIMUM: i32 = 0;
@@ -717,7 +718,7 @@ impl DnnUpgradePathDialog {
                         div().w(px(REMOVE_WIDTH - 4.0)).flex_none().child(
                             ui::icon_button(
                                 SharedString::from(format!("remove-{id}")),
-                                icons::DELETE,
+                                Icon::Delete,
                                 foreground,
                                 true,
                                 cx,

@@ -44,13 +44,13 @@ Base: `https://docs.rs/gpui/0.2.2/gpui/` - append the page. Source: `~/.cargo/re
 
 | Need | Helper |
 |---|---|
-| Glyph icon / drawn icon / spinner | `ui::icon`, `ui::line_icon`, `ui::shape_icon` + `ui::shapes`, `ui::spinner` |
+| Icon / layout icon / spinner | `ui::icon(Icon::…, colour, cx)` (standard size), `ui::icon_sized(…, IconSize::…)`, `ui::line_icon`, `ui::icon_button`; `ui::shape_icon` + `ui::shapes`; `ui::spinner` |
 | Buttons, links, switch, check box | `ui::button`, `ui::icon_button(_sized)`, `ui::link`, `ui::switch`, `ui::check_box`, `ui::status_dot` |
 | Tooltip lined up with its element | `.tip(text)`, `.tip_beside(text)` (trait `ui::Tip`) |
 | ⓘ beside a title or label | `ui::info_tip`, `ui::with_tip`, `ui::with_tip_sized` |
 | Where a button is (for its popup) | `ui::Anchor` (`measure()`, `below(right)`, `contains`) |
 | Context menu with submenus | `ui::menu::{ContextMenu, MenuItem, render}` |
-| Dialog frame, fields, select, radio | `ui::dialog::{frame, frame_with_tip, ok_cancel, label, hint, field_error, text_field, check, radio, select, option}` |
+| Dialog frame, fields, select, radio | `ui::dialog::{frame, frame_with_tip, ok_cancel, label, hint, field_error, text_field, check, radio, select, select_rows, SelectRow, SelectLook}` |
 | Text field | `ui::text_input::TextInput` |
 | Fade and pulse | `ui::fade_in`, `ui::pulse` (respect `Theme::animations`) |
 | Find highlights | `ui::LineMarks`, `ui::marked_text`, `ui::find_colors` |

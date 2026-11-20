@@ -7,6 +7,7 @@
 //! C#, only this site's own bindings are checked for doubles - IIS refuses a binding another site has.
 
 use dnnm_ui::px;
+use dnnm_ui::Icon;
 use std::path::PathBuf;
 
 use gpui::{App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, SharedString, Subscription, Window, div, prelude::*};
@@ -15,7 +16,7 @@ use dnnm_application::use_cases::edit_bindings::{EditBindingsRequest, HttpBindin
 use dnnm_ui::dialog::{self, DialogEvent};
 use dnnm_ui::text_input::{TextChanged, TextInput};
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{self as ui, Tip, icons};
+use dnnm_ui::{self as ui, Tip};
 
 /// The dialog's first line.
 pub fn intro(site: &str) -> String {
@@ -238,7 +239,7 @@ impl Render for BindingsDialog {
                             .child(
                                 ui::icon_button(
                                     ("remove-binding", id),
-                                    icons::DELETE,
+                                    Icon::Delete,
                                     theme.colors.text_primary,
                                     true,
                                     cx,

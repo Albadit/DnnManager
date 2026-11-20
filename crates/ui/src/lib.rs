@@ -2,6 +2,7 @@
 //! toggle switch, the table check box, icons and tooltips. Each takes its sizes and colours from the theme.
 
 pub mod dialog;
+pub mod focus;
 pub mod icons;
 pub mod menu;
 pub mod shapes;
@@ -15,22 +16,26 @@ use std::time::Duration;
 use gpui::{Animation, AnimationExt, AnyView, App, ClickEvent, Div, ElementId, FontWeight, Hsla, Pixels, SharedString, Stateful, Transformation, Window, div, percentage, prelude::*};
 
 pub use crate::scale::{px, set_ui_scale, ui_scale};
+pub use crate::icons::{Icon, IconSize};
 pub use crate::spacing::Pad;
+pub use crate::focus::{focusable, focusable_bare, focusable_ring};
 use crate::theme::Theme;
 
-/// A glyph of the icon font (`Themes/Icons.xaml`), in a box of its size so it lines up with text.
-pub fn icon(glyph: &'static str, size: f32, color: Hsla, cx: &App) -> Div {
+/// An icon of [`icons::Icon`] at the standard size ([`IconSize::Medium`]), stroked 1 px, centred in a box 2 px larger
+/// so it lines up with text. Every icon fills the same share of its box ([`icons::Optical`]), so none looks bigger.
+pub fn icon(icon: Icon, color: Hsla, cx: &App) -> Div {
+    icon_sized(icon, IconSize::Medium, color, cx)
+}
+
+/// [`icon`] at another role's size: a chevron or check mark (`Small`), a page entry (`Nav`), a prompt's (`Large`).
+pub fn icon_sized(icon: Icon, size: IconSize, color: Hsla, _cx: &App) -> Div {
     div()
         .flex()
         .items_center()
         .justify_center()
         .flex_none()
-        .size(px(size + 2.0))
-        .font_family(Theme::get(cx).icon_font.clone())
-        .text_size(px(size))
-        .line_height(px(size + 2.0))
-        .text_color(color)
-        .child(glyph)
+        .size(px(size.pixels() + 2.0))
+        .child(gpui::svg().path(icon.path(size)).size(gpui::px(icons::drawn_size(size))).flex_none().text_color(color))
 }
 
 /// How long a change of state takes on screen - a fade in, a switch's slide. 200 ms with [`MOTION_EASING`]: long
@@ -249,7 +254,7 @@ impl Anchor {
     }
 }
 
-/// A drawn icon of [`shapes`] (a layout icon, maximize) in the box a glyph of its size gets, so it lines up the same.
+/// A drawn icon of [`shapes`] (a layout icon) in the box an [`icon`] of its size gets, so it lines up the same.
 pub fn shape_icon(path: impl Into<SharedString>, size: f32, color: Hsla) -> Div {
     div()
         .flex()
@@ -296,14 +301,14 @@ pub fn marked_text(text: impl Into<SharedString>, marks: &LineMarks, cx: &App) -
 
 /// An icon in front of text that may wrap (an error, a check's result, a toast): one line of that text high, so the
 /// icon centres on the first line whatever the font size. Use it in an `items_start` row, `LABEL_GAP` from the text.
-pub fn line_icon(glyph: &'static str, size: f32, color: Hsla, cx: &App) -> Div {
+pub fn line_icon(glyph: Icon, size: IconSize, color: Hsla, cx: &App) -> Div {
     div()
         .relative()
         .flex_none()
-        .w(px(size + 2.0))
+        .w(px(size.pixels() + 2.0))
         // An invisible character: the box takes the height of one line of the text around it.
         .child("\u{200B}")
-        .child(div().absolute().inset_0().flex().items_center().justify_center().child(icon(glyph, size, color, cx)))
+        .child(div().absolute().inset_0().flex().items_center().justify_center().child(icon_sized(glyph, size, color, cx)))
 }
 
 /// An explanation kept out of the way: a small muted info icon beside a title or label, its text in a tooltip.
@@ -326,21 +331,20 @@ fn info_tip_lowered(id: impl Into<ElementId>, text: impl Into<SharedString>, dro
         .flex_none()
         .relative()
         .top(drop)
-        .text_color(muted)
-        .hover(move |s| s.text_color(hover))
+        .group("info-tip")
         .tip(text)
         // Beside a check box or radio its click is its own: it doesn't tick or choose the row.
         .on_click(|_, _, cx| cx.stop_propagation())
         .child(
-            div()
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(px(icons::SIZE + 2.0))
-                .font_family(theme.icon_font.clone())
-                .text_size(px(icons::SIZE))
-                .line_height(px(icons::SIZE + 2.0))
-                .child(icons::INFO),
+            div().flex().items_center().justify_center().size(px(icons::SIZE + 2.0)).child(
+                // An svg takes no colour from its parent: its own, and the brighter one while the tip is hovered.
+                gpui::svg()
+                    .path(Icon::Info.path(IconSize::Medium))
+                    .size(gpui::px(icons::drawn_size(IconSize::Medium)))
+                    .flex_none()
+                    .text_color(muted)
+                    .group_hover("info-tip", move |s| s.text_color(hover)),
+            ),
         )
 }
 
@@ -507,7 +511,10 @@ pub enum ButtonKind {
     Danger,
 }
 
-/// A text button (`ButtonStyles.xaml`): 30 px high, 14,6 padding, radius 4.
+/// A text button (`ButtonStyles.xaml`): 30 px high whatever it holds - text, an icon, both - 14 px in from its sides,
+/// radius 4. A height, not padding round the text: a line of text is 21 px (GPUI's 1.618 x 13), so text and padding made
+/// 35 while an icon-only button stayed at the 30 minimum, and the two stood unevenly side by side. Reachable with Tab
+/// and pressed with Enter or Space while enabled ([`focus::focusable`]).
 pub fn button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
@@ -523,14 +530,14 @@ pub fn button(
         ButtonKind::Primary => (c.accent, c.accent_hover, c.accent, c.on_accent),
         ButtonKind::Danger => (c.danger, c.danger_hover, c.danger, c.on_accent),
     };
-    div()
+    let button = div()
         .id(id)
         .flex()
         .flex_none()
         .items_center()
         .justify_center()
-        .min_h(theme.metrics.control_height)
-        .pad(px(6.0), px(14.0))
+        .h(theme.metrics.control_height)
+        .pad(px(0.0), px(14.0))
         .rounded(theme.metrics.control_radius)
         .border_1()
         .border_color(border)
@@ -542,34 +549,36 @@ pub fn button(
         .when(!enabled, |d| d.opacity(if kind == ButtonKind::Secondary { 0.5 } else { 0.45 }))
         // An empty label adds nothing: a button given its icon and text afterwards would otherwise start with an
         // empty child and a gap, its content pushed right.
-        .when(!label.is_empty(), |d| d.child(label))
+        .when(!label.is_empty(), |d| d.child(label));
+    // The ring on a filled button in its text colour: the focus blue hardly shows on the accent.
+    let ring = if kind == ButtonKind::Secondary { c.focus_border } else { fg };
+    if enabled { focus::focusable_ring(button, ring, cx) } else { button }
 }
 
-/// An icon button (`IconButton`): 28 × 28, transparent until hovered; a third of its strength when disabled.
+/// An icon button (`IconButton`): 28 × 28, transparent until hovered; a third of its strength when disabled. Reachable
+/// with Tab while enabled ([`focus::focusable_bare`]).
 pub fn icon_button(
     id: impl Into<ElementId>,
-    glyph: &'static str,
+    glyph: Icon,
     color: Hsla,
     enabled: bool,
     cx: &App,
 ) -> Stateful<Div> {
-    // A close glyph a size smaller: it is drawn larger than the others (`SIZE_CLOSE`).
-    let size = if glyph == icons::CLOSE { icons::SIZE_CLOSE } else { icons::SIZE };
-    icon_button_sized(id, glyph, size, color, enabled, cx)
+    icon_button_sized(id, glyph, IconSize::Medium, color, enabled, cx)
 }
 
-/// [`icon_button`] with its glyph at `size` - where the C# app set one of its own (a list's title buttons).
+/// [`icon_button`] with its icon at `size` - where the C# app set one of its own (a list's title buttons).
 pub fn icon_button_sized(
     id: impl Into<ElementId>,
-    glyph: &'static str,
-    size: f32,
+    glyph: Icon,
+    size: IconSize,
     color: Hsla,
     enabled: bool,
     cx: &App,
 ) -> Stateful<Div> {
     let theme = Theme::get(cx);
     let hover = theme.colors.hover_bg;
-    div()
+    let button = div()
         .id(id)
         .flex()
         .flex_none()
@@ -579,13 +588,14 @@ pub fn icon_button_sized(
         .rounded(theme.metrics.control_radius)
         .when(enabled, |d| d.cursor_pointer().hover(move |s| s.bg(hover)))
         .when(!enabled, |d| d.opacity(0.35))
-        .child(icon(glyph, size, color, cx))
+        .child(icon_sized(glyph, size, color, cx));
+    if enabled { focus::focusable_bare(button, cx) } else { button }
 }
 
 /// A link (`LinkButton`): LinkFg text, underlined under the mouse.
 pub fn link(id: impl Into<ElementId>, text: impl Into<SharedString>, cx: &App) -> Stateful<Div> {
     let theme = Theme::get(cx);
-    div()
+    let link = div()
         .id(id)
         .cursor_pointer()
         .text_color(theme.colors.link_fg)
@@ -593,7 +603,8 @@ pub fn link(id: impl Into<ElementId>, text: impl Into<SharedString>, cx: &App) -
         .whitespace_nowrap()
         .text_ellipsis()
         .hover(|s| s.underline())
-        .child(text.into())
+        .child(text.into());
+    focus::focusable_bare(link, cx)
 }
 
 /// The toggle switch (`ToggleSwitch`): a 32 × 18 track, a 12 px knob, the label beside it.
@@ -643,16 +654,18 @@ pub fn switch(
     } else {
         track(1.0).into_any_element()
     };
-    div()
+    let switch = div()
         .id(id)
         .flex()
         .items_center()
         .gap(px(8.0))
+        .rounded(theme.metrics.control_radius)
         .cursor_pointer()
         .text_color(c.text_primary)
         .on_click(move |_: &ClickEvent, window, cx| on_toggle(&!on, window, cx))
         .child(track)
-        .child(label.into())
+        .child(label.into());
+    focus::focusable_bare(switch, cx)
 }
 
 /// A switch's last shown state, and whether it has flipped since it appeared (then its knob slides).
@@ -666,7 +679,7 @@ pub fn check_box(id: impl Into<ElementId>, checked: bool, cx: &App) -> Stateful<
     let theme = Theme::get(cx);
     let c = theme.colors;
     let focus = c.focus_border;
-    div()
+    let check_box = div()
         .id(id)
         .flex()
         .flex_none()
@@ -678,7 +691,8 @@ pub fn check_box(id: impl Into<ElementId>, checked: bool, cx: &App) -> Stateful<
         .cursor_pointer()
         .when(checked, |d| d.bg(c.accent).border_color(c.accent))
         .when(!checked, |d| d.bg(c.input_bg).border_color(c.input_border).hover(move |s| s.border_color(focus)))
-        .when(checked, |d| d.child(icon(icons::CHECK, icons::SIZE_SMALL, c.on_accent, cx)))
+        .when(checked, |d| d.child(icon_sized(Icon::Check, IconSize::Small, c.on_accent, cx)));
+    focus::focusable(check_box, cx)
 }
 
 /// A status dot: filled while running, a ring while stopped, amber while changing.

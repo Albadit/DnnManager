@@ -4,6 +4,7 @@
 //! draw it alike from what they hold.
 
 use dnnm_ui::px;
+use dnnm_ui::{Icon, IconSize};
 use gpui::{App, Div, FontWeight, HighlightStyle, SharedString, StyledText, div, prelude::*};
 
 use dnnm_application::use_cases::database_connection::{CheckOutcome, DatabaseCheckReport};
@@ -11,7 +12,7 @@ use dnnm_ui::theme::Theme;
 use dnnm_ui::{icons, line_icon};
 
 /// `GlyphCancel` of `Themes/Icons.xaml` - the failed check's mark.
-const CANCEL: &str = "\u{E711}";
+const CANCEL: Icon = Icon::Close;
 
 /// What the list shows (`ShowTesting` / `Show`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -37,8 +38,8 @@ pub fn database_check_list(state: &CheckListState, cx: &App) -> Div {
         CheckListState::Report(report) => {
             div().flex().flex_col().gap(px(3.0)).children(report.checks.iter().map(|check| {
                 let (glyph, color) = match check.outcome {
-                    CheckOutcome::Passed => (icons::CHECK, c.success_text),
-                    CheckOutcome::Warning => (icons::WARNING, c.log_warn),
+                    CheckOutcome::Passed => (Icon::Check, c.success_text),
+                    CheckOutcome::Warning => (Icon::Warning, c.log_warn),
                     CheckOutcome::Failed => (CANCEL, c.error_text),
                 };
                 let line = format!("{}: {}", check.name, check.detail);
@@ -48,7 +49,7 @@ pub fn database_check_list(state: &CheckListState, cx: &App) -> Div {
                     .flex()
                     .items_start()
                     .gap(px(icons::LABEL_GAP))
-                    .child(line_icon(glyph, icons::SIZE, color, cx))
+                    .child(line_icon(glyph, IconSize::Medium, color, cx))
                     .child(
                         div()
                             .flex_1()

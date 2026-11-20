@@ -208,7 +208,7 @@ impl Workspace {
                     TourEvent::Enter(TourEnter::ShowProjectsTable) => {
                         ws.page = Page::Projects;
                         ws.store.update(cx, |s, _| s.projects_shown = true);
-                        ws.projects.update(cx, |p, cx| p.close_details(cx));
+                        ws.projects.update(cx, |p, cx| p.close_details(window, cx));
                     }
                     TourEvent::Enter(TourEnter::OpenPanel) => ws.panel_visible = true,
                     TourEvent::Ended { .. } => {

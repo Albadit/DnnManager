@@ -22,11 +22,17 @@ const MAX_TITLE: usize = 60;
 /// The icon sizes of dnnm-ui's `icons` (this crate doesn't depend on it): actions 13, chevrons 10.
 const ICON_SIZE: f32 = 13.0;
 const ICON_SIZE_SMALL: f32 = 10.0;
-// Segoe Fluent Icons (Themes/Icons.xaml): GlyphAdd, GlyphChevronDown, GlyphDelete, and CommandPrompt for a shell.
-const GLYPH_ADD: &str = "\u{E710}";
-const GLYPH_CHEVRON_DOWN: &str = "\u{E70D}";
-const GLYPH_DELETE: &str = "\u{E74D}";
-const GLYPH_SHELL: &str = "\u{E756}";
+
+/// The panel's icons: the asset paths of dnnm-ui's `Icon`s, given by the app (this crate doesn't depend on dnnm-ui),
+/// so they are the same drawings as everywhere else. `add`, `delete` and `shell` at `IconSize::Medium`
+/// (`ICON_SIZE`), `chevron_down` at `IconSize::Small` (`ICON_SIZE_SMALL`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PanelIcons {
+    pub add: SharedString,
+    pub chevron_down: SharedString,
+    pub delete: SharedString,
+    pub shell: SharedString,
+}
 
 /// The panel's colours and fonts, from the app's theme (named after the XAML keys).
 #[derive(Debug, Clone, PartialEq)]
@@ -46,9 +52,9 @@ pub struct PanelColors {
     pub warn_banner_border: Hsla,
     /// `OutWarnText` - the Administrator terminal's line.
     pub out_warn_text: Hsla,
-    /// The UI font (Segoe UI) and the icon font (Segoe Fluent Icons).
+    /// The UI font (Segoe UI).
     pub font: SharedString,
-    pub icon_font: SharedString,
+    pub icons: PanelIcons,
     /// `TextCaption` and `TextBody`.
     pub caption_size: Pixels,
     pub body_size: Pixels,
@@ -111,7 +117,8 @@ impl TerminalPanelView {
             tabs: Vec::new(),
             selected: None,
             next_id: 0,
-            list_focus: cx.focus_handle(),
+            // A tab stop: Tab reaches the list, then its keys (`list_key_down`) work it.
+            list_focus: cx.focus_handle().tab_stop(true),
             renaming: None,
             menu: None,
             shells_button: Default::default(),
@@ -419,15 +426,14 @@ impl TerminalPanelView {
             .flex()
             .items_center()
             .child(
-                panel_button("terminal-new", GLYPH_ADD, &colors, 26.0)
+                panel_button("terminal-new", colors.icons.add.clone(), ICON_SIZE, &colors, 26.0)
                     .tip(vec![Line::Plain("New terminal".into())], &colors)
                     .on_click(move |_, window, cx| {
                         new_panel.update(cx, |panel, cx| panel.new_terminal(None, None, window, cx));
                     }),
             )
             .child(
-                panel_button("terminal-shells", GLYPH_CHEVRON_DOWN, &colors, 18.0)
-                    .text_size(px(ICON_SIZE_SMALL))
+                panel_button("terminal-shells", colors.icons.chevron_down.clone(), ICON_SIZE_SMALL, &colors, 18.0)
                     .when(!shells_open, |d| {
                         d.tip(vec![Line::Plain("Choose shell - or New Administrator terminal".into())], &colors)
                     })
@@ -535,11 +541,11 @@ impl TerminalPanelView {
                         .flex_1()
                         .min_w_0()
                         .gap(px(8.))
-                        .child(div().font_family(colors.icon_font.clone()).text_size(px(ICON_SIZE)).child(GLYPH_SHELL))
+                        .child(gpui::svg().path(colors.icons.shell.clone()).size(px(ICON_SIZE)).flex_none().text_color(colors.log_muted))
                         .child(name),
                 )
                 .child(
-                    panel_button(("terminal-close", id), GLYPH_DELETE, colors, 22.0)
+                    panel_button(("terminal-close", id), colors.icons.delete.clone(), ICON_SIZE, colors, 22.0)
                         // Inside the list's 22 px row.
                         .h(px(22.))
                         .invisible()
@@ -723,15 +729,24 @@ trait Pad: Styled + Sized {
 
 impl<T: Styled> Pad for T {}
 
-/// A transparent button with a glyph of the icon font (the XAML's `PanelButton`).
+/// A transparent button with an icon (the XAML's `PanelButton`): `icon` an asset path of [`PanelIcons`], `size` px.
 fn panel_button(
     id: impl Into<gpui::ElementId>,
-    glyph: &'static str,
+    icon: SharedString,
+    size: f32,
     colors: &PanelColors,
     width: f32,
 ) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
+        // A tab stop, pressed by Enter or Space - as dnnm-ui's controls (its "Control" context, so the key presses
+        // only this); a mouse press leaves the focus where it was. Its focus look is the hover's.
+        .tab_index(0)
+        .key_context("Control")
+        .on_mouse_down(gpui::MouseButton::Left, |_, window, _| window.prevent_default())
+        .focus(|style| style.bg(colors.hover_bg).border_color(colors.accent))
+        .border_1()
+        .border_color(gpui::transparent_black())
         .flex()
         .flex_none()
         .items_center()
@@ -741,11 +756,8 @@ fn panel_button(
         .h(px(26.))
         .rounded(px(4.))
         .cursor_pointer()
-        .font_family(colors.icon_font.clone())
-        .text_size(px(ICON_SIZE))
-        .text_color(colors.log_muted)
         .hover(|style| style.bg(colors.hover_bg))
-        .child(glyph)
+        .child(gpui::svg().path(icon).size(px(size)).flex_none().text_color(colors.log_muted))
 }
 
 fn menu_item(

@@ -3,6 +3,7 @@
 //! ("which project?"). Arrows move (round at the ends), Enter runs, Esc closes.
 
 use dnnm_ui::px;
+use dnnm_ui::{Icon, IconSize};
 use dnnm_ui::Tip;
 use std::rc::Rc;
 
@@ -289,7 +290,7 @@ impl Render for Palette {
         let with_icons = shown.iter().any(|item| item.icon.is_some());
         let with_checks = !with_icons && shown.iter().any(|item| item.checked);
         // The tick, 1 px up: on the middle of the title's letters, which sit that much above the row's middle (measured).
-        let tick = |cx: &App| ui::icon(icons::CHECK, icons::SIZE_SMALL, c.text_primary, cx).relative().top(px(-1.0));
+        let tick = |cx: &App| ui::icon_sized(Icon::Check, IconSize::Small, c.text_primary, cx).relative().top(px(-1.0));
         let mut group: Option<SharedString> = None;
         for (i, item) in shown.iter().enumerate() {
             let starts_group = !item.group.is_empty() && group.as_ref() != Some(&item.group);
@@ -440,7 +441,7 @@ impl Render for Palette {
                                             .justify_end()
                                             .child(
                                                 // Reset 12 and close 10 in 22 x 22, as the C# list's title row.
-                                                ui::icon_button_sized("palette-reset", "\u{E7A7}", 12.0, c.text_primary, true, cx)
+                                                ui::icon_button("palette-reset", Icon::Reset, c.text_primary, true, cx)
                                                     .size(px(22.0))
                                                     .tip("Reset")
                                                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -452,10 +453,9 @@ impl Render for Palette {
                                                     })),
                                             )
                                             .child(
-                                                ui::icon_button_sized(
+                                                ui::icon_button(
                                                     "palette-close",
-                                                    icons::CLOSE,
-                                                    10.0,
+                                                    Icon::Close,
                                                     c.text_primary,
                                                     true,
                                                     cx,

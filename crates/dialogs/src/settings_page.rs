@@ -15,6 +15,7 @@
 //! Docker's own time limit (30 s) rather than 10 s.
 
 use dnnm_ui::px;
+use dnnm_ui::{Icon, IconSize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1092,7 +1093,7 @@ impl SettingsPage {
             .border_1()
             .border_color(if focused { c.focus_border } else { c.field_border })
             .bg(c.input_bg)
-            .child(ui::icon(icons::SEARCH, icons::SIZE, c.text_muted, cx))
+            .child(ui::icon(Icon::Search, c.text_muted, cx))
             .child(div().flex_1().child(input.clone()))
     }
 
@@ -1191,8 +1192,7 @@ impl Render for SettingsPage {
         for category in shown.iter().copied() {
             let selected = category == self.category;
             list = list.child(
-                div()
-                    .id(SharedString::from(format!("settings-category-{}", category.tag())))
+                ui::focusable_bare(div().id(SharedString::from(format!("settings-category-{}", category.tag()))), cx)
                     .flex()
                     .items_center()
                     .gap(px(icons::LABEL_GAP))
@@ -1203,7 +1203,7 @@ impl Render for SettingsPage {
                     .when(selected, |d| d.bg(c.selection_bg))
                     .when(!selected, |d| d.hover(move |s| s.bg(c.hover_bg)))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.select_category(category, cx)))
-                    .child(ui::icon(glyph(category), icons::SIZE_NAV, c.text_muted, cx))
+                    .child(ui::icon_sized(glyph(category), IconSize::Nav, c.text_muted, cx))
                     .child(div().min_w_0().child(category.label())),
             );
         }
@@ -1255,7 +1255,7 @@ impl Render for SettingsPage {
                             .items_start()
                             .gap(px(icons::LABEL_GAP))
                             .text_color(c.error_text)
-                            .child(ui::line_icon(icons::ERROR, icons::SIZE, c.error_text, cx))
+                            .child(ui::line_icon(Icon::Error, IconSize::Medium, c.error_text, cx))
                             .child(error),
                     )
                 })
@@ -1302,7 +1302,7 @@ impl Render for SettingsPage {
                             .child("Settings"),
                     )
                     .child(
-                        ui::icon_button("settings-close", icons::CLOSE, c.link_fg, true, cx)
+                        ui::icon_button("settings-close", Icon::Close, c.link_fg, true, cx)
                             .tip("Close (Esc)")
                             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(SettingsEvent::Close))),
                     ),
@@ -1351,17 +1351,17 @@ impl Render for SettingsPage {
     }
 }
 
-fn glyph(category: Category) -> &'static str {
+fn glyph(category: Category) -> Icon {
     match category {
-        Category::General => icons::SETTINGS,
-        Category::Projects => icons::FOLDER,
-        Category::Releases => "\u{E896}",
-        Category::Sql => "\u{E8F1}",
-        Category::Docker => "\u{E7B8}",
-        Category::Iis => icons::GLOBE,
-        Category::Keyboard => "\u{E765}",
-        Category::Help => icons::QUESTION,
-        Category::About => icons::INFO,
+        Category::General => Icon::Settings,
+        Category::Projects => Icon::Folder,
+        Category::Releases => Icon::Download,
+        Category::Sql => Icon::Database,
+        Category::Docker => Icon::Container,
+        Category::Iis => Icon::Globe,
+        Category::Keyboard => Icon::Keyboard,
+        Category::Help => Icon::Question,
+        Category::About => Icon::Info,
     }
 }
 
@@ -1834,8 +1834,7 @@ impl SettingsPage {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let chosen = self.form.server_type == server_type;
-        div()
-            .id(id)
+        ui::focusable_bare(div().id(id), cx)
             .flex()
             .items_start()
             .gap(px(8.0))
@@ -2075,8 +2074,8 @@ impl SettingsPage {
             let chip = |key: String, text: String, slot: Slot, tip: &'static str, cx: &mut Context<Self>| {
                 let id = row.command.id.clone();
                 let lit = recording_slot == Some(slot);
-                div()
-                    .id(SharedString::from(key))
+                let pressed = id.clone();
+                ui::focusable(div().id(SharedString::from(key)), cx)
                     .flex()
                     .items_center()
                     .h(px(22.0))
@@ -2097,6 +2096,12 @@ impl SettingsPage {
                             this.start_recording(id.clone(), slot, cx);
                         }),
                     )
+                    // Enter or Space on it records too - from the keys after it (the mouse starts on the press).
+                    .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                        if e.is_keyboard() {
+                            this.start_recording(pressed.clone(), slot, cx);
+                        }
+                    }))
                     .child(if lit { "Press the keys…".to_string() } else { text })
             };
             let mut keys = div().flex().flex_wrap().items_center().gap(px(4.0));
@@ -2153,7 +2158,7 @@ impl SettingsPage {
                                 div().w(px(36.0)).flex().justify_end().child(
                                     ui::icon_button(
                                         SharedString::from(format!("reset-shortcut-{i}")),
-                                        "\u{E7A7}",
+                                        Icon::Reset,
                                         c.text_primary,
                                         custom,
                                         cx,

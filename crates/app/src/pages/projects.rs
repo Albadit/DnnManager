@@ -3,6 +3,7 @@
 //! for its facts, and Start / Stop / Restart per row.
 
 use dnnm_ui::px;
+use dnnm_ui::{Icon, IconSize};
 use std::collections::HashSet;
 
 use gpui::{KeyBinding, actions, ClickEvent, Context, Entity, FocusHandle, Focusable, FontWeight, Hsla, MouseButton, SharedString, Subscription, TextRun, Window, div, prelude::*};
@@ -17,7 +18,7 @@ use super::project_view::{ProjectView, ProjectViewAction, ProjectViewClosed, Pro
 use crate::store::{Connection, Store, ToastKind};
 use dnnm_ui::theme::Theme;
 use dnnm_ui::text_input::{TextChanged, TextInput};
-use dnnm_ui::{self as ui, Pad, Tip, icons};
+use dnnm_ui::{self as ui, Pad, Tip};
 
 /// How the table's columns lie: which are shown, their widths, and how far the middle is scrolled sideways.
 #[derive(Clone, Copy)]
@@ -25,6 +26,8 @@ struct TableLayout<'a> {
     columns: &'a [Column],
     widths: &'a Widths,
     offset: f32,
+    /// The table has the keyboard and the keyboard is in use: the selected row shows the focus.
+    focus_ring: bool,
 }
 
 /// The "Open with…" submenu from what was found: editors, then each SSMS with its two entries under its name (WPF
@@ -306,7 +309,9 @@ impl ProjectsPage {
             selected: None,
             menu: None,
             menu_row: None,
-            table_focus: cx.focus_handle(),
+            // One tab stop for the whole table: the arrows, Enter, F5… work its rows (`bind_keys`); the controls in
+            // the rows are left out of Tab's way (`tab_stop(false)` in `render_row`).
+            table_focus: cx.focus_handle().tab_stop(true),
             h_offset: 0.0,
             view_width: 0.0,
             thumb_drag: None,
@@ -349,9 +354,11 @@ impl ProjectsPage {
     /// Shows a project's Details in place of the table (the name's link, Enter, "Open project details").
     pub fn open_details(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
         let view = cx.new(|cx| ProjectView::new(self.store.clone(), name.to_string(), cx));
+        // The details have the keyboard while open (Esc goes back); closed, the table has it again, on the same row.
+        window.focus(&view.read(cx).focus);
         let sub = cx.subscribe_in(&view, window, |this, _, _: &ProjectViewClosed, window, cx| {
             this.details = None;
-            window.focus(&this.focus);
+            window.focus(&this.table_focus);
             cx.notify();
         });
         self._subscriptions.push(sub);
@@ -377,8 +384,8 @@ impl ProjectsPage {
     }
 
     /// Esc on the page: the Columns popup closes first, then the Details go back to the table; false when neither was
-    /// open (Esc goes on to what is around it).
-    pub fn close_details(&mut self, cx: &mut Context<Self>) -> bool {
+    /// open (Esc goes on to what is around it). Back from the Details, the table has the keyboard again.
+    pub fn close_details(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.menu.take().is_some() {
             cx.notify();
             return true;
@@ -389,6 +396,9 @@ impl ProjectsPage {
             return true;
         }
         let open = self.details.take().is_some();
+        if open {
+            window.focus(&self.table_focus);
+        }
         cx.notify();
         open
     }
@@ -779,7 +789,7 @@ impl Render for ProjectsPage {
                 .relative()
                 .size_full()
                 .child(details)
-                .children(self.render_row_menu(cx));
+                .children(self.render_row_menu(window, cx));
         }
         let theme = Theme::get(cx).clone();
         let c = theme.colors;
@@ -848,7 +858,7 @@ impl Render for ProjectsPage {
             .iter()
             .any(|p| matches!(view::run_state(&p.site), SiteRunState::Stopped | SiteRunState::Unknown));
         let any_running = checked_rows.iter().any(|p| view::run_state(&p.site) == SiteRunState::Running);
-        let group_button = |id: &'static str, glyph: &'static str, tip: &'static str, enabled: bool, color: Hsla| {
+        let group_button = |id: &'static str, glyph: Icon, tip: &'static str, enabled: bool, color: Hsla| {
             div()
                 .id(id)
                 .flex()
@@ -858,8 +868,9 @@ impl Render for ProjectsPage {
                 .h(px(26.0))
                 .rounded(px(3.0))
                 .when(enabled, |d| d.cursor_pointer().hover(move |s| s.bg(c.hover_bg)))
+                .when(enabled, |d| ui::focusable_bare(d, cx))
                 .tip(tip)
-                .child(ui::icon(glyph, icons::SIZE, color, cx).when(!enabled, |d| d.opacity(0.35)))
+                .child(ui::icon(glyph, color, cx).when(!enabled, |d| d.opacity(0.35)))
         };
         let bulk = (!checked_rows.is_empty()).then(|| {
             let start_names = bulk_names.clone();
@@ -872,7 +883,7 @@ impl Render for ProjectsPage {
                 .child(
                     group_button(
                         "bulk-start",
-                        icons::PLAY,
+                        Icon::Play,
                         "Start the selected websites",
                         !busy && any_stopped,
                         c.text_primary,
@@ -884,7 +895,7 @@ impl Render for ProjectsPage {
                 .child(
                     group_button(
                         "bulk-stop",
-                        icons::STOP,
+                        Icon::Stop,
                         "Stop the selected websites - nothing is deleted",
                         !busy && any_running,
                         c.text_primary,
@@ -896,7 +907,7 @@ impl Render for ProjectsPage {
                 .child(
                     group_button(
                         "bulk-restart",
-                        icons::REFRESH,
+                        Icon::Refresh,
                         "Restart the selected websites - each is unavailable for a few seconds",
                         !busy && any_running,
                         c.text_primary,
@@ -919,6 +930,7 @@ impl Render for ProjectsPage {
                         .h(px(26.0))
                         .rounded(px(3.0))
                         .when(all_warm || with_url, |d| d.cursor_pointer().hover(move |s| s.bg(c.hover_bg)))
+                        .when(all_warm || with_url, |d| ui::focusable_bare(d, cx))
                         .tip(dnnm_keepwarm::view::bulk_tooltip(all_warm))
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             let names = names.clone();
@@ -951,7 +963,7 @@ impl Render for ProjectsPage {
                     let idle = !busy && checked_rows.iter().all(|p| !pending.contains_key(&p.name));
                     group_button(
                         "bulk-remove",
-                        icons::DELETE,
+                        Icon::Delete,
                         dnnm_wiring::remove_project::REMOVE_BULK_TOOLTIP,
                         idle,
                         c.error_text,
@@ -965,8 +977,7 @@ impl Render for ProjectsPage {
                 })
         });
 
-        let columns_button = div()
-            .id("columns")
+        let columns_button = ui::focusable_bare(div().id("columns"), cx)
             .flex()
             .items_center()
             .justify_center()
@@ -982,7 +993,7 @@ impl Render for ProjectsPage {
                 this.columns_open = !this.columns_open;
                 cx.notify();
             }))
-            .child(icons::columns_icon(if self.columns_open { c.link_fg } else { c.text_primary }));
+            .child(ui::icon(Icon::Columns, if self.columns_open { c.link_fg } else { c.text_primary }, cx));
 
         let only_running = self.only_running;
         let toolbar = div()
@@ -1039,7 +1050,7 @@ impl Render for ProjectsPage {
         let sort = self.sort;
         let sort_mark = move |by: SortBy| {
             sort.and_then(|(current, ascending)| {
-                (current == by).then_some(if ascending { icons::CHEVRON_UP } else { icons::CHEVRON_DOWN })
+                (current == by).then_some(if ascending { Icon::ChevronUp } else { Icon::ChevronDown })
             })
         };
         // `inset`: the cell's room left and right - 8 px, as the rows' cells (the widths include it).
@@ -1055,8 +1066,9 @@ impl Render for ProjectsPage {
                     .when_some(width, |d, w| d.w(px(w)))
                     .pad(px(6.0), px(inset))
                     .when(by.is_some(), |d| d.cursor_pointer().hover(move |s| s.bg(c.hover_bg)))
+                    .when(by.is_some(), |d| ui::focusable_bare(d, cx))
                     .child(label)
-                    .when_some(by.and_then(sort_mark), |d, glyph| d.child(ui::icon(glyph, icons::SIZE_SMALL, c.text_muted, cx)))
+                    .when_some(by.and_then(sort_mark), |d, glyph| d.child(ui::icon_sized(glyph, IconSize::Small, c.text_muted, cx)))
             };
         let mut header_row = div()
             .flex()
@@ -1146,7 +1158,8 @@ impl Render for ProjectsPage {
                     .child("Actions"),
             );
 
-        let layout = TableLayout { columns: &columns, widths: &widths, offset };
+        let focus_ring = ui::focus::keyboard_focus(cx) && self.table_focus.is_focused(window);
+        let layout = TableLayout { columns: &columns, widths: &widths, offset, focus_ring };
         let mut body = div().flex().flex_col().min_w_full();
         for p in &rows {
             body = body.child(self.render_row(p, &layout, pending.get(&p.name).cloned(), busy, cx));
@@ -1332,7 +1345,7 @@ impl Render for ProjectsPage {
             )
             .child(footer)
             .when(self.columns_open, |d| d.child(self.render_columns_menu(&columns, window, cx)))
-            .children(self.render_row_menu(cx))
+            .children(self.render_row_menu(window, cx))
     }
 }
 
@@ -1347,7 +1360,7 @@ impl ProjectsPage {
     ) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
         let c = theme.colors;
-        let TableLayout { columns, widths, offset } = *layout;
+        let TableLayout { columns, widths, offset, focus_ring } = *layout;
         let name = p.name.clone();
         let checked = self.checked.contains(&name);
         let expanded = self.expanded.contains(&name);
@@ -1372,13 +1385,14 @@ impl ProjectsPage {
 
         let id = |what: &str| SharedString::from(format!("{what}-{name}"));
         let n = name.clone();
-        let check =
-            ui::check_box(id("check"), checked, cx).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+        let check = ui::check_box(id("check"), checked, cx).tab_stop(false).on_click(cx.listener(
+            move |this, _: &ClickEvent, _, cx| {
                 if !this.checked.remove(&n) {
                     this.checked.insert(n.clone());
                 }
                 cx.notify();
-            }));
+            },
+        ));
         let n = name.clone();
         let expand = div()
             .id(id("expand"))
@@ -1396,7 +1410,7 @@ impl ProjectsPage {
                 }
                 cx.notify();
             }))
-            .child(ui::icon(if expanded { icons::CHEVRON_DOWN } else { icons::CHEVRON_RIGHT }, icons::SIZE_SMALL, c.link_fg, cx));
+            .child(ui::icon_sized(if expanded { Icon::ChevronDown } else { Icon::ChevronRight }, IconSize::Small, c.link_fg, cx));
 
         let mut line = div()
             .flex()
@@ -1452,6 +1466,7 @@ impl ProjectsPage {
                     let url = p.site_url.clone();
                     cell.child(
                         ui::link(id("url"), text, cx)
+                            .tab_stop(false)
                             .tip("Open the website in your browser")
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_url(&url, cx))),
                     )
@@ -1461,6 +1476,7 @@ impl ProjectsPage {
                     let dir = p.directory.clone();
                     cell.child(
                         ui::link(id("path"), text, cx)
+                            .tab_stop(false)
                             .tip("Open the website's files in File Explorer")
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open_folder(&dir, cx))),
                     )
@@ -1509,7 +1525,8 @@ impl ProjectsPage {
                     })
                     .when(show_start, |d| {
                         d.child(
-                            ui::icon_button(id("start"), icons::PLAY, c.link_fg, can_start, cx)
+                            ui::icon_button(id("start"), Icon::Play, c.link_fg, can_start, cx)
+                                .tab_stop(false)
                                 .tip("Start - turn the website on so it can be opened")
                                 .when(can_start, |b| {
                                     b.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -1520,7 +1537,8 @@ impl ProjectsPage {
                     })
                     .when(show_stop, |d| {
                         d.child(
-                            ui::icon_button(id("stop"), icons::STOP, c.link_fg, can_stop, cx)
+                            ui::icon_button(id("stop"), Icon::Stop, c.link_fg, can_stop, cx)
+                                .tab_stop(false)
                                 .tip(
                                     "Stop - turn the website off until you start it again; nothing is deleted",
                                 )
@@ -1531,7 +1549,8 @@ impl ProjectsPage {
                                 }),
                         )
                         .child(
-                            ui::icon_button(id("restart"), icons::REFRESH, c.link_fg, can_stop, cx)
+                            ui::icon_button(id("restart"), Icon::Refresh, c.link_fg, can_stop, cx)
+                                .tab_stop(false)
                                 .tip(
                                     "Restart the website's background process - can fix problems; it is unavailable for a few seconds",
                                 )
@@ -1579,7 +1598,8 @@ impl ProjectsPage {
                     .child(div().w(px(1.0)).h(px(18.0)).bg(c.card_border))
                     .child({
                         let site = name.clone();
-                        ui::icon_button(id("remove"), icons::DELETE, c.error_text, idle, cx)
+                        ui::icon_button(id("remove"), Icon::Delete, c.error_text, idle, cx)
+                            .tab_stop(false)
                             .tip(dnnm_wiring::remove_project::REMOVE_ROW_TOOLTIP)
                             .when(idle, |b| {
                                 b.on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -1596,12 +1616,17 @@ impl ProjectsPage {
         let (pick, menu_for) = (name.clone(), name.clone());
         div()
             .id(id("row"))
+            .relative()
             .flex()
             .flex_col()
             .min_w_full()
             .border_b_1()
             .border_color(c.grid_line)
             .when_some(row_bg, |d, bg| d.bg(bg))
+            // The keyboard's place in the table: a bar of the focus colour down the selected row's left edge.
+            .when(selected && focus_ring, |d| {
+                d.child(div().absolute().left_0().top_0().bottom_0().w(px(2.0)).bg(c.focus_border))
+            })
             .when(!checked && !selected, |d| d.hover(move |s| s.bg(c.hover_bg)))
             .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| this.select(&pick, window, cx)))
             .on_mouse_down(
@@ -1690,7 +1715,7 @@ impl ProjectsPage {
 
     /// The expanded row's facts (`ProjectRow.Details`), 250 px each, wrapping.
     /// The row's menu while open, over a backdrop that closes it - over the table or a project's details.
-    fn render_row_menu(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+    fn render_row_menu(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let menu = self.menu.as_ref()?;
         let close = cx.entity().downgrade();
         let hover = cx.entity().downgrade();
@@ -1730,6 +1755,7 @@ impl ProjectsPage {
                             }
                         });
                     },
+                    window,
                     cx,
                 ))
                 .into_any_element(),
@@ -1819,10 +1845,11 @@ impl ProjectsPage {
         // anywhere else closes it - on the button itself its own click does.
         let (position, corner) = self.columns_anchor.below(false);
         let anchor = self.columns_anchor.clone();
+        // It holds the keyboard while open, as a menu does; Esc closes it (the workspace's "Modal").
+        let focus = window.use_keyed_state("columns-menu-focus", cx, |_, cx| cx.focus_handle()).read(cx).clone();
         gpui::deferred(
             gpui::anchored().anchor(corner).position(position).snap_to_window().child(
-                div()
-                    .id("columns-menu")
+                ui::focus::trap(div().id("columns-menu"), &focus)
                     .on_mouse_down_out(cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
                         if !anchor.contains(e.position) {
                             this.columns_open = false;

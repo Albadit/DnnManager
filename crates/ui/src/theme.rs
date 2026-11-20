@@ -305,8 +305,6 @@ pub struct Theme {
     pub density: Density,
     /// The UI font (WPF's default, Segoe UI).
     pub font: SharedString,
-    /// The icon font of `Themes/Icons.xaml`: Segoe Fluent Icons, with Segoe MDL2 Assets on Windows 10.
-    pub icon_font: SharedString,
     pub mono_font: SharedString,
     /// Slides, fades and pulses play: the setting "Play animations", and Windows' animation effects on.
     pub animations: bool,
@@ -328,7 +326,6 @@ impl Theme {
             metrics: Metrics::for_density(density),
             density,
             font: "Segoe UI".into(),
-            icon_font: icon_font().into(),
             mono_font: "Cascadia Mono".into(),
             animations: true,
         }
@@ -343,10 +340,4 @@ impl Theme {
     pub fn get(cx: &App) -> &Self {
         cx.global::<Theme>()
     }
-}
-
-/// Segoe Fluent Icons ships with Windows 11; Windows 10 has Segoe MDL2 Assets with the same code points.
-fn icon_font() -> &'static str {
-    let windows = std::env::var_os("SystemRoot").map_or_else(|| "C:\\Windows".into(), std::path::PathBuf::from);
-    if windows.join("Fonts").join("SegoeIcons.ttf").is_file() { "Segoe Fluent Icons" } else { "Segoe MDL2 Assets" }
 }

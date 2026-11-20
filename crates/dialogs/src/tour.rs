@@ -553,10 +553,9 @@ impl Render for GuidedTour {
         let width = card_width(overlay.width);
         let at = place_card(self.hole.get(), overlay, size(width, self.card_height.get()));
 
-        div()
-            .id("guided-tour")
+        // Over everything while it runs: Tab goes round its card's buttons only.
+        dnnm_ui::focus::trap(div().id("guided-tour"), &self.focus)
             .key_context("GuidedTour")
-            .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &TourNext, _, cx| this.next(cx)))
             .on_action(cx.listener(|this, _: &TourBack, _, cx| this.back(cx)))
             .on_action(cx.listener(|this, _: &TourSkip, _, cx| this.skip(cx)))

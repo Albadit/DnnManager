@@ -7,6 +7,7 @@
 //! shown, the two kept alike.
 
 use dnnm_ui::px;
+use dnnm_ui::{Icon, IconSize};
 use std::fmt;
 
 use gpui::{App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, SharedString, Subscription, Window, div, prelude::*};
@@ -19,8 +20,8 @@ use dnnm_ui::{self as ui, Pad, Tip};
 use crate::password_input::{PasswordChanged, PasswordInput};
 
 /// `GlyphShow` and `GlyphHide` of `Themes/Icons.xaml`: the eye, and the eye struck through while the text shows.
-const SHOW: &str = "\u{E7B3}";
-const HIDE: &str = "\u{ED1A}";
+const SHOW: Icon = Icon::Show;
+const HIDE: Icon = Icon::Hide;
 
 /// The account and its new password.
 #[derive(Clone, PartialEq, Eq)]
@@ -320,8 +321,7 @@ impl Render for PasswordField {
                     .map(|d| if self.revealed { d.child(self.shown.clone()) } else { d.child(self.hidden.clone()) }),
             )
             .child(
-                div()
-                    .id("password-eye")
+                ui::focusable_bare(div().id("password-eye"), cx)
                     .flex_none()
                     .h_full()
                     .w(px(30.0))
@@ -330,15 +330,19 @@ impl Render for PasswordField {
                     .justify_center()
                     .rounded(theme.metrics.small_radius)
                     .cursor_pointer()
-                    .text_color(muted)
-                    .hover(move |s| s.bg(hover).text_color(primary))
+                    .group("password-eye")
+                    .hover(move |s| s.bg(hover))
                     .tip(tip)
                     .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.toggle(window, cx)))
-                    .child(div().font_family(theme.icon_font.clone()).text_size(px(14.0)).child(if self.revealed {
-                        HIDE
-                    } else {
-                        SHOW
-                    })),
+                    // An svg takes no colour from its parent: its own, and the brighter one while the button is hovered.
+                    .child(
+                        gpui::svg()
+                            .path((if self.revealed { HIDE } else { SHOW }).path(IconSize::Medium))
+                            .size(gpui::px(dnnm_ui::icons::drawn_size(IconSize::Medium)))
+                            .flex_none()
+                            .text_color(muted)
+                            .group_hover("password-eye", move |s| s.text_color(primary)),
+                    ),
             )
     }
 }

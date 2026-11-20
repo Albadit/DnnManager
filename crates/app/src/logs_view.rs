@@ -2,12 +2,14 @@
 //! one of its logs (DNN, IIS, Windows event logs, the hosts file, DNN Manager's daily log); the newest lines, followed
 //! as they come. What to read and how is `dnnm_logs`; this is the view.
 
+use dnnm_ui::Icon;
+use dnnm_ui::dialog::{SelectLook, SelectRow};
 use dnnm_ui::px;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use gpui::{ClickEvent, Context, Entity, FontWeight, ListHorizontalSizingBehavior, SharedString, Task, UniformListScrollHandle, Window, div, prelude::*, uniform_list};
+use gpui::{ClickEvent, Context, Entity, ListHorizontalSizingBehavior, SharedString, Task, UniformListScrollHandle, Window, div, prelude::*, uniform_list};
 
 use dnnm_logs::catalog::{self, SiteLogSource};
 use dnnm_logs::tail::{LogTail, MAX_LINES};
@@ -15,7 +17,7 @@ use dnnm_logs::view::{self as logs, LogLineLevel, LogMenuItem};
 
 use crate::store::{Store, ToastKind};
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{self as ui, Pad, Tip, icons};
+use dnnm_ui::{self as ui, Pad, Tip};
 
 /// Which website's logs: DNN Manager's own, or an IIS site's.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,7 +35,7 @@ impl LogSite {
     }
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Open {
     Sites,
     Logs,
@@ -41,8 +43,6 @@ enum Open {
 
 pub struct LogsView {
     store: Entity<Store>,
-    /// The open picker's list's scroll position (its scroll bar).
-    menu_scroll: gpui::ScrollHandle,
     site: Option<LogSite>,
     sources: Vec<SiteLogSource>,
     current: Option<usize>,
@@ -51,13 +51,11 @@ pub struct LogsView {
     /// The shown log file's size, read with its lines off the UI thread (render doesn't touch the disk).
     file_size: Option<u64>,
     opened_at: Option<Instant>,
+    /// Which picker's list is open.
     menu: Option<Open>,
     scroll: UniformListScrollHandle,
     /// Polling only while the tab is on screen (`LogsView.Paused`).
     pub shown: bool,
-    /// Where the two pickers are: their lists open under them.
-    site_anchor: ui::Anchor,
-    source_anchor: ui::Anchor,
     /// The panel's Find bar's matches, by line.
     find_marks: Arc<std::collections::HashMap<usize, ui::LineMarks>>,
     _poll: Option<Task<()>>,
@@ -102,9 +100,6 @@ impl LogsView {
             scroll: UniformListScrollHandle::new(),
             shown: false,
             find_marks: Arc::default(),
-            site_anchor: ui::Anchor::default(),
-            menu_scroll: gpui::ScrollHandle::new(),
-            source_anchor: ui::Anchor::default(),
             _poll: None,
         }
     }
@@ -218,61 +213,72 @@ impl LogsView {
         source.file_path.as_ref().and_then(|f| f.parent().map(PathBuf::from))
     }
 
-    /// The pickers and the log's facts - the header row of the tab.
+    /// The pickers and the log's facts - the header row of the tab. The pickers are the app's select
+    /// (`ui::dialog::select_rows`), in its compact size: the same keys, highlight and list as every other select.
     fn render_header(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
         let c = theme.colors;
-        // A picker's tip is left out while its list is open - it would cover the list.
-        let picker = |id: &'static str, text: String, tip: Option<&'static str>| {
-            div()
-                .id(id)
-                .flex()
-                .items_center()
-                .justify_between()
-                .gap(px(6.0))
-                .min_w(px(160.0))
-                .max_w(px(260.0))
-                .h(px(24.0))
-                .pad(px(0.0), px(6.0))
-                .rounded(theme.metrics.control_radius)
-                .border_1()
-                .border_color(c.field_border)
-                .bg(c.input_bg)
-                .cursor_pointer()
-                .text_size(theme.text.caption)
-                .when_some(tip, |d, tip| d.tip(tip))
-                .child(ui::one_line(text))
-                .child(ui::icon(icons::CHEVRON_DOWN, icons::SIZE_SMALL, c.text_primary, cx))
+        // Opened or shut by its box, the keys or a press outside; a picker shuts only its own list, so a press on the
+        // other picker (outside this one) doesn't shut the list that press opened.
+        let toggle = |which: Open| {
+            cx.listener(move |this: &mut Self, open: &bool, _, cx| {
+                if *open {
+                    this.menu = Some(which);
+                } else if this.menu == Some(which) {
+                    this.menu = None;
+                } else {
+                    return;
+                }
+                cx.notify();
+            })
         };
+        let mut sites = vec![LogSite::App];
+        sites.extend(self.store.read(cx).projects.iter().map(|p| LogSite::Site(p.name.clone())));
+        let site_rows =
+            sites.iter().map(|site| SelectRow::option(site.label(), self.site.as_ref() == Some(site))).collect();
         let site_text = self.site.as_ref().map(LogSite::label).unwrap_or_default();
+        let choose_site = cx.listener(move |this, i: &usize, _, cx| {
+            if let Some(site) = sites.get(*i) {
+                this.show_site(site.clone(), cx);
+            }
+        });
+
+        // The logs grouped under headings; the n-th option is the n-th source in the list's order.
+        let mut source_of = Vec::new();
+        let log_rows = logs::menu(&self.sources)
+            .into_iter()
+            .map(|entry| match entry {
+                LogMenuItem::Heading(group) => SelectRow::Heading(group.into()),
+                LogMenuItem::Source(index) => {
+                    source_of.push(index);
+                    let source = &self.sources[index];
+                    SelectRow::Option {
+                        text: source.title.clone().into(),
+                        chosen: self.current == Some(index),
+                        tip: Some(source.description.clone().into()),
+                    }
+                }
+            })
+            .collect();
         let log_text = self.current_source().map(|s| s.title.clone()).unwrap_or_default();
+        let choose_log = cx.listener(move |this, i: &usize, _, cx| {
+            if let Some(index) = source_of.get(*i) {
+                this.open(Some(*index), cx);
+            }
+        });
+
         let facts = self.current_source().and_then(|s| s.file_path.clone()).map(|path| {
             let size = self.file_size.map(|n| dnnm_application::project::view::byte_size(n as f64));
             format!("{}{}", path.display(), size.map(|s| format!("  ·  {s}")).unwrap_or_default())
         });
         let folder = self.folder();
+        let (sites_open, logs_open) = (self.menu == Some(Open::Sites), self.menu == Some(Open::Logs));
         div()
             .flex()
             .items_center()
             .gap(px(8.0))
-            .child(
-                picker("log-site", site_text, (self.menu != Some(Open::Sites)).then_some("Website"))
-                    .relative()
-                    .child(self.site_anchor.measure())
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.menu = if this.menu == Some(Open::Sites) { None } else { Some(Open::Sites) };
-                        cx.notify();
-                    })),
-            )
-            .child(
-                picker("log-source", log_text, (self.menu != Some(Open::Logs)).then_some("Log"))
-                    .relative()
-                    .child(self.source_anchor.measure())
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                        this.menu = if this.menu == Some(Open::Logs) { None } else { Some(Open::Logs) };
-                        cx.notify();
-                    })),
-            )
+            .child(picker("log-site", site_text, sites_open, "Website", site_rows, toggle(Open::Sites), choose_site, cx))
+            .child(picker("log-source", log_text, logs_open, "Log", log_rows, toggle(Open::Logs), choose_log, cx))
             .when_some(facts, |d, facts| {
                 d.child(
                     div()
@@ -287,7 +293,7 @@ impl LogsView {
             })
             .when_some(folder, |d, folder| {
                 d.child(
-                    ui::icon_button("log-folder", icons::FOLDER, c.text_primary, true, cx)
+                    ui::icon_button("log-folder", Icon::Folder, c.text_primary, true, cx)
                         .tip("Open folder")
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             if let Err(e) = dnnm_infrastructure::shell::open_folder(&folder) {
@@ -297,106 +303,30 @@ impl LogsView {
                 )
             })
     }
+}
 
-    fn render_menu(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        let open = self.menu.as_ref()?;
-        let theme = Theme::get(cx).clone();
-        let c = theme.colors;
-        let item = |id: SharedString, text: String, chosen: bool, indent: bool| {
-            div()
-                .id(id)
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .pad(px(3.0), px(if indent { 20.0 } else { 8.0 }))
-                .rounded(px(3.0))
-                .cursor_pointer()
-                .when(chosen, |d| d.bg(c.selection_bg))
-                .hover(move |s| s.bg(c.hover_bg))
-                .child(text)
-        };
-        let mut list = div().flex().flex_col();
-        match open {
-            Open::Sites => {
-                let mut choices = vec![LogSite::App];
-                choices.extend(
-                    self.store.read(cx).projects.iter().map(|p| LogSite::Site(p.name.clone())).collect::<Vec<_>>(),
-                );
-                for (i, site) in choices.into_iter().enumerate() {
-                    let chosen = self.site.as_ref() == Some(&site);
-                    let label = site.label();
-                    list = list.child(item(format!("log-site-{i}").into(), label, chosen, false).on_click(
-                        cx.listener(move |this, _: &ClickEvent, _, cx| this.show_site(site.clone(), cx)),
-                    ));
-                }
-            }
-            Open::Logs => {
-                for entry in logs::menu(&self.sources) {
-                    match entry {
-                        LogMenuItem::Heading(group) => {
-                            list = list.child(
-                                div()
-                                    .pad(px(4.0), px(8.0))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(c.text_muted)
-                                    .child(group),
-                            );
-                        }
-                        LogMenuItem::Source(index) => {
-                            let source = &self.sources[index];
-                            let tip = source.description.clone();
-                            list = list.child(
-                                item(
-                                    format!("log-source-{index}").into(),
-                                    source.title.clone(),
-                                    self.current == Some(index),
-                                    true,
-                                )
-                                .tip(tip)
-                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| this.open(Some(index), cx))),
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        // Under its picker, their left edges level and at least as wide, over everything; a press anywhere else closes
-        // it - on its picker, the picker's own click does.
-        let anchor = if matches!(open, Open::Sites) { self.site_anchor.clone() } else { self.source_anchor.clone() };
-        let (position, corner) = anchor.below(false);
-        let width = anchor.bounds().map_or(px(220.0), |b| b.size.width.max(px(220.0)));
-        Some(
-            gpui::deferred(
-                gpui::anchored().anchor(corner).position(position).snap_to_window().child(ui::with_scrollbar(
-                    div()
-                        .id("logs-menu")
-                        .on_mouse_down_out(cx.listener(move |this, e: &gpui::MouseDownEvent, _, cx| {
-                            if !anchor.contains(e.position) {
-                                this.menu = None;
-                                cx.notify();
-                            }
-                        }))
-                        .min_w(width)
-                        .max_h(px(360.0))
-                        .overflow_y_scroll()
-                        .p(px(4.0))
-                        .rounded(px(6.0))
-                        .border_1()
-                        .border_color(c.card_border)
-                        .bg(c.card_bg)
-                        .shadow_lg()
-                        .occlude()
-                        .text_size(theme.text.caption)
-                        .text_color(c.text_primary)
-                        .on_click(|_, _, cx| cx.stop_propagation())
-                        .child(list),
-                    &self.menu_scroll,
-                    cx,
-                )),
-            )
-            .with_priority(2),
-        )
-    }
+/// One of the header's pickers: the compact select, 160 to 260 px wide as its value needs.
+#[allow(clippy::too_many_arguments)]
+fn picker(
+    id: &'static str,
+    value: String,
+    open: bool,
+    tip: &'static str,
+    rows: Vec<SelectRow>,
+    on_toggle: impl Fn(&bool, &mut Window, &mut gpui::App) + 'static,
+    on_choose: impl Fn(&usize, &mut Window, &mut gpui::App) + 'static,
+    cx: &gpui::App,
+) -> gpui::Div {
+    div().min_w(px(160.0)).max_w(px(260.0)).child(ui::dialog::select_rows(
+        id,
+        value,
+        open,
+        rows,
+        SelectLook { compact: true, tip: Some(tip.into()) },
+        on_toggle,
+        on_choose,
+        cx,
+    ))
 }
 
 impl Render for LogsView {
@@ -473,6 +403,5 @@ impl Render for LogsView {
                         .child(hint),
                 )
             })
-            .children(self.render_menu(cx))
     }
 }

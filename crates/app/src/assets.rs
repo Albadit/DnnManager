@@ -17,8 +17,10 @@ impl AssetSource for Assets {
         Ok(match path {
             FLAME_OUTLINE_SVG => Some(Cow::Owned(flame_svg(FLAME_OUTLINE, "#000").into_bytes())),
             FLAME_FILLED_SVG => Some(Cow::Owned(flame_svg(FLAME_FILLED, "#000").into_bytes())),
-            // The other drawn icons (layout icons, the spinner, maximize): dnnm-ui's.
-            other => dnnm_ui::shapes::asset(other).map(|svg| Cow::Owned(svg.into_bytes())),
+            // Every other icon (the app's icons, the layout icons, the spinner): dnnm-ui's.
+            other => dnnm_ui::icons::asset(other)
+                .or_else(|| dnnm_ui::shapes::asset(other))
+                .map(|svg| Cow::Owned(svg.into_bytes())),
         })
     }
 

@@ -3,6 +3,7 @@
 //! list of sections (`InspectorPanel`) from `dnnm_diagnostics`, read off the UI thread.
 
 use dnnm_ui::px;
+use dnnm_ui::Icon;
 use gpui::{ClickEvent, Context, Entity, EventEmitter, FontWeight, Hsla, SharedString, Task, Window, div, prelude::*};
 
 use dnnm_application::project::{SiteRunState, view};
@@ -36,6 +37,8 @@ pub struct ProjectView {
     issues: Vec<dnnm_diagnostics::DetectedIssue>,
     /// Where the ⋮ button is: its menu opens under it.
     more_anchor: ui::Anchor,
+    /// The page's keyboard: it takes it as it opens, so Esc goes back and Tab starts at its buttons.
+    pub focus: gpui::FocusHandle,
     _read: Option<Task<()>>,
 }
 
@@ -43,7 +46,16 @@ impl EventEmitter<ProjectViewClosed> for ProjectView {}
 
 impl ProjectView {
     pub fn new(store: Entity<Store>, name: String, cx: &mut Context<Self>) -> Self {
-        let mut view = Self { store, name, tab: TabKind::General, snapshot: None, issues: Vec::new(), more_anchor: ui::Anchor::default(), _read: None };
+        let mut view = Self {
+            store,
+            name,
+            tab: TabKind::General,
+            snapshot: None,
+            issues: Vec::new(),
+            more_anchor: ui::Anchor::default(),
+            focus: cx.focus_handle(),
+            _read: None,
+        };
         view.read(cx);
         view
     }
@@ -288,11 +300,11 @@ impl Render for ProjectView {
         let state = view::run_state(&p.site);
         let idle = !busy && pending.is_none();
         let state_text: SharedString = pending.unwrap_or_else(|| view::state_text(&p.site).into());
-        let header_button = |id: &'static str, glyph: &'static str, label: &'static str, tip: &'static str, on: bool| {
+        let header_button = |id: &'static str, glyph: Icon, label: &'static str, tip: &'static str, on: bool| {
             ui::button(id, "", ui::ButtonKind::Secondary, on, cx)
                 .gap(px(icons::LABEL_GAP))
                 .tip(tip)
-                .child(ui::icon(glyph, icons::SIZE, c.text_primary, cx))
+                .child(ui::icon(glyph, c.text_primary, cx))
                 .child(label)
         };
         let name = self.name.clone();
@@ -314,7 +326,7 @@ impl Render for ProjectView {
                     .gap(px(10.0))
                     .child(
                         div().flex_none().pad(px(2.0), px(0.0)).child(
-                            ui::icon_button("details-back", icons::BACK, c.text_primary, true, cx)
+                            ui::icon_button("details-back", Icon::Back, c.text_primary, true, cx)
                                 .size(px(32.0))
                                 .tip("Back (Esc)")
                                 .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(ProjectViewClosed))),
@@ -357,7 +369,7 @@ impl Render for ProjectView {
                     .pad(px(4.0), px(0.0))
                     .when(matches!(state, SiteRunState::Stopped | SiteRunState::Unknown), |d| {
                         d.child(
-                            header_button("details-start", icons::PLAY, "Start", "Start - turn the website on so it can be opened", idle)
+                            header_button("details-start", Icon::Play, "Start", "Start - turn the website on so it can be opened", idle)
                                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                     let n = n1.clone();
                                     this.store.update(cx, |s, cx| s.control_sites(vec![n], SiteAction::Start, cx));
@@ -368,7 +380,7 @@ impl Render for ProjectView {
                         d.child(
                             header_button(
                                 "details-stop",
-                                icons::STOP,
+                                Icon::Stop,
                                 "Stop",
                                 "Stop - turn the website off until you start it again; nothing is deleted",
                                 idle,
@@ -381,7 +393,7 @@ impl Render for ProjectView {
                         .child(
                             header_button(
                                 "details-restart",
-                                icons::REFRESH,
+                                Icon::Refresh,
                                 "Restart",
                                 "Restart the website's background process - can fix problems; it is unavailable for a few seconds",
                                 idle,
@@ -393,7 +405,7 @@ impl Render for ProjectView {
                         )
                     })
                     .child(
-                        header_button("details-site", icons::GLOBE, "Open site", "Open the website in your browser", !url.is_empty())
+                        header_button("details-site", Icon::Globe, "Open site", "Open the website in your browser", !url.is_empty())
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 if let Err(e) = dnnm_infrastructure::shell::open_url(&url) {
                                     this.store.update(cx, |s, cx| s.toast(ToastKind::Error, e, false, cx));
@@ -401,18 +413,18 @@ impl Render for ProjectView {
                             })),
                     )
                     .child(
-                        header_button("details-folder", icons::FOLDER, "Open folder", "Open the website's files in File Explorer", true)
+                        header_button("details-folder", Icon::Folder, "Open folder", "Open the website's files in File Explorer", true)
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 if let Err(e) = dnnm_infrastructure::shell::open_folder(&dir) {
                                     this.store.update(cx, |s, cx| s.toast(ToastKind::Error, e, false, cx));
                                 }
                             })),
                     )
-                    // WPF turns its "more" glyph upright; GPUI draws it as it is.
+                    // Icon-only, but as high as the buttons beside it (`ui::button` is 30 px whatever it holds).
                     .child(
                         ui::button("details-more", "", ui::ButtonKind::Secondary, true, cx)
                             .tip("More actions: logs, clear cache, export, backups, upgrade")
-                            .child(ui::icon("\u{E712}", icons::SIZE, c.text_primary, cx))
+                            .child(ui::icon(Icon::More, c.text_primary, cx))
                             .relative()
                             .child(self.more_anchor.measure())
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
@@ -426,9 +438,11 @@ impl Render for ProjectView {
         for kind in TabKind::ALL {
             let chosen = kind == self.tab;
             tabs = tabs.child(
-                div()
-                    .id(SharedString::from(format!("details-tab-{}", kind.title())))
+                ui::focusable_bare(div().id(SharedString::from(format!("details-tab-{}", kind.title()))), cx)
                     .pad(px(7.0), px(2.0))
+                    // Its line only - not `focusable_bare`'s border all round, which the chosen tab's accent would
+                    // paint on every side. Focused, the line takes the focus colour over the hover fill.
+                    .border_0()
                     .border_b_2()
                     .cursor_pointer()
                     .border_color(if chosen { c.accent } else { gpui::transparent_black() })
@@ -480,6 +494,7 @@ impl Render for ProjectView {
         let content = cards;
         div()
             .key_context("Details")
+            .track_focus(&self.focus)
             .size_full()
             .flex()
             .justify_center()

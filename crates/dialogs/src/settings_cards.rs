@@ -9,6 +9,7 @@
 //! never says the features couldn't be read.
 
 use dnnm_ui::px;
+use dnnm_ui::{Icon, IconSize};
 use std::collections::BTreeMap;
 
 use gpui::{AnyElement, App, ClickEvent, ClipboardItem, Context, Div, FontWeight, Hsla, SharedString, div, prelude::*};
@@ -291,16 +292,16 @@ impl SettingsPage {
         if let Some(report) = &self.sql_card.report {
             for check in &report.checks {
                 let (glyph, color) = match check.outcome {
-                    CheckOutcome::Passed => (icons::CHECK, c.success_text),
-                    CheckOutcome::Warning => (icons::WARNING, c.log_warn),
-                    CheckOutcome::Failed => ("\u{E711}", c.error_text),
+                    CheckOutcome::Passed => (Icon::Check, c.success_text),
+                    CheckOutcome::Warning => (Icon::Warning, c.log_warn),
+                    CheckOutcome::Failed => (Icon::Close, c.error_text),
                 };
                 lines = lines.child(
                     div()
                         .flex()
                         .items_start()
                         .gap(px(icons::LABEL_GAP))
-                        .child(ui::line_icon(glyph, icons::SIZE, color, cx))
+                        .child(ui::line_icon(glyph, IconSize::Medium, color, cx))
                         .child(
                             div()
                                 .flex_1()
@@ -624,8 +625,7 @@ impl SettingsPage {
                         )
                         .child(
                             div().absolute().top(px(6.0)).right(px(24.0)).child(
-                                div()
-                                    .id("copy-yaml")
+                                ui::focusable(div().id("copy-yaml"), cx)
                                     .flex()
                                     .items_center()
                                     .gap(px(icons::LABEL_GAP))
@@ -638,7 +638,7 @@ impl SettingsPage {
                                     .hover(move |s| s.bg(c.hover_bg))
                                     .tip("Copy")
                                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.copy_yaml(cx)))
-                                    .child(ui::icon("\u{E8C8}", icons::SIZE, c.text_primary, cx))
+                                    .child(ui::icon(Icon::Copy, c.text_primary, cx))
                                     .child(if copied { "Copied" } else { "Copy" }),
                             ),
                         ),

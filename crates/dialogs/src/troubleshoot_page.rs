@@ -11,6 +11,7 @@
 //! read as UTC, so `delete_expired` can be a few hours off a day boundary.
 
 use dnnm_ui::px;
+use dnnm_ui::Icon;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -22,7 +23,7 @@ use dnnm_system::files::safe_path::{has_link, is_link};
 use dnnm_system::secrets::{self, SA_PASSWORD_KEY, names};
 use dnnm_ui::dialog;
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{self as ui, ButtonKind, Pad, Tip, icons};
+use dnnm_ui::{self as ui, ButtonKind, Pad, Tip};
 
 use crate::settings_page::{Notice, SecretStore, SignInTask, hint};
 
@@ -699,7 +700,7 @@ impl Render for TroubleshootPage {
                         cx,
                     )))
                     .child(
-                        ui::icon_button("troubleshoot-close", icons::CLOSE, c.link_fg, true, cx)
+                        ui::icon_button("troubleshoot-close", Icon::Close, c.link_fg, true, cx)
                             .tip("Close (Esc)")
                             .on_click(cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(TroubleshootEvent::Close))),
                     ),

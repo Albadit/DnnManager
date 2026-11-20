@@ -6,11 +6,12 @@
 //! describe. [`onboarding`] keeps which guide the user saw (the `onboarding` state area, as the WPF app keeps it).
 
 use dnnm_ui::px;
+use dnnm_ui::{Icon, IconSize};
 use gpui::{App, Bounds, ClickEvent, Context, EventEmitter, FocusHandle, Focusable, FontWeight, Hsla, KeyBinding, PathBuilder, Pixels, ScrollHandle, SharedString, Window, actions, canvas, div, point, prelude::*};
 
 use dnnm_ui::icons::{self, LayoutIcon};
 use dnnm_ui::theme::Theme;
-use dnnm_ui::{ButtonKind, Pad, Tip, button, icon, link, status_dot};
+use dnnm_ui::{ButtonKind, Pad, Tip, button, icon, icon_sized, link, status_dot};
 
 use crate::help_menu::HelpPage;
 use crate::markdown::bold_text;
@@ -1094,12 +1095,11 @@ impl GuideDialog {
                 let seen = self.seen[i] && !current;
                 let colour = if current || seen { c.accent } else { c.text_muted };
                 let mark = if seen {
-                    icon(icons::CHECK, 10.0, colour, cx).into_any_element()
+                    icon_sized(Icon::Check, IconSize::Small, colour, cx).into_any_element()
                 } else {
                     div().text_size(theme.text.caption).text_color(colour).child((i + 1).to_string()).into_any_element()
                 };
-                div()
-                    .id(("guide-step", i))
+                dnnm_ui::focusable_bare(div().id(("guide-step", i)), cx)
                     .flex()
                     .items_center()
                     .gap(px(10.0))
@@ -1176,7 +1176,7 @@ impl GuideDialog {
                         .border_1()
                         .border_color(c.info_banner_border)
                         .bg(c.info_banner_bg)
-                        .child(dnnm_ui::line_icon(icons::INFO, icons::SIZE, c.accent, cx))
+                        .child(dnnm_ui::line_icon(Icon::Info, IconSize::Medium, c.accent, cx))
                         .child(div().flex_1().min_w_0().child(bold_text(tip))),
                 )
             })
@@ -1247,34 +1247,34 @@ fn badge(risk: GuideRisk, cx: &App) -> Option<impl IntoElement> {
 }
 
 /// A glyph key of `Themes/Icons.xaml` the guide uses, by its code point.
-pub fn glyph(key: &str) -> Option<&'static str> {
+pub fn glyph(key: &str) -> Option<Icon> {
     Some(match key {
-        "GlyphAdd" => icons::ADD,
-        "GlyphFolderOpen" => "\u{E838}",
-        "GlyphPlay" => icons::PLAY,
-        "GlyphCopy" => "\u{E8C8}",
-        "GlyphInfo" => icons::INFO,
-        "GlyphList" => icons::LIST,
-        "GlyphGlobe" => icons::GLOBE,
-        "GlyphDatabase" => "\u{E8F1}",
-        "GlyphContainer" => "\u{E7B8}",
-        "GlyphWarning" => icons::WARNING,
-        "GlyphDownload" => "\u{E896}",
-        "GlyphFolder" => icons::FOLDER,
-        "GlyphKeyboard" => "\u{E765}",
-        "GlyphSettings" => icons::SETTINGS,
-        "GlyphShow" => "\u{E7B3}",
-        "GlyphSearch" => icons::SEARCH,
-        "GlyphQuestion" => icons::QUESTION,
-        "GlyphCancel" => "\u{E711}",
-        "GlyphRefresh" => icons::REFRESH,
-        "GlyphChevronRight" => icons::CHEVRON_RIGHT,
-        "GlyphMore" => "\u{E712}",
-        "GlyphStop" => icons::STOP,
-        "GlyphDelete" => icons::DELETE,
-        "GlyphReset" => "\u{E7A7}",
-        "GlyphCheck" => icons::CHECK,
-        "GlyphDash" => "\u{E738}",
+        "GlyphAdd" => Icon::Add,
+        "GlyphFolderOpen" => Icon::FolderOpen,
+        "GlyphPlay" => Icon::Play,
+        "GlyphCopy" => Icon::Copy,
+        "GlyphInfo" => Icon::Info,
+        "GlyphList" => Icon::List,
+        "GlyphGlobe" => Icon::Globe,
+        "GlyphDatabase" => Icon::Database,
+        "GlyphContainer" => Icon::Container,
+        "GlyphWarning" => Icon::Warning,
+        "GlyphDownload" => Icon::Download,
+        "GlyphFolder" => Icon::Folder,
+        "GlyphKeyboard" => Icon::Keyboard,
+        "GlyphSettings" => Icon::Settings,
+        "GlyphShow" => Icon::Show,
+        "GlyphSearch" => Icon::Search,
+        "GlyphQuestion" => Icon::Question,
+        "GlyphCancel" => Icon::Close,
+        "GlyphRefresh" => Icon::Refresh,
+        "GlyphChevronRight" => Icon::ChevronRight,
+        "GlyphMore" => Icon::More,
+        "GlyphStop" => Icon::Stop,
+        "GlyphDelete" => Icon::Delete,
+        "GlyphReset" => Icon::Reset,
+        "GlyphCheck" => Icon::Check,
+        "GlyphDash" => Icon::Dash,
         _ => return None,
     })
 }
@@ -1287,7 +1287,7 @@ fn item_icon(key: &'static str, cx: &App) -> gpui::AnyElement {
         "Dot.Running" => status_dot(c.success_text, true, px(10.0)).into_any_element(),
         "Dot.Stopped" => status_dot(c.text_muted, false, px(10.0)).into_any_element(),
         "Dot.Busy" => status_dot(c.log_warn, true, px(10.0)).into_any_element(),
-        "Dot.None" => icon(glyph("GlyphDash").unwrap_or_default(), icons::SIZE, c.text_muted, cx).into_any_element(),
+        "Dot.None" => icon(Icon::Dash, c.text_muted, cx).into_any_element(),
         "FlameFilled" => flame(c.keep_warm_fg).into_any_element(),
         "LayoutPanel" => icons::layout_icon(LayoutIcon::Panel, false, c.text_primary).into_any_element(),
         number if !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()) => div()
@@ -1296,7 +1296,7 @@ fn item_icon(key: &'static str, cx: &App) -> gpui::AnyElement {
             .text_color(c.accent)
             .child(number)
             .into_any_element(),
-        other => icon(glyph(other).unwrap_or(icons::INFO), icons::SIZE, c.text_primary, cx).into_any_element(),
+        other => icon(glyph(other).unwrap_or(Icon::Info), c.text_primary, cx).into_any_element(),
     }
 }
 

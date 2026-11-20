@@ -1,4 +1,4 @@
-//! The drawn icons of `Themes/Icons.xaml` - path data, not font glyphs - served to GPUI as SVG files: the app's asset
+//! The layout icons and the spinner - path data served to GPUI as SVG files: the app's asset
 //! source answers `asset(path)` for every path under `shape/`, and `gpui::svg().path(..)` draws one in the element's
 //! text colour (GPUI uses an SVG as a mask, so the colours here don't matter).
 
@@ -39,12 +39,8 @@ const LAYOUTS: &[Layout] = &[
 /// The default density: the sidebar, the editor and the panel apart - three rounded boxes, no frame.
 const LAYOUT_DEFAULT: &str = "M2.5,2.5 H4.5 A1,1 0 0 1 5.5,3.5 V12.5 A1,1 0 0 1 4.5,13.5 H2.5 A1,1 0 0 1 1.5,12.5 V3.5 A1,1 0 0 1 2.5,2.5 Z M8.5,2.5 H13.5 A1,1 0 0 1 14.5,3.5 V7.5 A1,1 0 0 1 13.5,8.5 H8.5 A1,1 0 0 1 7.5,7.5 V3.5 A1,1 0 0 1 8.5,2.5 Z M8.5,10.5 H13.5 A1,1 0 0 1 14.5,11.5 V12.5 A1,1 0 0 1 13.5,13.5 H8.5 A1,1 0 0 1 7.5,12.5 V11.5 A1,1 0 0 1 8.5,10.5 Z";
 
-/// The Output's spinner (14 x 14, stroked 2 px): three quarters of a ring, turned while something runs.
+/// The Output's spinner (14 x 14, stroked 1 px as every icon): three quarters of a ring, turned while something runs.
 const SPINNER: &str = "M7,2 A5,5 0 1 1 2,7";
-/// The panel's maximize and restore (12 x 12, stroked 1 px): the corners pointing out, or in - on the half pixels, so
-/// each line covers one whole row of pixels and none is smeared over two.
-const MAXIMIZE: &str = "M1.5,4.5 V1.5 H4.5 M7.5,1.5 H10.5 V4.5 M10.5,7.5 V10.5 H7.5 M4.5,10.5 H1.5 V7.5";
-const RESTORE: &str = "M4.5,1.5 V4.5 H1.5 M7.5,1.5 V4.5 H10.5 M10.5,7.5 H7.5 V10.5 M4.5,10.5 V7.5 H1.5";
 
 /// A layout icon's path: `name` one of the C# app's (`menu-bar`, `sidebar-left`, `panel-center`, `default`…), filled
 /// in while what it shows is on or chosen.
@@ -53,10 +49,10 @@ pub fn layout(name: &str, filled: bool) -> SharedString {
 }
 
 pub const SPINNER_PATH: &str = "shape/spinner.svg";
-pub const MAXIMIZE_PATH: &str = "shape/maximize.svg";
-pub const RESTORE_PATH: &str = "shape/restore.svg";
 
-fn svg(view: f32, stroke: &str, stroke_width: f32, fill: &str) -> String {
+/// An SVG of `view` x `view` grid units drawn `size` px: the fill, then the stroke `stroke_width` units wide, round
+/// caps and joins. The one builder of every drawn icon ([`crate::icons`] too).
+pub fn svg_document(view: f32, size: f32, stroke_width: f32, stroke: &str, fill: &str) -> String {
     let mut body = String::new();
     if !fill.is_empty() {
         body.push_str(&format!(r#"<path fill="black" d="{fill}"/>"#));
@@ -66,17 +62,18 @@ fn svg(view: f32, stroke: &str, stroke_width: f32, fill: &str) -> String {
             r#"<path fill="none" stroke="black" stroke-width="{stroke_width}" stroke-linecap="round" stroke-linejoin="round" d="{stroke}"/>"#
         ));
     }
-    format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view} {view}" width="{view}" height="{view}">{body}</svg>"#)
+    format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {view} {view}" width="{size}" height="{size}">{body}</svg>"#)
+}
+
+fn svg(view: f32, stroke: &str, stroke_width: f32, fill: &str) -> String {
+    svg_document(view, view, stroke_width, stroke, fill)
 }
 
 /// The SVG for a path under `shape/` - None for any other path.
 pub fn asset(path: &str) -> Option<String> {
     let name = path.strip_prefix("shape/")?.strip_suffix(".svg")?;
-    match name {
-        "spinner" => return Some(svg(14.0, SPINNER, 2.0, "")),
-        "maximize" => return Some(svg(12.0, MAXIMIZE, 1.0, "")),
-        "restore" => return Some(svg(12.0, RESTORE, 1.0, "")),
-        _ => {}
+    if name == "spinner" {
+        return Some(svg(14.0, SPINNER, 1.0, ""));
     }
     let layout = name.strip_prefix("layout-")?;
     let (layout, filled) = match layout.strip_suffix("-filled") {
@@ -109,9 +106,7 @@ mod tests {
         assert!(asset(&layout("default", false)).is_some());
         assert!(asset(&layout("panel", true)).unwrap().contains(PANEL_FILL));
         assert!(!asset(&layout("panel", false)).unwrap().contains(PANEL_FILL));
-        for path in [SPINNER_PATH, MAXIMIZE_PATH, RESTORE_PATH] {
-            assert!(asset(path).is_some(), "{path}");
-        }
+        assert!(asset(SPINNER_PATH).is_some());
         assert_eq!(asset("flame/outline.svg"), None);
         assert_eq!(asset(&layout("nothing", false)), None);
     }
