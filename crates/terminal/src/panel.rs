@@ -355,7 +355,7 @@ impl TerminalPanelView {
                     cx.notify();
                 }
                 _ => {
-                    if let Some(typed) = keystroke.key_char.as_deref().filter(|_| !modifiers.control && !modifiers.alt)
+                    if let Some(typed) = keystroke.key_char.as_deref().filter(|_| !modifiers.control && !modifiers.alt && !modifiers.platform)
                         && text.chars().count() + typed.chars().count() <= MAX_TITLE
                     {
                         text.push_str(typed);

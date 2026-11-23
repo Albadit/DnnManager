@@ -1,9 +1,11 @@
 //! Draws a terminal session's screen and sends what is typed to its shell - ports
 //! `Presentation/Terminal/TerminalView.cs`.
 //!
-//! Mouse wheel scrolls back through the output; drag selects text; Ctrl+C copies a selection (and interrupts the
-//! program when nothing is selected), Ctrl+Shift+C copies; Ctrl+V or Ctrl+Shift+V pastes; a right-click copies when
-//! text is selected and pastes when not. Shift+PageUp/PageDown and Ctrl+Shift+arrows/PageUp/PageDown scroll.
+//! Mouse wheel scrolls back through the output; drag selects text; a right-click copies when text is selected and
+//! pastes when not. Copy and paste are each OS's own ([`clipboard_key`]): on Windows and Linux Ctrl+C copies a
+//! selection (and interrupts the program when nothing is selected), Ctrl+Shift+C copies, Ctrl+V or Ctrl+Shift+V
+//! pastes; on macOS ⌘C copies and ⌘V pastes, and ⌃C always interrupts, as in Terminal.app. Shift+PageUp/PageDown and
+//! Ctrl+Shift+arrows/PageUp/PageDown scroll.
 
 use crate::scale::px;
 use std::ops::Range;
@@ -220,16 +222,24 @@ impl TerminalView {
         let (ctrl, shift, alt) = (modifiers.control, modifiers.shift, modifiers.alt);
         let key = keystroke.key.as_str();
         let rows = self.session.buffer().rows() as isize;
+        let mac = cfg!(target_os = "macos");
 
-        if ctrl && !alt {
-            if key == "c" && (shift || self.has_selection()) {
+        match clipboard_key(mac, modifiers, key, self.has_selection()) {
+            Some(Clipboard::Copy) => {
                 self.copy(cx);
                 return cx.stop_propagation();
             }
-            if key == "v" {
+            Some(Clipboard::Paste) => {
                 self.paste(cx);
                 return cx.stop_propagation();
             }
+            None => {}
+        }
+        // ⌘ with another key is the app's (⌘W, ⌘,) - nothing for the shell.
+        if mac && modifiers.platform {
+            return;
+        }
+        if ctrl && !alt {
             if shift && matches!(key, "up" | "down" | "pageup" | "pagedown") {
                 let lines = match key {
                     "up" => -1,
@@ -412,6 +422,37 @@ pub fn key_sequence(key: &str, ctrl: bool, shift: bool, application_cursor_keys:
         _ => return None,
     };
     Some(sequence)
+}
+
+/// What a key does with the clipboard, before it can go to the shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Clipboard {
+    Copy,
+    Paste,
+}
+
+/// The clipboard's keys: on macOS (`mac`) ⌘C and ⌘V, Control being the shell's (⌃C interrupts); elsewhere Ctrl+C
+/// while text is selected (without a selection it interrupts), Ctrl+Shift+C, and Ctrl+V or Ctrl+Shift+V - as Windows
+/// Terminal. None: the key isn't one of them.
+fn clipboard_key(mac: bool, modifiers: gpui::Modifiers, key: &str, has_selection: bool) -> Option<Clipboard> {
+    if mac {
+        if !modifiers.platform || modifiers.control || modifiers.alt {
+            return None;
+        }
+        return match key {
+            "c" => Some(Clipboard::Copy),
+            "v" => Some(Clipboard::Paste),
+            _ => None,
+        };
+    }
+    if !modifiers.control || modifiers.alt || modifiers.platform {
+        return None;
+    }
+    match key {
+        "c" if modifiers.shift || has_selection => Some(Clipboard::Copy),
+        "v" => Some(Clipboard::Paste),
+        _ => None,
+    }
 }
 
 /// A paste as the shell gets it: Enter as a carriage return; the markers tell a program that asked for them it is a
@@ -716,6 +757,24 @@ mod tests {
         assert_eq!(key_sequence("left", true, false, true).as_deref(), Some("\x1b[1;5D"));
         assert_eq!(key_sequence("f5", false, false, false).as_deref(), Some("\x1b[15~"));
         assert_eq!(key_sequence("a", false, false, false), None);
+    }
+
+    #[test]
+    fn copy_and_paste_keys_are_each_oss_own() {
+        let m = |s: &str| gpui::Keystroke::parse(&format!("{s}-x")).unwrap().modifiers;
+        // Windows and Linux: Ctrl+C copies only a selection - else it interrupts -, Ctrl+Shift+C always.
+        assert_eq!(clipboard_key(false, m("ctrl"), "c", true), Some(Clipboard::Copy));
+        assert_eq!(clipboard_key(false, m("ctrl"), "c", false), None);
+        assert_eq!(clipboard_key(false, m("ctrl-shift"), "c", false), Some(Clipboard::Copy));
+        assert_eq!(clipboard_key(false, m("ctrl"), "v", false), Some(Clipboard::Paste));
+        assert_eq!(clipboard_key(false, m("ctrl-shift"), "v", false), Some(Clipboard::Paste));
+        assert_eq!(clipboard_key(false, m("ctrl-alt"), "v", false), None);
+        // macOS: ⌘C and ⌘V; ⌃C always goes to the shell.
+        assert_eq!(clipboard_key(true, m("cmd"), "c", false), Some(Clipboard::Copy));
+        assert_eq!(clipboard_key(true, m("cmd"), "v", false), Some(Clipboard::Paste));
+        assert_eq!(clipboard_key(true, m("ctrl"), "c", true), None, "⌃C interrupts, also with a selection");
+        assert_eq!(clipboard_key(true, m("ctrl"), "v", false), None);
+        assert_eq!(clipboard_key(true, m("cmd"), "x", false), None);
     }
 
     #[test]

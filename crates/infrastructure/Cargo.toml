@@ -33,5 +33,11 @@ features = [
     "Win32_UI_WindowsAndMessaging",
 ]
 
+# macOS and Linux: memory, processor use and the disks for the status bar (Windows reads them itself).
+[target.'cfg(not(windows))'.dependencies.sysinfo]
+version = "0.31.4"
+default-features = false
+features = ["system", "disk"]
+
 [dev-dependencies]
 tempfile.workspace = true

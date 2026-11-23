@@ -4,10 +4,15 @@
 //! the defaults; "" takes a command's shortcuts away). A command may have several shortcuts: written one after the
 //! other, ", " between them (`Ctrl+J, Ctrl+Shift+J` - "Ctrl+," stays one, the comma key).
 //!
+//! Each OS writes them its own way ([`dnnm_ui::keys`]): `Ctrl+Shift+P` on Windows and Linux, `⇧⌘P` on macOS, where
+//! ⌘ takes Ctrl's place. The app's defaults are written for Windows; [`Shortcut::default_on`] gives each OS its own.
+//!
 //! The commands themselves are the app's: it passes each one's id, title, area and default shortcut.
 
 use std::collections::BTreeMap;
 use std::fmt;
+
+use dnnm_ui::keys::{MAC_KEY_SIGNS, Os, label};
 
 /// A command as Settings lists it - what the app passes in.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,7 +22,7 @@ pub struct ShortcutCommand {
     pub title: String,
     /// Projects, Project, Pages, Panel, Terminal, Application.
     pub area: String,
-    /// `Ctrl+F5`; None for none.
+    /// `Ctrl+F5` (`⌘F5` on macOS) - as this OS writes it; None for none.
     pub default_shortcut: Option<String>,
 }
 
@@ -42,7 +47,9 @@ impl ShortcutCommand {
 pub struct Shortcut {
     pub ctrl: bool,
     pub shift: bool,
+    /// Alt; Option (⌥) on macOS.
     pub alt: bool,
+    /// The OS's own key, GPUI's `platform`: the Windows key, Super on Linux, Command (⌘) on macOS.
     pub win: bool,
     pub key: String,
 }
@@ -84,6 +91,10 @@ pub fn canonical_key(name: &str) -> Option<String> {
     if name.is_empty() {
         return None;
     }
+    // macOS's signs for a key: ⌫, ↩, ←.
+    if let Some((canonical, _)) = MAC_KEY_SIGNS.iter().find(|(_, sign)| *sign == name) {
+        return Some(canonical.to_string());
+    }
     for (canonical, aliases) in KEY_NAMES {
         if canonical.eq_ignore_ascii_case(name) || aliases.iter().any(|a| a.eq_ignore_ascii_case(name)) {
             return Some(canonical.to_string());
@@ -120,6 +131,10 @@ pub fn canonical_key(name: &str) -> Option<String> {
             | "rightalt"
             | "lwin"
             | "rwin"
+            | "cmd"
+            | "command"
+            | "option"
+            | "super"
             | "none"
     ) {
         return None;
@@ -129,9 +144,21 @@ pub fn canonical_key(name: &str) -> Option<String> {
 }
 
 impl Shortcut {
-    /// Reads `Ctrl+Shift+P` (`Shortcut.Parse`); None when it isn't a shortcut.
+    /// Reads `Ctrl+Shift+P` (`Shortcut.Parse`), or macOS's `⇧⌘P`; None when it isn't a shortcut.
     pub fn parse(text: &str) -> Option<Shortcut> {
-        let trimmed = text.trim();
+        let mut shortcut = Shortcut { ctrl: false, shift: false, alt: false, win: false, key: String::new() };
+        // macOS's signs come first, with nothing between them: ⌃⌥⇧⌘.
+        let mut trimmed = text.trim();
+        while let Some(sign) = trimmed.chars().next() {
+            match sign {
+                '⌃' => shortcut.ctrl = true,
+                '⌥' => shortcut.alt = true,
+                '⇧' => shortcut.shift = true,
+                '⌘' => shortcut.win = true,
+                _ => break,
+            }
+            trimmed = &trimmed[sign.len_utf8()..];
+        }
         if trimmed.is_empty() {
             return None;
         }
@@ -141,14 +168,13 @@ impl Shortcut {
             Some(at) => &trimmed[at + 1..],
             None => trimmed,
         };
-        let mut shortcut = Shortcut { ctrl: false, shift: false, alt: false, win: false, key: String::new() };
         if let Some(at) = split.filter(|at| *at > 0) {
             for part in trimmed[..at].split('+').map(str::trim).filter(|p| !p.is_empty()) {
                 match part.to_ascii_lowercase().as_str() {
                     "ctrl" | "control" => shortcut.ctrl = true,
                     "shift" => shortcut.shift = true,
-                    "alt" => shortcut.alt = true,
-                    "win" | "windows" | "meta" => shortcut.win = true,
+                    "alt" | "option" | "opt" => shortcut.alt = true,
+                    "win" | "windows" | "meta" | "super" | "cmd" | "command" => shortcut.win = true,
                     _ => return None,
                 }
             }
@@ -173,20 +199,54 @@ impl Shortcut {
         self.key.strip_prefix('F').and_then(|n| n.parse::<u32>().ok()).is_some_and(|n| (1..=24).contains(&n))
     }
 
-    /// Why this can't be a shortcut; None when it can.
-    pub fn problem(&self) -> Option<&'static str> {
-        (!(self.is_function_key() || self.ctrl || self.alt)).then_some(
-            "Use Ctrl or Alt with it, or a function key (F1-F24) - plain keys are for typing and moving around.",
-        )
+    /// A default shortcut of the app's - written for Windows - as it is on `os`: macOS takes ⌘ where Windows takes
+    /// Ctrl, except with Tab and ` (⌘Tab and ⌘` switch apps and windows there; VS Code keeps ⌃ for them too).
+    pub fn default_on(text: &str, os: Os) -> Option<Shortcut> {
+        let mut shortcut = Shortcut::parse(text)?;
+        if os == Os::Mac && shortcut.ctrl && !shortcut.win && !matches!(shortcut.key.as_str(), "Tab" | "`") {
+            shortcut.ctrl = false;
+            shortcut.win = true;
+        }
+        Some(shortcut)
     }
 
-    /// A text box's editing key (Ctrl+A, C, V, X, Z, Y) - it would no longer copy or paste in one.
+    /// Why this can't be a shortcut; None when it can.
+    pub fn problem(&self) -> Option<&'static str> {
+        self.problem_on(Os::CURRENT)
+    }
+
+    /// Why this can't be a shortcut on `os`. On macOS ⌥ with a key types a character (⌥E an accent), so it needs ⌘
+    /// or ⌃; elsewhere Ctrl or Alt. A function key needs nothing.
+    pub fn problem_on(&self, os: Os) -> Option<&'static str> {
+        if self.is_function_key() {
+            return None;
+        }
+        match os {
+            Os::Mac => (!(self.win || self.ctrl)).then_some(
+                "Use ⌘ or ⌃ with it, or a function key (F1-F24) - plain keys and ⌥ keys are for typing and moving around.",
+            ),
+            Os::Windows | Os::Linux => (!(self.ctrl || self.alt)).then_some(
+                "Use Ctrl or Alt with it, or a function key (F1-F24) - plain keys are for typing and moving around.",
+            ),
+        }
+    }
+
+    /// A text box's editing key on this OS (Ctrl+C, Ctrl+Left, ⌘V, ⌥⌫ …) - it would no longer do that in one.
     pub fn is_editing_key(&self) -> bool {
-        self.ctrl
-            && !self.shift
-            && !self.alt
-            && !self.win
-            && matches!(self.key.as_str(), "A" | "C" | "V" | "X" | "Z" | "Y")
+        self.is_editing_key_on(Os::CURRENT)
+    }
+
+    pub fn is_editing_key_on(&self, os: Os) -> bool {
+        let Ok(mine) = gpui::Keystroke::parse(&self.to_gpui()) else { return false };
+        dnnm_ui::text_input::modified_keys(os)
+            .iter()
+            .filter_map(|k| gpui::Keystroke::parse(k).ok())
+            .any(|k| k.modifiers == mine.modifiers && k.key == mine.key)
+    }
+
+    /// As `os` writes it: `Ctrl+Shift+P`, `⇧⌘P`.
+    pub fn text_on(&self, os: Os) -> String {
+        label(os, self.ctrl, self.alt, self.shift, self.win, &self.key)
     }
 
     /// As a GPUI key binding writes it: `ctrl-shift-p`, `f5`, `ctrl-,` - for the app's bindings.
@@ -206,14 +266,10 @@ impl Shortcut {
     }
 }
 
+/// As this OS writes it - also as `keyboard.shortcuts` keeps it, which [`Shortcut::parse`] reads on any OS.
 impl fmt::Display for Shortcut {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (on, name) in [(self.ctrl, "Ctrl+"), (self.shift, "Shift+"), (self.alt, "Alt+"), (self.win, "Win+")] {
-            if on {
-                f.write_str(name)?;
-            }
-        }
-        f.write_str(&self.key)
+        f.write_str(&self.text_on(Os::CURRENT))
     }
 }
 
@@ -339,7 +395,7 @@ pub fn rows(commands: &[ShortcutCommand], custom: &BTreeMap<String, String>) -> 
                     ));
                 } else if shortcut.is_editing_key() {
                     lines.push(format!(
-                        "{shortcut} copies, pastes or undoes in text boxes - it won't do that there any more."
+                        "{shortcut} edits in text boxes (copy, paste, undo, a word at a time) - it won't do that there any more."
                     ));
                 }
             }
@@ -429,15 +485,25 @@ mod tests {
         ]
     }
 
+    /// How Windows writes it, whatever OS the test runs on.
+    fn windows(text: &str) -> String {
+        Shortcut::parse(text).unwrap().text_on(Os::Windows)
+    }
+
+    /// As this OS writes the shortcut Windows writes `text` - what the messages say.
+    fn here(text: &str) -> String {
+        Shortcut::parse(text).unwrap().to_string()
+    }
+
     #[test]
     fn parses_and_writes_as_vs_code_does() {
-        assert_eq!(Shortcut::parse("Ctrl+Shift+P").unwrap().to_string(), "Ctrl+Shift+P");
-        assert_eq!(Shortcut::parse("shift+ctrl+p").unwrap().to_string(), "Ctrl+Shift+P");
-        assert_eq!(Shortcut::parse("Ctrl+`").unwrap().to_string(), "Ctrl+`");
-        assert_eq!(Shortcut::parse("Ctrl+OemComma").unwrap().to_string(), "Ctrl+,");
-        assert_eq!(Shortcut::parse("Ctrl+D1").unwrap().to_string(), "Ctrl+1");
-        assert_eq!(Shortcut::parse("Ctrl+Next").unwrap().to_string(), "Ctrl+PageDown");
-        assert_eq!(Shortcut::parse("f12").unwrap().to_string(), "F12");
+        assert_eq!(windows("Ctrl+Shift+P"), "Ctrl+Shift+P");
+        assert_eq!(windows("shift+ctrl+p"), "Ctrl+Shift+P");
+        assert_eq!(windows("Ctrl+`"), "Ctrl+`");
+        assert_eq!(windows("Ctrl+OemComma"), "Ctrl+,");
+        assert_eq!(windows("Ctrl+D1"), "Ctrl+1");
+        assert_eq!(windows("Ctrl+Next"), "Ctrl+PageDown");
+        assert_eq!(windows("f12"), "F12");
         assert_eq!(Shortcut::parse("Ctrl++"), None, "as the WPF app: no key is named +");
         assert_eq!(Shortcut::parse(""), None);
         assert_eq!(Shortcut::parse("Hyper+P"), None);
@@ -447,11 +513,48 @@ mod tests {
     }
 
     #[test]
+    fn macos_writes_its_signs_and_reads_them_back() {
+        let mac = |text: &str| Shortcut::parse(text).unwrap().text_on(Os::Mac);
+        assert_eq!(mac("Win+Shift+P"), "⇧⌘P");
+        assert_eq!(mac("Ctrl+Alt+Shift+Win+Z"), "⌃⌥⇧⌘Z");
+        assert_eq!(mac("Win+Backspace"), "⌘⌫");
+        assert_eq!(mac("Ctrl+Tab"), "⌃⇥");
+        for text in ["⇧⌘P", "⌃⌥⇧⌘Z", "⌘⌫", "⌘,", "⌃`", "⇧F5", "⌘←", "F5"] {
+            assert_eq!(mac(text), text, "{text} is read back as it is written");
+        }
+        assert_eq!(Shortcut::parse("Cmd+Option+B"), Shortcut::parse("⌥⌘B"));
+        assert_eq!(Shortcut::parse("⌘").map(|s| s.key), None, "a modifier alone isn't a shortcut");
+        assert_eq!(Shortcut::parse("Super+Shift+P").unwrap().text_on(Os::Linux), "Shift+Super+P");
+        // Kept as this OS writes them, and read back: "⌘,, ⇧⌘P" is two shortcuts, the comma key and P.
+        assert_eq!(parse_list("⌘,, ⇧⌘P").len(), 2);
+        let both = parse_list("Ctrl+,, Ctrl+Shift+P");
+        assert_eq!(parse_list(&write_list(&both)), both);
+    }
+
+    #[test]
+    fn the_defaults_take_cmd_on_macos() {
+        let on = |text: &str, os: Os| Shortcut::default_on(text, os).unwrap().text_on(os);
+        assert_eq!(on("Ctrl+Shift+P", Os::Mac), "⇧⌘P");
+        assert_eq!(on("Ctrl+Alt+B", Os::Mac), "⌥⌘B");
+        assert_eq!(on("Ctrl+,", Os::Mac), "⌘,");
+        assert_eq!(on("F5", Os::Mac), "F5");
+        assert_eq!(on("Shift+F5", Os::Mac), "⇧F5");
+        assert_eq!(on("Ctrl+Tab", Os::Mac), "⌃⇥", "⌘Tab switches apps");
+        assert_eq!(on("Ctrl+`", Os::Mac), "⌃`", "⌘` switches windows");
+        assert_eq!(Shortcut::default_on("Ctrl+Shift+P", Os::Mac).unwrap().to_gpui(), "shift-win-p");
+        for os in [Os::Windows, Os::Linux] {
+            assert_eq!(on("Ctrl+Shift+P", os), "Ctrl+Shift+P");
+        }
+    }
+
+    #[test]
     fn reads_gpui_key_presses() {
         let ks = |s: &str| gpui::Keystroke::parse(s).unwrap();
-        assert_eq!(Shortcut::from_keystroke(&ks("ctrl-shift-p")).unwrap().to_string(), "Ctrl+Shift+P");
-        assert_eq!(Shortcut::from_keystroke(&ks("f5")).unwrap().to_string(), "F5");
-        assert_eq!(Shortcut::from_keystroke(&ks("alt-pageup")).unwrap().to_string(), "Alt+PageUp");
+        let pressed = |s: &str, os: Os| Shortcut::from_keystroke(&ks(s)).unwrap().text_on(os);
+        assert_eq!(pressed("ctrl-shift-p", Os::Windows), "Ctrl+Shift+P");
+        assert_eq!(pressed("f5", Os::Windows), "F5");
+        assert_eq!(pressed("alt-pageup", Os::Windows), "Alt+PageUp");
+        assert_eq!(pressed("cmd-shift-p", Os::Mac), "⇧⌘P");
         assert_eq!(recorded(&ks("escape")), Recorded::Cancel);
         assert_eq!(recorded(&ks("backspace")), Recorded::Remove);
         assert_eq!(recorded(&ks("ctrl-backspace")), Recorded::Chosen(Shortcut::parse("Ctrl+Backspace").unwrap()));
@@ -459,12 +562,30 @@ mod tests {
 
     #[test]
     fn needs_ctrl_alt_or_a_function_key() {
-        assert!(Shortcut::parse("P").unwrap().problem().is_some());
-        assert!(Shortcut::parse("Shift+P").unwrap().problem().is_some());
-        assert!(Shortcut::parse("Shift+F5").unwrap().problem().is_none());
-        assert!(Shortcut::parse("Alt+P").unwrap().problem().is_none());
-        assert!(Shortcut::parse("Ctrl+C").unwrap().is_editing_key());
-        assert!(!Shortcut::parse("Ctrl+Shift+C").unwrap().is_editing_key());
+        let problem = |text: &str, os: Os| Shortcut::parse(text).unwrap().problem_on(os);
+        for os in Os::ALL {
+            assert!(problem("P", os).is_some(), "{os:?}");
+            assert!(problem("Shift+P", os).is_some(), "{os:?}");
+            assert!(problem("Shift+F5", os).is_none(), "{os:?}");
+            assert!(problem("Ctrl+P", os).is_none(), "{os:?}");
+        }
+        assert!(problem("Alt+P", Os::Windows).is_none());
+        assert!(problem("Alt+P", Os::Linux).is_none());
+        assert!(problem("⌥P", Os::Mac).is_some(), "⌥P types π on macOS");
+        assert!(problem("⌘P", Os::Mac).is_none());
+    }
+
+    #[test]
+    fn the_text_boxes_editing_keys_on_each_os() {
+        let editing = |text: &str, os: Os| Shortcut::parse(text).unwrap().is_editing_key_on(os);
+        assert!(editing("Ctrl+C", Os::Windows) && editing("Ctrl+V", Os::Linux));
+        assert!(editing("Ctrl+Left", Os::Windows), "a word at a time");
+        assert!(editing("Ctrl+Y", Os::Windows));
+        assert!(!editing("Ctrl+Shift+C", Os::Windows));
+        assert!(editing("⌘C", Os::Mac) && editing("⌥⌫", Os::Mac) && editing("⇧⌘Z", Os::Mac));
+        assert!(editing("⌃A", Os::Mac), "⌃A goes to the line's start");
+        assert!(!editing("Ctrl+C", Os::Mac), "⌃C isn't copy on macOS");
+        assert!(!editing("⌘C", Os::Windows), "Win+C isn't copy on Windows");
     }
 
     #[test]
@@ -473,21 +594,23 @@ mod tests {
         let rows = rows(&commands(), &custom);
         assert_eq!(rows[0].warning, "F5 is also the shortcut of Project: Stop project - this one runs.");
         assert_eq!(rows[1].warning, "F5 is also the shortcut of Project: Start project - that one runs, not this.");
-        assert_eq!(rows[1].detail(), "Project · default Shift+F5");
-        assert_eq!(rows[1].reset_tip(), "Back to the default: Shift+F5");
+        assert_eq!(rows[1].detail(), format!("Project · default {}", here("Shift+F5")));
+        assert_eq!(rows[1].reset_tip(), format!("Back to the default: {}", here("Shift+F5")));
         assert_eq!(rows[0].detail(), "Project");
         assert_eq!(rows[0].reset_tip(), "It has its default");
         assert_eq!(rows[3].shortcuts_text(), "-");
-        assert!(rows[2].matches("application ctrl+shift"));
+        assert!(rows[2].matches(&format!("application {}", here("Ctrl+Shift+P"))));
         assert!(!rows[2].matches("project"));
     }
 
     #[test]
     fn an_editing_key_is_warned_about() {
-        let custom = BTreeMap::from([("view.none".to_string(), "Ctrl+V".to_string())]);
+        // Paste on this OS: Ctrl+V, or ⌘V on macOS.
+        let paste = Shortcut::default_on("Ctrl+V", Os::CURRENT).unwrap().to_string();
+        let custom = BTreeMap::from([("view.none".to_string(), paste.clone())]);
         assert_eq!(
             rows(&commands(), &custom)[3].warning,
-            "Ctrl+V copies, pastes or undoes in text boxes - it won't do that there any more."
+            format!("{paste} edits in text boxes (copy, paste, undo, a word at a time) - it won't do that there any more.")
         );
     }
 
@@ -496,7 +619,7 @@ mod tests {
         let c = commands();
         let empty = BTreeMap::new();
         let next = with_shortcut(&empty, &c[0], Slot::At(0), Shortcut::parse("Ctrl+F5").as_ref()).unwrap();
-        assert_eq!(next.get("project.start").map(String::as_str), Some("Ctrl+F5"));
+        assert_eq!(next.get("project.start").cloned(), Some(here("Ctrl+F5")));
         let back = with_shortcut(&next, &c[0], Slot::At(0), Shortcut::parse("F5").as_ref()).unwrap();
         assert!(back.is_empty(), "the default again is no change");
         let removed = with_shortcut(&empty, &c[0], Slot::At(0), None).unwrap();
@@ -504,7 +627,7 @@ mod tests {
         assert!(shortcuts_of(&c[0], &removed).is_empty());
         assert_eq!(
             with_shortcut(&empty, &c[0], Slot::New, Shortcut::parse("P").as_ref()).unwrap_err(),
-            "Use Ctrl or Alt with it, or a function key (F1-F24) - plain keys are for typing and moving around."
+            Shortcut::parse("P").unwrap().problem().unwrap()
         );
     }
 
@@ -514,25 +637,29 @@ mod tests {
         let empty = BTreeMap::new();
         // Another next to the default, then a third; the same one again isn't added twice.
         let two = with_shortcut(&empty, &c[0], Slot::New, Shortcut::parse("Ctrl+F5").as_ref()).unwrap();
-        assert_eq!(two.get("project.start").map(String::as_str), Some("F5, Ctrl+F5"));
+        assert_eq!(two.get("project.start").cloned(), Some(format!("F5, {}", here("Ctrl+F5"))));
         let three = with_shortcut(&two, &c[0], Slot::New, Shortcut::parse("Ctrl+,").as_ref()).unwrap();
-        assert_eq!(three.get("project.start").map(String::as_str), Some("F5, Ctrl+F5, Ctrl+,"));
+        assert_eq!(three.get("project.start").cloned(), Some(format!("F5, {}, {}", here("Ctrl+F5"), here("Ctrl+,"))));
         assert_eq!(with_shortcut(&three, &c[0], Slot::New, Shortcut::parse("F5").as_ref()).unwrap(), three);
         assert_eq!(shortcuts_of(&c[0], &three).len(), 3, "Ctrl+, is one shortcut, the comma key");
         // Changing one keeps the others; taking all but the default away is the default again.
-        let changed = with_shortcut(&three, &c[0], Slot::At(1), Shortcut::parse("Alt+S").as_ref()).unwrap();
-        assert_eq!(changed.get("project.start").map(String::as_str), Some("F5, Alt+S, Ctrl+,"));
+        let changed = with_shortcut(&three, &c[0], Slot::At(1), Shortcut::parse("Ctrl+Alt+S").as_ref()).unwrap();
+        assert_eq!(
+            changed.get("project.start").cloned(),
+            Some(format!("F5, {}, {}", here("Ctrl+Alt+S"), here("Ctrl+,")))
+        );
         let fewer = with_shortcut(&changed, &c[0], Slot::At(2), None).unwrap();
         let back = with_shortcut(&fewer, &c[0], Slot::At(1), None).unwrap();
         assert!(back.is_empty());
         // Each shared one is warned about.
-        let shared = BTreeMap::from([("view.none".to_string(), "Shift+F5, Ctrl+V".to_string())]);
+        let paste = Shortcut::default_on("Ctrl+V", Os::CURRENT).unwrap().to_string();
+        let shared = BTreeMap::from([("view.none".to_string(), format!("Shift+F5, {paste}"))]);
         let rows = rows(&c, &shared);
-        assert_eq!(rows[3].shortcuts_text(), "Shift+F5, Ctrl+V");
-        assert!(rows[3].warning.contains("Shift+F5 is also the shortcut of Project: Stop project"));
-        assert!(rows[3].warning.contains("Ctrl+V copies, pastes or undoes"));
-        assert!(rows[3].matches("ctrl+v"));
+        assert_eq!(rows[3].shortcuts_text(), format!("{}, {paste}", here("Shift+F5")));
+        assert!(rows[3].warning.contains(&format!("{} is also the shortcut of Project: Stop project", here("Shift+F5"))));
+        assert!(rows[3].warning.contains(&format!("{paste} edits in text boxes")));
+        assert!(rows[3].matches(&paste.to_lowercase()));
         assert_eq!(parse_list(""), Vec::<Shortcut>::new());
-        assert_eq!(write_list(&parse_list("Ctrl+J,  Ctrl+J, F2")), "Ctrl+J, F2");
+        assert_eq!(write_list(&parse_list("Ctrl+J,  Ctrl+J, F2")), format!("{}, F2", here("Ctrl+J")));
     }
 }

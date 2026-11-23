@@ -34,6 +34,7 @@ use crate::store::{Run, RunStatus, Store, ToastKind};
 use dnnm_ui::theme::Theme;
 use dnnm_ui::icons::{self, LayoutIcon};
 use dnnm_ui::text_input::{TextChanged, TextInput};
+use dnnm_ui::keys::Os;
 use dnnm_ui::{self as ui, Pad, Tip};
 
 actions!(
@@ -59,7 +60,10 @@ actions!(
         FindClose,
         FindToggleCase,
         FindToggleWord,
-        FindToggleRegex
+        FindToggleRegex,
+        HideApp,
+        HideOtherApps,
+        MinimizeWindow
     ]
 );
 
@@ -75,39 +79,93 @@ pub fn apply_ui_scale(settings: &dnnm_application::settings::Settings) {
     dnnm_terminal::scale::set_ui_scale(ui::ui_scale());
 }
 
-/// The default shortcuts (`AppCommands`).
+/// The default shortcuts (`AppCommands`), as `commands` lists them for Windows. `secondary-` is GPUI's Ctrl, or Cmd on
+/// macOS ([`Shortcut::default_on`](dnnm_dialogs::settings_keyboard::Shortcut::default_on)); Ctrl+Tab and Ctrl+` keep
+/// Ctrl there too, as ⌘Tab and ⌘` are macOS's own.
 pub fn bind_keys(cx: &mut App) {
+    let find_option = |letter: char| find_option_key(letter, Os::CURRENT).0;
     cx.bind_keys([
         // As VS Code: Ctrl+B the primary side bar, Ctrl+Alt+B the secondary one.
-        KeyBinding::new("ctrl-b", ToggleSidebar, None),
-        KeyBinding::new("ctrl-alt-b", ToggleSecondarySidebar, None),
+        KeyBinding::new("secondary-b", ToggleSidebar, None),
+        KeyBinding::new("secondary-alt-b", ToggleSecondarySidebar, None),
         // The panel's Find bar (`PanelSearch`): Ctrl+F opens it on the shown tab; in it, Enter / Shift+Enter go to the
         // next / previous match, Esc closes it, Alt+C / W / R switch Match Case, Whole Word, Regular Expression.
-        KeyBinding::new("ctrl-f", FindInPanel, None),
+        KeyBinding::new("secondary-f", FindInPanel, None),
         KeyBinding::new("enter", FindNext, Some("PanelFind")),
         KeyBinding::new("shift-enter", FindPrevious, Some("PanelFind")),
         KeyBinding::new("escape", FindClose, Some("PanelFind")),
-        KeyBinding::new("alt-c", FindToggleCase, Some("PanelFind")),
-        KeyBinding::new("alt-w", FindToggleWord, Some("PanelFind")),
-        KeyBinding::new("alt-r", FindToggleRegex, Some("PanelFind")),
-        KeyBinding::new("ctrl-j", TogglePanel, None),
-        KeyBinding::new("ctrl-1", GoToProjects, None),
-        KeyBinding::new("ctrl-2", GoToNewProject, None),
-        KeyBinding::new("ctrl-,", OpenSettings, None),
-        KeyBinding::new("ctrl-w", CloseView, None),
+        KeyBinding::new(&find_option('c'), FindToggleCase, Some("PanelFind")),
+        KeyBinding::new(&find_option('w'), FindToggleWord, Some("PanelFind")),
+        KeyBinding::new(&find_option('r'), FindToggleRegex, Some("PanelFind")),
+        KeyBinding::new("secondary-j", TogglePanel, None),
+        KeyBinding::new("secondary-1", GoToProjects, None),
+        KeyBinding::new("secondary-2", GoToNewProject, None),
+        KeyBinding::new("secondary-,", OpenSettings, None),
+        KeyBinding::new("secondary-w", CloseView, None),
         KeyBinding::new("escape", CloseView, Some("Modal")),
         KeyBinding::new("escape", CloseView, Some("Details")),
-        KeyBinding::new("ctrl-shift-f", SearchProjects, None),
-        KeyBinding::new("ctrl-shift-u", ShowOutput, None),
-        KeyBinding::new("ctrl-shift-p", ShowCommands, None),
-        KeyBinding::new("ctrl-p", QuickOpen, None),
+        KeyBinding::new("secondary-shift-f", SearchProjects, None),
+        KeyBinding::new("secondary-shift-u", ShowOutput, None),
+        KeyBinding::new("secondary-shift-p", ShowCommands, None),
+        KeyBinding::new("secondary-p", QuickOpen, None),
         KeyBinding::new("ctrl-`", ShowTerminal, None),
-        KeyBinding::new("ctrl-shift-m", MaximizePanel, None),
+        KeyBinding::new("secondary-shift-m", MaximizePanel, None),
         KeyBinding::new("ctrl-shift-`", NewTerminal, None),
         KeyBinding::new("f1", RunCommand { id: "help.page".into() }, None),
         KeyBinding::new("ctrl-tab", RunCommand { id: "view.next".into() }, None),
         KeyBinding::new("ctrl-shift-tab", RunCommand { id: "view.previous".into() }, None),
     ]);
+    // What every Mac app does: ⌘Q quits (Quit's default there - `commands` - so Settings shows it and it can be
+    // changed), ⌘H hides it, ⌥⌘H the others, ⌘M minimizes the window.
+    if Os::CURRENT == Os::Mac {
+        cx.bind_keys([
+            KeyBinding::new("cmd-q", RunCommand { id: "app.quit".into() }, None),
+            KeyBinding::new("cmd-h", HideApp, None),
+            KeyBinding::new("alt-cmd-h", HideOtherApps, None),
+            KeyBinding::new("cmd-m", MinimizeWindow, None),
+        ]);
+    }
+}
+
+/// macOS's menu bar, which every Mac app has: the app's menu (Settings, Hide, Quit), Edit (for the text fields) and
+/// Window. Each item shows the key bound to its action, so it is set again whenever the shortcuts change.
+pub fn set_app_menus(cx: &mut App) {
+    use dnnm_ui::text_input;
+    use gpui::{Menu, MenuItem as Item, OsAction};
+    cx.set_menus(vec![
+        Menu {
+            name: "DNN Manager".into(),
+            items: vec![
+                Item::action("Settings…", OpenSettings),
+                Item::separator(),
+                Item::action("Hide DNN Manager", HideApp),
+                Item::action("Hide Others", HideOtherApps),
+                Item::separator(),
+                Item::action("Quit DNN Manager", RunCommand { id: "app.quit".into() }),
+            ],
+        },
+        Menu {
+            name: "Edit".into(),
+            items: vec![
+                Item::os_action("Undo", text_input::Undo, OsAction::Undo),
+                Item::os_action("Redo", text_input::Redo, OsAction::Redo),
+                Item::separator(),
+                Item::os_action("Cut", text_input::Cut, OsAction::Cut),
+                Item::os_action("Copy", text_input::Copy, OsAction::Copy),
+                Item::os_action("Paste", text_input::Paste, OsAction::Paste),
+                Item::os_action("Select All", text_input::SelectAll, OsAction::SelectAll),
+            ],
+        },
+        Menu { name: "Window".into(), items: vec![Item::action("Minimize", MinimizeWindow)] },
+    ]);
+}
+
+/// A switch of the Find bar's (`c`ase, `w`hole word, `r`egular expression): its key binding and how it is written -
+/// Alt+C, or ⌥⌘C on macOS, where ⌥C alone types ç.
+fn find_option_key(letter: char, os: Os) -> (String, String) {
+    let mac = os == Os::Mac;
+    let binding = if mac { format!("alt-cmd-{letter}") } else { format!("alt-{letter}") };
+    (binding, dnnm_ui::keys::label(os, false, true, false, mac, &letter.to_ascii_uppercase().to_string()))
 }
 
 const APP_ICON: &[u8] = include_bytes!("../assets/dnn-32.png");
@@ -1380,6 +1438,9 @@ impl Render for Workspace {
                 cx.notify();
             }))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_primary(cx)))
+            .on_action(cx.listener(|_, _: &HideApp, _, cx| cx.hide()))
+            .on_action(cx.listener(|_, _: &HideOtherApps, _, cx| cx.hide_other_apps()))
+            .on_action(cx.listener(|_, _: &MinimizeWindow, window, _| window.minimize_window()))
             .on_action(cx.listener(|this, _: &ToggleSecondarySidebar, _, cx| this.toggle_secondary(cx)))
             .on_action(cx.listener(|this, _: &TogglePanel, _, cx| this.toggle_panel(cx)))
             .on_action(cx.listener(|this, _: &ShowCommands, window, cx| this.show_palette(true, window, cx)))
@@ -1517,7 +1578,7 @@ impl Workspace {
         let maximized = window.is_maximized();
         let sidebar_right =
             self.store.read(cx).settings.sidebar_position() == dnnm_application::settings::SidebarPosition::Right;
-        let layout_button = |id: &'static str, tip: &'static str| {
+        let layout_button = |id: &'static str, tip: String| {
             ui::focusable_bare(
                 div()
                     .id(id)
@@ -1623,7 +1684,7 @@ impl Workspace {
                     .items_center()
                     .gap(px(7.0))
                     .child(
-                        layout_button("help", dnnm_dialogs::help_menu::HELP_BUTTON_TOOLTIP)
+                        layout_button("help", dnnm_dialogs::help_menu::HELP_BUTTON_TOOLTIP.to_string())
                             .relative()
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -1659,7 +1720,7 @@ impl Workspace {
                             .items_center()
                             .gap(px(2.0))
                             .child(
-                                layout_button("customize-layout", "Customize Layout…")
+                                layout_button("customize-layout", "Customize Layout…".to_string())
                                     .on_click(
                                         cx.listener(|this, _: &ClickEvent, window, cx| this.customize_layout(window, cx)),
                                     )
@@ -1668,11 +1729,11 @@ impl Workspace {
                             .child(
                                 layout_button(
                                     "toggle-sidebar",
-                                    if self.primary_visible {
-                                        "Hide Primary Side Bar (Ctrl+B)"
-                                    } else {
-                                        "Show Primary Side Bar (Ctrl+B)"
-                                    },
+                                    shortcuts::with_shortcut(
+                                        if self.primary_visible { "Hide Primary Side Bar" } else { "Show Primary Side Bar" },
+                                        "view.toggleSidebar",
+                                        &self.store.read(cx).settings,
+                                    ),
                                 )
                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_primary(cx)))
                                 .child(icons::layout_icon(
@@ -1684,7 +1745,7 @@ impl Workspace {
                             .child(
                                 layout_button(
                                     "toggle-panel",
-                                    if self.panel_visible { "Hide the panel" } else { "Show the panel: Output" },
+                                    if self.panel_visible { "Hide the panel" } else { "Show the panel: Output" }.to_string(),
                                 )
                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                                     this.panel_visible = !this.panel_visible;
@@ -1699,11 +1760,15 @@ impl Workspace {
                             .child(
                                 layout_button(
                                     "toggle-secondary",
-                                    if self.secondary_visible {
-                                        "Hide Secondary Side Bar (Ctrl+Alt+B)"
-                                    } else {
-                                        "Show Secondary Side Bar (Ctrl+Alt+B)"
-                                    },
+                                    shortcuts::with_shortcut(
+                                        if self.secondary_visible {
+                                            "Hide Secondary Side Bar"
+                                        } else {
+                                            "Show Secondary Side Bar"
+                                        },
+                                        "view.toggleSecondarySidebar",
+                                        &self.store.read(cx).settings,
+                                    ),
                                 )
                                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_secondary(cx)))
                                 .child(icons::layout_icon(
@@ -1748,7 +1813,7 @@ impl Workspace {
         // The gear's menu opens upwards from it; Help's opens down from the title bar.
         let gear_open = self.menu.as_ref().is_some_and(|m| m.anchor != gpui::Corner::TopLeft);
         // An entry: its icon alone, what it is in its tooltip (VS Code's activity bar).
-        let entry = |id: &'static str, glyph: Icon, tip: &'static str, selected: bool| {
+        let entry = |id: &'static str, glyph: Icon, tip: String, selected: bool| {
             ui::focusable_bare(div().id(id), cx)
                 .flex()
                 .items_center()
@@ -1787,7 +1852,11 @@ impl Workspace {
                         entry(
                             "nav-projects",
                             Icon::List,
-                            "Projects - every website on this computer (Ctrl+1)",
+                            shortcuts::with_shortcut(
+                                "Projects - every website on this computer",
+                                "pages.projects",
+                                &self.store.read(cx).settings,
+                            ),
                             self.page == Page::Projects,
                         )
                         .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.go(Page::Projects, window, cx))),
@@ -1796,7 +1865,11 @@ impl Workspace {
                         entry(
                             "nav-new",
                             Icon::Add,
-                            "New project - create a website, or one from a backup (Ctrl+2)",
+                            shortcuts::with_shortcut(
+                                "New project - create a website, or one from a backup",
+                                "pages.newProject",
+                                &self.store.read(cx).settings,
+                            ),
                             self.page == Page::NewProject,
                         )
                         .on_click(
@@ -1805,7 +1878,7 @@ impl Workspace {
                     ),
             )
             .child(group().child(
-                entry("nav-gear", Icon::Settings, "Settings, themes, Troubleshoot and updates", gear_open)
+                entry("nav-gear", Icon::Settings, "Settings, themes, Troubleshoot and updates".to_string(), gear_open)
                     .relative()
                     .child(self.gear_anchor.measure())
                     .child(dnnm_dialogs::tour::target(dnnm_dialogs::tour::TourPart::ManageButton, &self.tour_targets))
@@ -2137,7 +2210,7 @@ impl Workspace {
     fn render_find_bar(&self, find: &PanelFind, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = Theme::get(cx).clone();
         let c = theme.colors;
-        let option = |id: &'static str, label: &'static str, tip: &'static str, on: bool| {
+        let option = |id: &'static str, label: &'static str, tip: String, on: bool| {
             ui::focusable_bare(div().id(id), cx)
                 .flex()
                 .flex_none()
@@ -2219,16 +2292,16 @@ impl Workspace {
                     .when_some(find.error.clone(), |d, error| d.tip(error))
                     .child(div().flex_1().min_w_0().child(find.input.clone()))
                     .child(
-                        option("find-case", "Aa", "Match Case (Alt+C)", find.match_case)
+                        option("find-case", "Aa", format!("Match Case ({})", find_option_key('c', Os::CURRENT).1), find.match_case)
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_find_option(|f| &mut f.match_case, cx))),
                     )
                     .child(
-                        option("find-word", "ab", "Match Whole Word (Alt+W)", find.whole_word)
+                        option("find-word", "ab", format!("Match Whole Word ({})", find_option_key('w', Os::CURRENT).1), find.whole_word)
                             .underline()
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_find_option(|f| &mut f.whole_word, cx))),
                     )
                     .child(
-                        option("find-regex", ".*", "Use Regular Expression (Alt+R)", find.use_regex)
+                        option("find-regex", ".*", format!("Use Regular Expression ({})", find_option_key('r', Os::CURRENT).1), find.use_regex)
                             .font_weight(FontWeight::BOLD)
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_find_option(|f| &mut f.use_regex, cx))),
                     ),
@@ -2362,7 +2435,7 @@ impl Workspace {
                     })
                     .child(
                         panel_button("find-in-panel", ui::icon(Icon::Search, c.log_muted, cx), true)
-                            .tip("Find (Ctrl+F)")
+                            .tip(shortcuts::with_shortcut("Find", "view.search", &self.store.read(cx).settings))
                             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.open_find(window, cx))),
                     )
                     .child(div().flex_none().w(px(1.0)).h(px(16.0)).bg(c.card_border))
@@ -2377,11 +2450,11 @@ impl Workspace {
                             ),
                             true,
                         )
-                        .tip(if maximized {
-                            "Restore panel size (Ctrl+Shift+M)"
-                        } else {
-                            "Maximize panel (Ctrl+Shift+M)"
-                        })
+                        .tip(shortcuts::with_shortcut(
+                            if maximized { "Restore panel size" } else { "Maximize panel" },
+                            "panel.maximize",
+                            &self.store.read(cx).settings,
+                        ))
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                             this.panel_maximized = !this.panel_maximized;
                             cx.notify();
@@ -2810,12 +2883,17 @@ impl Workspace {
                 )
             });
         let fmt = dnnm_application::project::view::byte_size;
-        let ram = if host.memory_total_bytes == 0 {
-            format!("RAM {} GB", dnnm_application::project::view::decimal(0.0, 2))
-        } else {
+        // Not read (yet): dashes, as the disk has - never a 0 that looks like a reading.
+        let memory_known = host.memory_total_bytes > 0;
+        let ram = if memory_known {
             format!("RAM {}", fmt(host.memory_used_bytes as f64))
+        } else {
+            "RAM --.-- GB".to_string()
         };
-        let cpu = format!("CPU {}%", dnnm_application::project::view::decimal(host.cpu_percent.unwrap_or(0.0), 2));
+        let cpu = match host.cpu_percent {
+            Some(percent) => format!("CPU {}%", dnnm_application::project::view::decimal(percent, 2)),
+            None => "CPU --.--%".to_string(),
+        };
         let disk = match &host.disk_root {
             None => "Disk: --.-- GB used (limit --.-- GB)".to_string(), // as WPF writes it, whatever the culture
             Some(_) => {
@@ -2844,11 +2922,15 @@ impl Workspace {
                     .child(
                         div()
                             .id("ram")
-                            .tip(format!(
-                                "Memory in use: {} of {}",
-                                fmt(host.memory_used_bytes as f64),
-                                fmt(host.memory_total_bytes as f64)
-                            ))
+                            .tip(if memory_known {
+                                format!(
+                                    "Memory in use: {} of {}",
+                                    fmt(host.memory_used_bytes as f64),
+                                    fmt(host.memory_total_bytes as f64)
+                                )
+                            } else {
+                                "The memory in use can't be read".to_string()
+                            })
                             .child(ram),
                     )
                     .child(

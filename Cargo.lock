@@ -1573,6 +1573,7 @@ dependencies = [
  "log",
  "roxmltree 0.21.2",
  "rusqlite",
+ "sysinfo",
  "tempfile",
  "windows 0.62.2",
 ]

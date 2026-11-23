@@ -40,7 +40,7 @@ The use cases (`dnnm-application`) know only traits; `dnnm-wiring` hands each on
 | `crates/app/src/runner.rs` | An operation on its own thread: lines, facts and questions streamed to the store, Cancel and Stop undoing |
 | `crates/app/src/pages/` | `projects.rs` (the table and its menu), `project_view.rs` (Details), `columns.rs` |
 | `crates/dialogs/src/` | One file per dialog and page (`setup_page.rs`, `settings_page.rs`, `troubleshoot_page.rs`, `guide.rs`, `tour.rs`, …) |
-| `crates/ui/src/` | `theme.rs` (the design tokens - [design-system.md](design-system.md)), controls, `menu.rs`, `dialog.rs`, `text_input.rs` |
+| `crates/ui/src/` | `theme.rs` (the design tokens - [design-system.md](design-system.md)), controls, `menu.rs`, `dialog.rs`, `text_input.rs` (the text field and its keys) on `text_edit.rs` (its editing, without GPUI), `keys.rs` (each OS's keys and how it writes a shortcut) |
 
 ## How the window stays current
 

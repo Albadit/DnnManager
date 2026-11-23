@@ -99,7 +99,9 @@ fn commands() -> Vec<Command> {
             id: "app.quit",
             title: "Quit DNN Manager",
             area: "Application",
-            shortcut: "",
+            // ⌘Q on macOS, where every app quits so (the table is written for Windows: Ctrl becomes ⌘ there).
+            // Windows and Linux have none: their windows close with Alt+F4.
+            shortcut: if cfg!(target_os = "macos") { "Ctrl+Q" } else { "" },
             keywords: "exit close stop background notification area tray",
             run: Now(|ws, window, cx| ws.quit(window, cx), always),
         },
@@ -603,9 +605,14 @@ fn settings(id: &'static str, category: Category, title: &'static str, keywords:
     Command { id, title, area: "Settings", shortcut: "", keywords, run: Run::Settings(category) }
 }
 
-/// A command's default shortcut ("Ctrl+P"), None without one.
-pub(super) fn default_shortcut(id: &str) -> Option<&'static str> {
-    commands().into_iter().find(|c| c.id == id).map(|c| c.shortcut).filter(|s| !s.is_empty())
+/// A command's default shortcut as this OS has it ("Ctrl+P", "⌘P" on macOS), None without one.
+pub(super) fn default_shortcut(id: &str) -> Option<String> {
+    commands().into_iter().find(|c| c.id == id).and_then(|c| default_here(c.shortcut))
+}
+
+/// A default from the table - written for Windows - as this OS has it.
+fn default_here(shortcut: &str) -> Option<String> {
+    dnnm_dialogs::settings_keyboard::Shortcut::default_on(shortcut, dnnm_ui::keys::Os::CURRENT).map(|s| s.to_string())
 }
 
 /// Every command, for Settings → Keyboard shortcuts - in the order they are matched.
@@ -613,8 +620,8 @@ pub(super) fn shortcut_commands() -> Vec<dnnm_dialogs::settings_keyboard::Shortc
     commands()
         .into_iter()
         .map(|c| {
-            let default = (!c.shortcut.is_empty()).then_some(c.shortcut);
-            dnnm_dialogs::settings_keyboard::ShortcutCommand::new(c.id, c.title, c.area, default)
+            let default = default_here(c.shortcut);
+            dnnm_dialogs::settings_keyboard::ShortcutCommand::new(c.id, c.title, c.area, default.as_deref())
         })
         .collect()
 }

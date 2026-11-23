@@ -1,14 +1,15 @@
 //! A password field (`Controls/PasswordInput.xaml`): what is typed shows as dots - never the password itself. It takes
-//! typing (also through an IME), Backspace, Ctrl+A to replace it all, Ctrl+V to paste; it never copies or cuts. It
-//! uses the text field's own key bindings (`dnnm_ui::text_input`, context "TextInput"), so it needs nothing bound of
-//! its own. The cursor stays at the end - a password is typed again, not edited in the middle.
+//! typing (also through an IME), Backspace, select all (Ctrl+A, ⌘A on macOS) to replace it all, paste (Ctrl+V, ⌘V);
+//! deleting a word or to the start (Ctrl+Backspace, ⌥⌫, ⌘⌫) empties it, as its words can't be seen. It never copies
+//! or cuts. It uses the text field's own key bindings (`dnnm_ui::text_input`, context "TextInput"), so it needs
+//! nothing bound of its own. The cursor stays at the end - a password is typed again, not edited in the middle.
 
 use dnnm_ui::px;
 use std::ops::Range;
 
 use gpui::{App, Bounds, Context, CursorStyle, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle, Focusable, GlobalElementId, LayoutId, Pixels, ShapedLine, Style, TextRun, UTF16Selection, Window, div, fill, point, prelude::*, relative, size};
 
-use dnnm_ui::text_input::{Backspace, Clear, Delete, Paste, SelectAll};
+use dnnm_ui::text_input::{Backspace, Clear, Delete, DeleteToStart, DeleteWordLeft, Paste, SelectAll};
 use dnnm_ui::theme::Theme;
 
 /// The password changed. The event holds nothing: the view reads [`PasswordInput::password`] when it needs it.
@@ -253,6 +254,8 @@ impl Render for PasswordInput {
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
+            .on_action(cx.listener(|this, _: &DeleteWordLeft, _, cx| this.set_password("", cx)))
+            .on_action(cx.listener(|this, _: &DeleteToStart, _, cx| this.set_password("", cx)))
             .on_action(cx.listener(Self::select_all))
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(Self::clear))

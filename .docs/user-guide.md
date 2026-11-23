@@ -39,12 +39,33 @@ menu) say whether there is a newer release.
 | Side bars | A **primary** side bar beside the activity bar (**Ctrl+B**) and a **secondary** one on the other side (**Ctrl+Alt+B**) - empty for now, kept for what comes later. Drag their edges to resize them. |
 | Title bar | The search in the middle finds a project; type `>` for any command (**Ctrl+Shift+P**). **?** is help. |
 | Bottom panel | **Output** (what an operation does, step by step), **Logs** (the sites' and DNN Manager's logs), **Terminal**. **Ctrl+J** opens and closes it; drag its top edge to resize it (it stops at its smallest size), or the corner where it meets the primary side bar to resize both. **Ctrl+F** (or 🔍) finds text in the tab shown: **Aa** match case, **ab** whole word, **.\*** regular expression; **Enter** / **Shift+Enter** go to the next / previous match, **Esc** closes it. |
-| Status bar | IIS's state with Start / Stop / Restart (these affect every site), memory, processor and disk. |
+| Status bar | IIS's state with Start / Stop / Restart (these affect every site), memory, processor and the disk of the projects folder. A figure that can't be read shows dashes (`--.--`), and processor use shows from its second reading on, two seconds after the start. |
 
 **Without a mouse**: **Tab** and **Shift+Tab** go from control to control, **Enter** or **Space** presses the one
 with the blue ring. A menu opens on its first item - **Up** / **Down** move, **Esc** closes it. Settings, a dialog or
 a menu keeps **Tab** inside it while open, and **Esc** takes you back to where you were. In the projects list, **Up**
 / **Down** choose a project and **Enter** opens it. In the terminal, **Tab** goes to the shell; **Ctrl+J** leaves it.
+
+**On macOS** every shortcut in this guide takes **⌘** where it says **Ctrl** (**⌘B**, **⇧⌘P**, **⌘,**), except
+**Ctrl+Tab** and **Ctrl+\`**, which stay **⌃** because ⌘Tab and ⌘\` are macOS's own. The find bar's switches are
+**⌥⌘C**, **⌥⌘W** and **⌥⌘R**. DNN Manager has the usual menu bar there: **⌘Q** quits, **⌘H** hides it, **⌘M**
+minimizes the window, and **Edit** has Undo, Cut, Copy, Paste and Select All for the text fields. Menus, tooltips and
+**Settings → Keyboard shortcuts** write the keys as macOS does (⇧⌘P).
+
+**Text fields** edit as the system's own do:
+
+| | Windows and Linux | macOS |
+|---|---|---|
+| Copy, cut, paste, select all | Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A (also Ctrl+Insert, Shift+Delete, Shift+Insert) | ⌘C, ⌘X, ⌘V, ⌘A |
+| Undo, redo | Ctrl+Z; Ctrl+Y or Ctrl+Shift+Z | ⌘Z; ⇧⌘Z |
+| A word left / right (Shift: select it) | Ctrl+← / Ctrl+→ | ⌥← / ⌥→ |
+| The start / end (Shift: select to it) | Home / End | ⌘← / ⌘→, Home / End, ⌃A / ⌃E |
+| Delete a word / to the start | Ctrl+Backspace, Ctrl+Delete | ⌥⌫, ⌥⌦; ⌘⌫ |
+
+With the mouse: drag to select (also past the field's edge), double-click selects a word, triple-click the whole
+line; a right-click has Undo, Redo, Cut, Copy, Paste and Select all. A text longer than the field scrolls to keep the
+cursor in sight. In the terminal, **Ctrl+C** copies a selection (without one it stops the program) and **Ctrl+V**
+pastes; on macOS **⌘C** copies, **⌘V** pastes and **⌃C** always stops the program.
 
 ## Projects
 
@@ -110,7 +131,9 @@ text.
 
 IIS exists only on Windows, so there are no websites to manage: the Projects page says IIS isn't available on this
 system, and the actions that need IIS, Windows or its tools aren't offered or say so. The window, Settings, the
-release lists and checking a SQL Server connection with a SQL login work.
+release lists, the status bar's memory, processor and disk, and checking a SQL Server connection with a SQL login
+work. The disk shown is that of the projects folder - or, while it is still the Windows default `C:\DNN`, of your
+home folder. Shortcuts take ⌘ there ([the window](#the-window)).
 
 ## When something goes wrong
 

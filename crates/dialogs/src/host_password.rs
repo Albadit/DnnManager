@@ -244,7 +244,7 @@ impl PasswordField {
         let subscriptions = [
             cx.subscribe(&hidden, |this, hidden, _: &PasswordChanged, cx| {
                 let password = hidden.read(cx).password().to_string();
-                if this.shown.read(cx).text().as_ref() != password {
+                if this.shown.read(cx).text() != password {
                     this.shown.update(cx, |s, cx| s.set_text(password, cx));
                 }
                 cx.emit(PasswordFieldChanged);

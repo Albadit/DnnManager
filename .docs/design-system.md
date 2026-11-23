@@ -99,7 +99,7 @@ or the right.
 | Title bar dragging | The bar is Windows' caption (`WindowControlArea::Drag`) and `.occlude()`d, so the workspace's focus handling doesn't swallow the press; every button on it is `.occlude()`d too, so a press there is a click, not a move | `Workspace::render_title_bar` |
 | Info tip | A 12 px muted ⓘ beside a title or label, its explanation in a tooltip; centred on the line and then lowered about a tenth of the text's size (1 px beside a label, 2 beside a page's title, `ui::info_tip_drop`), so it sits in the middle of the letters as seen rather than on the capitals | `ui::info_tip`, `ui::with_tip`, `ui::with_tip_sized`, `ui::dialog::frame_with_tip` |
 | Select | The box with a chevron; the list an overlay (`deferred` + `anchored`) under it, at least as wide as the box, scrolling past 320 px with a scroll bar (a 6 px `scroll_thumb` thumb in a 12 px strip at its right, as tall as the share seen, 8 px and `scroll_thumb_hover` under the mouse or while dragged; drag it, or press beside it to jump there). A press on the box focuses and opens it; Down / Up / Enter / Space open it from the keyboard, Up / Down / Home / End / Page Up / Page Down move the highlight (one highlight for mouse and keys), Enter or Space choose, Esc shuts the list (then the dialog), a press outside shuts it. Rows can include group headings (muted, bold, skipped by the keys and the mouse; the options under them indented 20 px), an option can have a tip, and the box can have a tip that is hidden while the list is open. The compact look is 24 px high with caption text, used by the Logs pickers. Every select in the app is this one: dialogs, Settings, the Logs pickers | `ui::dialog::{select, select_rows, SelectRow, SelectLook}`, `ui::scrollbar` |
-| Keyboard shortcut | Each of a command's shortcuts a 22 px chip (click: record a new one there), then **+** (or "Add shortcut") to record another; kept as `Ctrl+J, Ctrl+Shift+J` | `SettingsPage::render_keyboard`, `settings_keyboard` |
+| Keyboard shortcut | Each of a command's shortcuts a 22 px chip (click: record a new one there), then **+** (or "Add shortcut") to record another; written and kept as the OS writes them - `Ctrl+J, Ctrl+Shift+J`, on macOS `⌘J, ⇧⌘J` | `SettingsPage::render_keyboard`, `settings_keyboard`, `ui::keys` |
 | Sash | The side bars' and panel's edges, as grab area the gap (4 px in Compact): three 2 px dots in its middle, or in Compact a 1 px `sidebar_border` line; under the mouse and while dragged an `accent` line with round ends as thick as the sash (the same on every edge); side bars and panel stop at their smallest size (a drag doesn't close them); the panel leaves the page at least 300 px of the window; where the primary side bar's and the panel's sashes meet, an invisible corner (the four-way Move pointer - GPUI's Windows backend has none, so `dnnm_system::move_pointer` subclasses the window and answers `WM_SETCURSOR` with it; elsewhere a crosshair) drags both and lights both lines | `Workspace::render` (`Sash.cs`) |
 | Toasts | The page's bottom right, 16 px in - over the page, above the panel (the window's bottom right while the panel is maximized): the running operation (title, Cancel, the progress bar), then one message at a time | `Workspace::render_toasts` |
 | Output while a run goes on | The lines keep the newest in view while the view is at the end (scrolled up to read, it stays); the stage list brings the stage that runs into view | `Workspace::render_run` |
@@ -137,6 +137,18 @@ Everything works without the mouse (`ui::focus`):
   the table has the keyboard), Enter opens it, Space ticks, Right / Left expand, F5 starts, Shift+F10 its menu. The
   details take the keyboard as they open; Esc goes back to the same row.
 - **The terminal** keeps Tab and Shift+Tab for the shell; Ctrl+J (hide the panel) leaves it.
+- **Each OS's keys** (`ui::keys::Os`): the app's shortcuts are bound as `secondary-…` - Ctrl, ⌘ on macOS - except
+  Ctrl+Tab and Ctrl+\` (⌘Tab and ⌘\` are macOS's); a default in `commands.rs` is written for Windows and
+  `Shortcut::default_on` gives the OS its own. macOS writes shortcuts with its signs, ⌃⌥⇧⌘ in that order (`⇧⌘P`,
+  `⌘⌫`); Windows `Ctrl+Shift+P`; Linux the same with `Super` for the Windows key. A tooltip gets its shortcut from
+  the command (`shortcuts::with_shortcut`), so it shows the user's own. Never write `Ctrl` into a label.
+- **Text fields** (`ui::text_input`, its editing in `ui::text_edit`): each OS's own keys (`text_input::keys(os)`) -
+  copy / paste / cut / select all / undo / redo with the primary modifier; words with Ctrl+arrows, or ⌥+arrows on
+  macOS (Ctrl+→ goes to the next word's start on Windows, to the word's end on macOS and Linux, as their own fields
+  do); the ends with Home / End, also ⌘← / ⌘→ and ⌃A / ⌃E on macOS. Up and Down are left to the list a field
+  filters. A run of typing is one undo step (a space starts the next); a paste is its own. Double-click selects a
+  word, triple-click the line, a drag goes on past the field; a right-click opens Undo / Redo / Cut / Copy / Paste /
+  Select all with their keys. A text wider than the field scrolls to keep the caret in sight.
 
 ## Icons
 

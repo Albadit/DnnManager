@@ -4,10 +4,12 @@
 pub mod dialog;
 pub mod focus;
 pub mod icons;
+pub mod keys;
 pub mod menu;
 pub mod shapes;
 pub mod scale;
 pub mod spacing;
+pub mod text_edit;
 pub mod text_input;
 pub mod theme;
 

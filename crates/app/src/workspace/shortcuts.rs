@@ -27,7 +27,15 @@ pub(crate) fn shortcut_text(id: &str, settings: &Settings) -> Option<String> {
     match custom.get(id) {
         Some(text) if text.is_empty() => None,
         Some(text) => Some(text.clone()),
-        None => super::commands::default_shortcut(id).map(str::to_string),
+        None => super::commands::default_shortcut(id),
+    }
+}
+
+/// A tooltip's `label` with the command's shortcuts after it - "Find (⌘F)" - as they are now; `label` alone without.
+pub(crate) fn with_shortcut(label: &str, id: &str, settings: &Settings) -> String {
+    match shortcut_text(id, settings) {
+        Some(keys) => format!("{label} ({keys})"),
+        None => label.to_string(),
     }
 }
 
@@ -36,6 +44,10 @@ pub(crate) fn apply(settings: &Settings, cx: &mut App) {
     cx.clear_key_bindings();
     crate::bind_default_keys(cx);
     bind_changes(&custom_shortcuts(settings), cx);
+    // The menu bar shows the keys: made again with them.
+    if dnnm_ui::keys::Os::CURRENT == dnnm_ui::keys::Os::Mac {
+        super::set_app_menus(cx);
+    }
 }
 
 fn bind_changes(custom: &BTreeMap<String, String>, cx: &mut App) {
@@ -43,7 +55,7 @@ fn bind_changes(custom: &BTreeMap<String, String>, cx: &mut App) {
     let mut taken = HashSet::new();
     for (id, text) in custom {
         // The default goes - in the context it was bound in, so it doesn't win there.
-        if let Some(default) = super::commands::default_shortcut(id).and_then(Shortcut::parse) {
+        if let Some(default) = super::commands::default_shortcut(id).as_deref().and_then(Shortcut::parse) {
             bindings.push(KeyBinding::new(&default.to_gpui(), NoAction, default_context(id)));
         }
         // Each of its shortcuts runs it - the first command to take a key keeps it.

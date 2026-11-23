@@ -869,7 +869,7 @@ impl SetupPage {
     /// Puts `text` in the field as the page's own - not taken for an edit.
     fn set_field(&mut self, field: Field, text: &str, cx: &mut Context<Self>) {
         self.filled.insert(field, text.to_string());
-        if self.inputs[&field].read(cx).text().as_ref() != text {
+        if self.inputs[&field].read(cx).text() != text {
             let text = text.to_string();
             self.inputs[&field].update(cx, |input, cx| input.set_text(text, cx));
         }

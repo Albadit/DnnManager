@@ -549,7 +549,7 @@ impl SettingsPage {
     fn sync_inputs(&mut self, cx: &mut Context<Self>) {
         for (field, input) in &self.inputs {
             let text = self.form.text(*field).to_string();
-            if input.read(cx).text().as_ref() != text {
+            if input.read(cx).text() != text {
                 input.update(cx, |i, cx| i.set_text(text, cx));
             }
         }
@@ -966,7 +966,8 @@ impl SettingsPage {
 
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let k = &event.keystroke;
-        if !k.modifiers.control || k.modifiers.alt {
+        // Ctrl+F, Ctrl+PageDown / PageUp - with ⌘ on macOS.
+        if !k.modifiers.secondary() || k.modifiers.alt {
             return;
         }
         match k.key.as_str() {

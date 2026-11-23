@@ -5,7 +5,7 @@ How DNN Manager is tested, what was checked in the running app, and what wasn't 
 ## Automated tests
 
 ```powershell
-cargo test --workspace        # 819 tests (12 ignored), a few seconds once built
+cargo test --workspace        # 867 tests (12 ignored), a few seconds once built
 cargo clippy --workspace --all-targets
 ```
 
@@ -16,14 +16,15 @@ are run by hand.
 | Crate | Tests | What they hold |
 |---|---|---|
 | `dnnm-application` | 166 | The use cases against stand-in traits: their steps in order, messages word for word, undo last-first on a failure or a cancel, Keep, the questions they ask; settings rows and defaults; row texts |
-| `dnnm-dialogs` | 109 | The dialogs' and pages' rules as pure functions: settings validation and categories, shortcuts, the upgrade path file, the setup page's checks, Markdown, the guide and tour stops, release notes between versions |
+| `dnnm-dialogs` | 113 | The dialogs' and pages' rules as pure functions: settings validation and categories, shortcuts (each OS's text, macOS's ⌘ defaults), the upgrade path file, the setup page's checks, Markdown, the guide and tour stops, release notes between versions |
 | `dnnm-dnn` | 105 (2 ignored) | DNN packages and releases, the installer's web.config edits, upgrade path and plan |
 | `dnnm-system` | 81 (1 ignored) | Hosts file, ACLs, secrets (DPAPI round trip), sign-in task arguments, updates and the update helper's plan, single instance |
 | `dnnm-sql` | 77 (3 ignored) | Connection strings, LocalDB, SQL texts, docker-compose, the provisioner's checks |
 | `dnnm-wiring` | 54 (1 ignored) | The real adapters in temporary folders: zip round trips, web.config rewrites, backups and their clean-up, setup drafts |
-| `dnnm-infrastructure` | 53 | appcmd's XML and errors, web.config, `dnnmanager.db` (its schema, changed rows only), Windows calls |
+| `dnnm-infrastructure` | 56 | appcmd's XML and errors, web.config, `dnnmanager.db` (its schema, changed rows only), Windows calls, the status bar's memory / processor / disk (read for real on the OS the tests run on) |
 | `dnnm-logs` | 44 (1 ignored) | Log catalogs, the daily file, the run log, Find |
-| `dnnm-terminal` | 38 | Shell discovery, the VT screen |
+| `dnnm-terminal` | 39 | Shell discovery, the VT screen, each OS's copy and paste keys |
+| `dnnm-ui` | 35 | Text field editing for each OS (words, undo, IME, selection) and its key tables, how each OS writes a shortcut, icons, tips, selects |
 | `dnnm-keepwarm` | 28 | Ping rules and intervals, statuses |
 | `dnnm-openwith` | 27 (3 ignored) | Editors and SSMS found, the menu's entries, the clipboard secret |
 | `dnnm-diagnostics` | 23 | The Details tabs and the health checks |
