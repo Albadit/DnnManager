@@ -18,7 +18,6 @@ pub mod move_pointer;
 #[cfg(windows)]
 pub mod power;
 pub mod prereq;
-#[cfg(windows)]
 pub mod secrets;
 #[cfg(windows)]
 pub mod single_instance;
@@ -35,7 +34,7 @@ mod win;
 #[cfg(not(windows))]
 mod other;
 #[cfg(not(windows))]
-pub use other::{files, secrets, single_instance, startup, trusted, update_helper};
+pub use other::{files, single_instance, startup, trusted, update_helper};
 #[cfg(not(windows))]
 #[path = "files/backup_filter.rs"]
 #[doc(hidden)]

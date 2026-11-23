@@ -103,7 +103,9 @@ DNN Manager runs elevated; what the user's account can change is untrusted input
 - **XML**: `web_config::load_site_xml` refuses a DTD.
 - **SQL**: values as parameters; a name in SQL text quoted as `[name]` with `]` doubled. Passwords never in a command
   line, a log line, an error message or the UI.
-- **Secrets**: Credential Manager or DPAPI; never on disk in clear.
+- **Secrets** (`dnnm_system::secrets`): kept in the OS's store - Windows Credential Manager, macOS Keychain, Linux
+  Secret Service (`keyring`) - or, for the settings' SA password, AES-256-GCM with its key in that store; never on
+  disk in clear. Tests use a stand-in cipher or key, never the real store.
 - **Temporary files** read back or run: a folder only administrators can write, not `%TEMP%`.
 - **Windows only**: code that calls Windows APIs is behind `cfg(windows)`, with a non-Windows side that says the
   feature needs Windows - the workspace builds on macOS and Linux too (CI checks it).

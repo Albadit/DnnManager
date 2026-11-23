@@ -7,7 +7,7 @@
 //!
 //! Secrets: the default host password and the SQL Server login's password are read from and written to the Windows
 //! Credential Manager ([`SecretStore`]) - written only once the app said the settings were saved; the container's sa
-//! password is the settings row `sqlServer.saPassword`, decrypted to show as dots and encrypted (DPAPI) again before
+//! password is the settings row `sqlServer.saPassword`, decrypted to show as dots and encrypted (AES-256-GCM) again before
 //! it leaves the page. None is ever shown, logged or put in an event but that encrypted row.
 //!
 //! Deviations: Repositories is a field per URL (with an empty one at the end to add one) - the port has no multi-line
@@ -983,7 +983,10 @@ impl SettingsPage {
 /// The saved sa password, decrypted - or what is wrong with it.
 fn decrypt(settings: &Settings) -> Result<String, String> {
     secrets::unprotect(&rules::value(settings, "sqlServer.saPassword")).map_err(|_| {
-        "The settings have an SA password that can't be decrypted - it was encrypted by another Windows user or on another PC. Enter the password again below.".to_string()
+        format!(
+            "The settings have an SA password that can't be decrypted - it was encrypted by another user or on another computer, or its key is no longer in {}. Enter the password again below.",
+            secrets::store_name()
+        )
     })
 }
 

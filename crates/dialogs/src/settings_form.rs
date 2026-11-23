@@ -61,11 +61,11 @@ impl Field {
 /// The password fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Secret {
-    /// The default host password - in the Credential Manager.
+    /// The default host password - in the OS's credential store (`secrets::CredentialStore`).
     Host,
     /// The container login's password - the settings' `sqlServer.saPassword`, kept encrypted.
     Sa,
-    /// The SQL Server login's password - in the Credential Manager.
+    /// The SQL Server login's password - in the OS's credential store.
     Server,
 }
 
@@ -446,11 +446,14 @@ impl Form {
         }
     }
 
-    pub fn auth_hint(&self) -> &'static str {
+    pub fn auth_hint(&self) -> String {
         if self.sql_auth {
-            "The login must be able to create a database, or own it when it exists. Its password is kept in the Windows Credential Manager of your account, not with the other settings."
+            format!(
+                "The login must be able to create a database, or own it when it exists. Its password is kept in {} of your account, not with the other settings.",
+                dnnm_system::secrets::store_name()
+            )
         } else {
-            r"Each site signs in as its app pool's identity (IIS APPPOOL\<project>) - DNN Manager creates that login with your Windows account and makes it the database's owner."
+            r"Each site signs in as its app pool's identity (IIS APPPOOL\<project>) - DNN Manager creates that login with your Windows account and makes it the database's owner.".into()
         }
     }
 }

@@ -128,8 +128,12 @@ backups).
 | `backups\<project>\` | Backups made by Export, Upgrade and Restore |
 | `deployments\` | Packages made by Export for deployment |
 
-Passwords are stored encrypted for your Windows account (DPAPI) or in Windows' Credential Manager - never in plain
-text.
+Passwords are never kept in plain text. The default host password and the database server login's password are in
+your account's secure store: the Windows Credential Manager, the macOS Keychain, or on Linux the keyring (GNOME
+Keyring or KWallet - one must be running). The SA password is in the settings, encrypted with AES-256-GCM; its key is
+in that same store, so another user or another computer can't decrypt it. On macOS the Keychain may ask once to let
+DNN Manager use it - choose **Always Allow**. An SA password saved by an earlier Windows version (DPAPI) still opens
+and is saved in the new form the next time you press **Save**.
 
 ## On macOS and Linux
 

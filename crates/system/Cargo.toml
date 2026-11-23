@@ -7,6 +7,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+aes-gcm = "0.10.3"
+base64 = "0.23"
 dnnm-application.workspace = true
 dnnm-infrastructure.workspace = true
 idna = "1"
@@ -17,7 +19,6 @@ sha2 = "0.11"
 ureq = "3"
 
 [target.'cfg(windows)'.dependencies]
-base64 = "0.23"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.dependencies.windows]
@@ -46,6 +47,11 @@ features = [
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
 ]
+
+# The macOS Keychain and Linux's Secret Service for the secrets (Windows uses its Credential Manager directly); the
+# Secret Service through zbus and RustCrypto - no libdbus or OpenSSL to build or install.
+[target.'cfg(not(windows))'.dependencies]
+keyring = { version = "3.6.3", features = ["apple-native", "async-secret-service", "async-io", "crypto-rust"] }
 
 [dev-dependencies]
 tempfile.workspace = true

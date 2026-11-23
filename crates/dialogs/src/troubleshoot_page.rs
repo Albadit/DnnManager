@@ -359,22 +359,29 @@ pub fn made_at(folder: &Path) -> SystemTime {
 // ─── Resets ───────────────────────────────────────────────────────────────
 
 /// Replaces the settings with the defaults (`SettingsStore.ResetToDefaults`): every row goes, the settings version
-/// stays, and so does the container's sa password - the container was made with it - unless this Windows account
-/// can't decrypt it; then `new_sa_password` (`SqlPasswords.New`, from the app) is kept, encrypted. Off Windows there
-/// is no encryption for it (DPAPI): the settings are reset without an sa password - the SQL container is Windows'.
+/// stays, and so does the container's sa password - the container was made with it - unless this account can't
+/// decrypt it; then `new_sa_password` (`SqlPasswords.New`, from the app) is kept, encrypted. When it can't be
+/// encrypted (no keyring service on a Linux), the settings are reset without an sa password.
 pub fn reset_settings(database: &Path, new_sa_password: &str) -> Result<(), String> {
+    reset_settings_with(database, new_sa_password, &secrets::decrypts, &secrets::protect)
+}
+
+/// [`reset_settings`] with the cipher given - the tests' stand-in, so they never touch the OS's key store.
+fn reset_settings_with(
+    database: &Path,
+    new_sa_password: &str,
+    decrypts: &dyn Fn(&str) -> bool,
+    protect: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<(), String> {
     let mut connection = Connection::open(database).map_err(|e| e.to_string())?;
     connection.busy_timeout(Duration::from_secs(5)).map_err(|e| e.to_string())?;
     let tx =
         connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
     let kept: Option<String> =
         tx.query_row("SELECT value FROM settings WHERE key = ?1", [SA_PASSWORD_KEY], |r| r.get(0)).ok();
-    let sa: Option<String> = match kept.filter(|v| secrets::decrypts(v)) {
+    let sa: Option<String> = match kept.filter(|v| decrypts(v)) {
         Some(kept) if !kept.is_empty() => Some(kept),
-        #[cfg(windows)]
-        _ => Some(secrets::protect(new_sa_password)?),
-        #[cfg(not(windows))]
-        _ => secrets::protect(new_sa_password).ok(),
+        _ => protect(new_sa_password).ok(),
     };
     tx.execute("DELETE FROM settings", []).map_err(|e| e.to_string())?;
     tx.execute(
@@ -871,44 +878,44 @@ mod tests {
         assert_eq!(days_from_civil(2000, 3, 1), 11_017);
     }
 
-    // The sa password is encrypted with DPAPI, which only Windows has.
-    #[cfg(windows)]
-    #[test]
-    fn a_settings_reset_keeps_only_the_version_and_the_sa_password() {
-        let (_dir, cleaner) = setup();
-        let c = Connection::open(&cleaner.database).unwrap();
-        let kept = secrets::protect("Old-Sa-1").unwrap();
-        c.execute("INSERT INTO settings VALUES (?1, ?2)", [SA_PASSWORD_KEY, &kept]).unwrap();
-        reset_settings(&cleaner.database, "New-Sa-1").unwrap();
-        let rows: BTreeMap<String, String> = c
-            .prepare("SELECT key, value FROM settings")
+    /// A stand-in cipher: "enc:" and the password - what a key in another account's store looks like is "enc:" with
+    /// "!" in it, which doesn't decrypt.
+    fn stand_in_decrypts(value: &str) -> bool {
+        value.starts_with("enc:") && !value.contains('!')
+    }
+
+    fn stand_in_protect(plain: &str) -> Result<String, String> {
+        Ok(format!("enc:{plain}"))
+    }
+
+    fn rows_of(c: &Connection) -> BTreeMap<String, String> {
+        c.prepare("SELECT key, value FROM settings")
             .unwrap()
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
             .unwrap()
             .collect::<Result<_, _>>()
-            .unwrap();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows["version"], "3");
-        assert_eq!(secrets::unprotect(&rows[SA_PASSWORD_KEY]).unwrap(), "Old-Sa-1");
-
-        // One this account can't decrypt goes - the new one is kept, encrypted.
-        c.execute("UPDATE settings SET value = 'dpapi:AAAA' WHERE key = ?1", [SA_PASSWORD_KEY]).unwrap();
-        reset_settings(&cleaner.database, "New-Sa-1").unwrap();
-        let sa: String =
-            c.query_row("SELECT value FROM settings WHERE key = ?1", [SA_PASSWORD_KEY], |r| r.get(0)).unwrap();
-        assert_eq!(secrets::unprotect(&sa).unwrap(), "New-Sa-1");
+            .unwrap()
     }
 
-    // Off Windows nothing can encrypt the sa password: the reset keeps only the version.
-    #[cfg(not(windows))]
     #[test]
-    fn off_windows_a_settings_reset_keeps_only_the_version() {
+    fn a_settings_reset_keeps_only_the_version_and_the_sa_password() {
         let (_dir, cleaner) = setup();
-        reset_settings(&cleaner.database, "New-Sa-1").unwrap();
         let c = Connection::open(&cleaner.database).unwrap();
-        let keys: Vec<String> =
-            c.prepare("SELECT key FROM settings").unwrap().query_map([], |r| r.get(0)).unwrap().flatten().collect();
-        assert_eq!(keys, vec!["version".to_string()]);
+        c.execute("INSERT INTO settings VALUES (?1, 'enc:Old-Sa-1')", [SA_PASSWORD_KEY]).unwrap();
+        reset_settings_with(&cleaner.database, "New-Sa-1", &stand_in_decrypts, &stand_in_protect).unwrap();
+        let rows = rows_of(&c);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows["version"], "3");
+        assert_eq!(rows[SA_PASSWORD_KEY], "enc:Old-Sa-1", "the one the container was made with");
+
+        // One this account can't decrypt goes - the new one is kept, encrypted.
+        c.execute("UPDATE settings SET value = 'enc:other-account!' WHERE key = ?1", [SA_PASSWORD_KEY]).unwrap();
+        reset_settings_with(&cleaner.database, "New-Sa-1", &stand_in_decrypts, &stand_in_protect).unwrap();
+        assert_eq!(rows_of(&c)[SA_PASSWORD_KEY], "enc:New-Sa-1");
+
+        // Nothing can encrypt it (no keyring service): reset without one.
+        reset_settings_with(&cleaner.database, "New-Sa-1", &|_| false, &|_| Err("no keyring".into())).unwrap();
+        assert_eq!(rows_of(&c).keys().collect::<Vec<_>>(), ["version"]);
     }
 
     #[derive(Default)]

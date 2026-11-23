@@ -18,7 +18,7 @@ are run by hand.
 | `dnnm-application` | 166 | The use cases against stand-in traits: their steps in order, messages word for word, undo last-first on a failure or a cancel, Keep, the questions they ask; settings rows and defaults; row texts |
 | `dnnm-dialogs` | 113 | The dialogs' and pages' rules as pure functions: settings validation and categories, shortcuts (each OS's text, macOS's ⌘ defaults), the upgrade path file, the setup page's checks, Markdown, the guide and tour stops, release notes between versions |
 | `dnnm-dnn` | 105 (2 ignored) | DNN packages and releases, the installer's web.config edits, upgrade path and plan |
-| `dnnm-system` | 81 (1 ignored) | Hosts file, ACLs, secrets (DPAPI round trip), sign-in task arguments, updates and the update helper's plan, single instance |
+| `dnnm-system` | 86 (1 ignored) | Hosts file, ACLs, secrets (AES-256-GCM with stand-in keys, reading old DPAPI values), sign-in task arguments, updates and the update helper's plan, single instance |
 | `dnnm-sql` | 77 (3 ignored) | Connection strings, LocalDB, SQL texts, docker-compose, the provisioner's checks |
 | `dnnm-wiring` | 54 (1 ignored) | The real adapters in temporary folders: zip round trips, web.config rewrites, backups and their clean-up, setup drafts |
 | `dnnm-infrastructure` | 56 | appcmd's XML and errors, web.config, `dnnmanager.db` (its schema, changed rows only), Windows calls, the status bar's memory / processor / disk (read for real on the OS the tests run on) |
