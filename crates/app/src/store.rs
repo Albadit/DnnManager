@@ -18,7 +18,7 @@ use dnnm_application::use_cases::{SiteAction, control_sites, iis_server};
 use dnnm_infrastructure::app_db::AppDatabase;
 use dnnm_infrastructure::host_resources::{HostResources, HostSampler};
 use dnnm_infrastructure::process_stats::ProcessSampler;
-use dnnm_infrastructure::site_folder::{folder_size, read_folder};
+use dnnm_infrastructure::site_folder::{folder_projects, folder_size, read_folder};
 use dnnm_keepwarm::{KeepWarmConfig, KeepWarmEvent, KeepWarmService, KeepWarmSettings, KeepWarmSite, KeepWarmStatus};
 use futures::StreamExt;
 
@@ -1068,6 +1068,15 @@ fn read_snapshot(
 ) -> Snapshot {
     let iis_state = iis.server_state();
     let read = iis.site_runtimes().map_err(|e| e.0);
+    // No IIS off Windows: the DNN folders in the projects folder are the projects.
+    if !cfg!(windows) && read.is_err() {
+        let sizes = sizes.lock().map(|m| m.clone()).unwrap_or_default();
+        let mut projects = folder_projects(projects_folder);
+        for p in &mut projects {
+            p.size_bytes = sizes.get(&p.name).copied();
+        }
+        return Snapshot { projects: Ok(projects), iis_state, all_sites: None };
+    }
     let all_sites = read.as_ref().ok().map(|sites| sites.iter().map(|(n, s)| (n.clone(), s.clone())).collect());
     let projects = read.map(|sites| {
         let sizes = sizes.lock().map(|m| m.clone()).unwrap_or_default();

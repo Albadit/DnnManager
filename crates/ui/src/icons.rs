@@ -544,11 +544,11 @@ impl Icon {
             Icon::Terminal => (format!("{} M4.5,6 L6.5,8 L4.5,10 M8.5,10.5 H11.5", rounded_rect(1.5, 2.5, 14.5, 13.5, 1.0)), String::new()),
             Icon::Error => (format!("{} M5.75,5.75 L10.25,10.25 M10.25,5.75 L5.75,10.25", circle(8.0, 8.0, 6.0)), String::new()),
             Icon::Info => (format!("{} M8,7.5 V11.5", circle(8.0, 8.0, 6.0)), circle(8.0, 5.25, 1.0)),
-            // The ? fills most of the ring: its hook 4.2 across and the dot 1.8 - drawn smaller (3.5, 2), both were a
-            // smudge of pixels at 13 px.
+            // The ? sits inside the ring with room around it: its hook 3.6 across and the dot 1.7 (it was 4.2 and 1.8,
+            // which filled the ring). Much smaller than this it turns into a smudge of pixels at 13 px.
             Icon::Question => (
-                format!("{} M5.9,6.4 A2.1,2.1 0 1 1 8.95,8.27 C8.3,8.6 8,9 8,9.6 V9.9", circle(8.0, 8.0, 6.0)),
-                circle(8.0, 11.9, 0.9),
+                format!("{} M6.22,6.64 A1.78,1.78 0 1 1 8.81,8.23 C8.26,8.51 8,8.85 8,9.36 V9.7", circle(8.0, 8.0, 6.0)),
+                circle(8.0, 11.35, 0.85),
             ),
             Icon::Warning => (
                 "M7.13,2.5 A1,1 0 0 1 8.87,2.5 L14.35,12 A1,1 0 0 1 13.48,13.5 H2.52 A1,1 0 0 1 1.65,12 Z M8,6 V9".into(),

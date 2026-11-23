@@ -124,7 +124,6 @@ pub fn matches_all_words(search: &str, keywords: &str) -> bool {
 
 /// The default of every scalar setting the page reads - a missing row has it.
 const DEFAULTS: &[(&str, &str)] = &[
-    ("projects.baseDirectory", r"C:\DNN"),
     ("projects.hostnameSuffix", "dnndev.me"),
     ("projects.sitePort", "80"),
     ("projects.keepDnnPackages", "false"),
@@ -179,7 +178,16 @@ pub fn value(settings: &Settings, key: &str) -> String {
         .rows()
         .get(key)
         .cloned()
-        .unwrap_or_else(|| DEFAULTS.iter().find(|(k, _)| *k == key).map(|(_, v)| v.to_string()).unwrap_or_default())
+        .unwrap_or_else(|| default_value(key))
+}
+
+/// A setting's default: from the table - the projects folder's depends on the OS
+/// ([`dnnm_application::settings::default_projects_folder`]).
+fn default_value(key: &str) -> String {
+    if key == "projects.baseDirectory" {
+        return dnnm_application::settings::default_projects_folder();
+    }
+    DEFAULTS.iter().find(|(k, _)| *k == key).map(|(_, v)| v.to_string()).unwrap_or_default()
 }
 
 /// A true/false setting, as `bool.Parse` reads it; false for anything else.

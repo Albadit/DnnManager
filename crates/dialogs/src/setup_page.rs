@@ -676,6 +676,10 @@ pub struct SetupPage {
     secrets: PageSecrets,
     sites: Option<Vec<(String, IisSiteRuntime)>>,
     focus: FocusHandle,
+    /// Why the page can't be used now ([`lock_reason`]): its form is dimmed, the mouse and Tab pass it by.
+    locked: Option<SharedString>,
+    /// The form's region, made inert while the page is locked.
+    form_focus: FocusHandle,
     inputs: BTreeMap<Field, Entity<TextInput>>,
     /// What the page itself last put in each field - a change to anything else is the user's.
     filled: BTreeMap<Field, String>,
@@ -763,6 +767,8 @@ impl SetupPage {
             secrets,
             sites,
             focus: cx.focus_handle(),
+            locked: None,
+            form_focus: cx.focus_handle(),
             inputs,
             filled: BTreeMap::new(),
             host_password,
@@ -817,6 +823,14 @@ impl SetupPage {
             self.load_database_defaults(cx);
         }
         self.update_state(cx);
+    }
+
+    /// Locks the page with the reason it says (None: open again) - see [`lock_reason`].
+    pub fn set_locked(&mut self, reason: Option<SharedString>, cx: &mut Context<Self>) {
+        if self.locked != reason {
+            self.locked = reason;
+            cx.notify();
+        }
     }
 
     /// IIS's sites as the window has read them - a site added meanwhile may have the host name typed here.
@@ -1975,6 +1989,35 @@ impl Render for SetupPage {
                 .when(!still_needed.is_empty(), |d| d.child(div().max_w(px(520.0)).child(hint(still_needed, cx)))),
         );
 
+        // Locked: why, over the form; the form dimmed, under a layer that takes the mouse, and passed over by Tab.
+        let notice = self.locked.clone().map(|reason| {
+            div()
+                .id("setup-locked")
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .pad(px(10.0), px(14.0))
+                .rounded(theme.metrics.card_radius)
+                .border_1()
+                .border_color(c.card_border)
+                .bg(c.card_bg)
+                .child(ui::icon(dnnm_ui::Icon::Info, c.accent, cx))
+                .child(div().flex_1().min_w_0().child(reason))
+        });
+        let form = match self.locked.is_some() {
+            true => dnnm_ui::focus::inert(div().relative().w_full(), &self.form_focus)
+                .child(div().opacity(0.45).child(cards))
+                .child(
+                    div()
+                        .id("setup-locked-cover")
+                        .absolute()
+                        .inset_0()
+                        .occlude()
+                        .cursor(gpui::CursorStyle::OperationNotAllowed),
+                )
+                .into_any_element(),
+            false => cards.into_any_element(),
+        };
         let column = div()
             .flex()
             .flex_col()
@@ -1984,12 +2027,25 @@ impl Render for SetupPage {
             .gap(px(16.0))
             .pad(px(22.0), px(28.0))
             .child(header)
-            .child(cards);
+            .children(notice)
+            .child(form);
 
         // Centred at most 860 wide: a row that gives the column a definite width, so its text wraps (auto margins
         // don't).
         page.child(div().flex().justify_center().w_full().child(column))
     }
+}
+
+/// Why New project can't be used now: IIS is Windows' only (`windows`: this is Windows), or an operation is
+/// running (`running`, its title) - one at a time, and the page shows again what was made once it is done.
+pub fn lock_reason(windows: bool, running: Option<&str>) -> Option<String> {
+    if !windows {
+        return Some(
+            "New project needs IIS, which runs only on Windows - on this system a project can't be made or imported."
+                .into(),
+        );
+    }
+    running.map(|title| format!("{title} is running - this page opens again when it is done. The panel below shows each step."))
 }
 
 #[cfg(test)]

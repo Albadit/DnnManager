@@ -127,7 +127,7 @@ fn disk_of<'a>(folder: &Path, mounts: impl IntoIterator<Item = (&'a Path, u64, u
 }
 
 /// Where the projects go, as far as it exists: the folder itself, else the nearest folder above it that does. A
-/// folder that isn't a full path on this OS (the Windows default `C:\DNN` on a Mac) gives the home folder.
+/// folder that isn't a full path on this OS (a Windows path such as `C:\DNN` kept from Windows) gives the home folder.
 #[cfg_attr(windows, allow(dead_code))]
 fn existing_folder(folder: &Path, home: Option<&Path>) -> Option<std::path::PathBuf> {
     let start = if folder.is_absolute() { folder } else { home? };

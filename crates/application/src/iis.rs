@@ -14,6 +14,8 @@ pub mod states {
     pub const STOPPING: &str = "Stopping";
     pub const STOPPED: &str = "Stopped";
     pub const UNKNOWN: &str = "Unknown";
+    /// Not an IIS site at all: a project's folder, listed where there is no IIS (macOS, Linux).
+    pub const NOT_IN_IIS: &str = "NotInIis";
 
     /// Started - however it is capitalised.
     pub fn is_started(state: &str) -> bool {

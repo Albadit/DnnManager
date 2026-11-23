@@ -98,6 +98,10 @@ the database connection and the DNN host password.
 Creates a website from a fresh DNN release (downloaded and installed for you), or imports one from a `.zip` of its
 files and its `.bacpac` / `.bak`. Fill in the name, the host name and port, the DNN version, the administrator account
 and the database; **Still needed** lists what is missing. What you type is kept until the project is created.
+Every password box has an eye button that shows and hides what you typed.
+
+While a project is being made (or any other operation runs), the page is dimmed and can't be used - a note above it
+says what runs, and it opens again when that is done. On macOS and Linux it stays locked: it needs IIS.
 
 ## Settings and Troubleshoot
 
@@ -129,11 +133,13 @@ text.
 
 ## On macOS and Linux
 
-IIS exists only on Windows, so there are no websites to manage: the Projects page says IIS isn't available on this
-system, and the actions that need IIS, Windows or its tools aren't offered or say so. The window, Settings, the
-release lists, the status bar's memory, processor and disk, and checking a SQL Server connection with a SQL login
-work. The disk shown is that of the projects folder - or, while it is still the Windows default `C:\DNN`, of your
-home folder. Shortcuts take ⌘ there ([the window](#the-window)).
+IIS exists only on Windows, so there are no IIS websites. Instead **Projects** lists the DNN folders in your
+projects folder (**Settings → Projects**) - every folder with `bin/DotNetNuke.dll` - with their DNN version and
+database, as **Folder - no IIS**: there is nothing to start or stop, and the actions that need IIS, Windows or its
+tools aren't offered or say so. The window, Settings, the release lists, the status bar's memory, processor and
+disk, and checking a SQL Server connection with a SQL login work. **New project** is shown but locked. The projects
+folder is `DNN` in your home folder unless you choose another (`C:\DNN` on Windows); the disk shown is its disk.
+Shortcuts take ⌘ there ([the window](#the-window)).
 
 ## When something goes wrong
 

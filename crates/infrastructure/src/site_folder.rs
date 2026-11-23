@@ -50,6 +50,24 @@ pub fn read_folder(project: &mut ProjectState, projects_folder: &Path) {
     project.database_problem = problem;
 }
 
+/// The DNN installs in the projects folder, as rows - where there is no IIS to list the sites (macOS, Linux): each
+/// folder in it with `bin/DotNetNuke.dll`, named by the folder, sorted by name.
+pub fn folder_projects(projects_folder: &Path) -> Vec<ProjectState> {
+    let Ok(entries) = std::fs::read_dir(projects_folder) else { return Vec::new() };
+    let mut projects: Vec<ProjectState> = entries
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| {
+            let name = e.file_name().to_str()?.to_string();
+            let mut project = ProjectState::from_folder(name, e.path());
+            read_folder(&mut project, projects_folder);
+            project.dnn_version.is_some().then_some(project)
+        })
+        .collect();
+    projects.sort_by_key(|p| p.name.to_lowercase());
+    projects
+}
+
 /// The size of everything in a folder, not following links (a junction could point anywhere, even at itself).
 pub fn folder_size(directory: &Path) -> Option<u64> {
     let mut total = 0u64;
@@ -127,6 +145,35 @@ mod tests {
         assert_eq!(p.database_name.as_deref(), Some("x"));
         assert_eq!(p.database_server.as_deref(), Some("localhost,1433"));
         assert_eq!(p.database_problem, None);
+    }
+
+    /// A DotNetNuke.dll with only a version resource's fixed part - 10.4.1.
+    fn fake_dnn_dll(site: &Path) {
+        std::fs::create_dir_all(site.join("bin")).unwrap();
+        let mut bytes = vec![0u8; 64];
+        for word in [0xFEEF04BDu32, 0x0001_0000, (10 << 16) | 4, 1 << 16] {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        std::fs::write(site.join("bin").join("DotNetNuke.dll"), bytes).unwrap();
+    }
+
+    #[test]
+    fn without_iis_the_dnn_folders_are_the_projects() {
+        let base = tempfile::tempdir().unwrap();
+        fake_dnn_dll(&base.path().join("shop"));
+        fake_dnn_dll(&base.path().join("Blog"));
+        std::fs::create_dir(base.path().join("not-dnn")).unwrap();
+        std::fs::write(base.path().join("file.txt"), "x").unwrap();
+        let projects = folder_projects(base.path());
+        let names: Vec<&str> = projects.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Blog", "shop"]);
+        assert_eq!(projects[1].dnn_version.as_deref(), Some("10.4.1"));
+        assert!(projects[1].in_projects_folder && projects[1].site_url.is_empty());
+        assert_eq!(
+            dnnm_application::project::view::run_state(&projects[1].site),
+            dnnm_application::project::SiteRunState::NotInIis
+        );
+        assert!(folder_projects(&base.path().join("missing")).is_empty());
     }
 
     #[test]

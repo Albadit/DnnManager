@@ -33,7 +33,7 @@ use dnnm_ui::theme::Theme;
 use dnnm_ui::{self as ui, ButtonKind, Pad, Tip, icons};
 
 use crate::about::{self, Health, MachineFacts, UpdateStatus};
-use crate::password_input::{PasswordChanged, PasswordInput};
+use crate::host_password::{PasswordField, PasswordFieldChanged};
 use crate::setting_rules::{self as rules, Category};
 use crate::settings_cards::{DockerCardState, IisCardState, SqlCardState};
 use crate::settings_form::{CONTAINER, Field, Form, LOCAL_DB_FILE, SQL_SERVER, Secret, uses_login};
@@ -230,7 +230,7 @@ pub struct SettingsPage {
     category: Category,
     search: Entity<TextInput>,
     inputs: BTreeMap<Field, Entity<TextInput>>,
-    passwords: BTreeMap<Secret, Entity<PasswordInput>>,
+    passwords: BTreeMap<Secret, Entity<PasswordField>>,
     release_inputs: Vec<Entity<TextInput>>,
     release_subscriptions: Vec<Subscription>,
     open_select: Option<&'static str>,
@@ -311,9 +311,9 @@ impl SettingsPage {
         }
         let mut passwords = BTreeMap::new();
         for secret in [Secret::Host, Secret::Sa, Secret::Server] {
-            let input = cx.new(PasswordInput::new);
-            subscriptions.push(cx.subscribe(&input, move |this: &mut Self, input, _: &PasswordChanged, cx| {
-                let password = input.read(cx).password().to_string();
+            let input = cx.new(PasswordField::new);
+            subscriptions.push(cx.subscribe(&input, move |this: &mut Self, input, _: &PasswordFieldChanged, cx| {
+                let password = input.read(cx).password(cx);
                 if this.form.password(secret) != password {
                     this.form.set_password(secret, password);
                     this.edited(cx);
@@ -1063,21 +1063,9 @@ impl SettingsPage {
         dialog::text_field(&self.inputs[&field], window, cx)
     }
 
-    fn password_box(&self, secret: Secret, window: &Window, cx: &App) -> Div {
-        let input = &self.passwords[&secret];
-        let theme = Theme::get(cx);
-        let c = theme.colors;
-        let focused = input.read(cx).focus_handle(cx).is_focused(window);
-        div()
-            .flex()
-            .items_center()
-            .h(theme.metrics.control_height)
-            .pad(px(0.0), px(6.0))
-            .rounded(theme.metrics.control_radius)
-            .border_1()
-            .border_color(if focused { c.focus_border } else { c.field_border })
-            .bg(c.input_bg)
-            .child(input.clone())
+    /// A password with its eye, which shows and hides it (the same box as the dialogs').
+    fn password_box(&self, secret: Secret) -> Div {
+        div().child(self.passwords[&secret].clone())
     }
 
     fn search_box(&self, input: &Entity<TextInput>, window: &Window, cx: &App) -> Div {
@@ -1103,8 +1091,8 @@ impl SettingsPage {
         column(4.0).flex_1().child(dialog::label(label, cx)).child(self.text_box(field, window, cx))
     }
 
-    fn labelled_password(&self, label: &'static str, secret: Secret, window: &Window, cx: &App) -> Div {
-        column(4.0).flex_1().child(dialog::label(label, cx)).child(self.password_box(secret, window, cx))
+    fn labelled_password(&self, label: &'static str, secret: Secret, cx: &App) -> Div {
+        column(4.0).flex_1().child(dialog::label(label, cx)).child(self.password_box(secret))
     }
 
     /// A choice from a list (`ComboBox`): the options open over the page under it.
@@ -1645,7 +1633,7 @@ impl SettingsPage {
                     .flex()
                     .gap(px(12.0))
                     .child(self.labelled("Host username", Field::HostUsername, window, cx))
-                    .child(self.labelled_password("Host password", Secret::Host, window, cx)),
+                    .child(self.labelled_password("Host password", Secret::Host, cx)),
             )
             .child(
                 div()
@@ -1890,7 +1878,7 @@ impl SettingsPage {
                         .flex()
                         .gap(px(12.0))
                         .child(self.labelled("Username", Field::ContainerUser, window, cx))
-                        .child(self.labelled_password("Password", Secret::Sa, window, cx)),
+                        .child(self.labelled_password("Password", Secret::Sa, cx)),
                 ),
         );
 
@@ -1942,7 +1930,7 @@ impl SettingsPage {
                                                 .flex()
                                                 .gap(px(12.0))
                                                 .child(self.labelled("Username", Field::ServerUser, window, cx))
-                                                .child(self.labelled_password("Password", Secret::Server, window, cx)),
+                                                .child(self.labelled_password("Password", Secret::Server, cx)),
                                         )
                                     }),
                             ),

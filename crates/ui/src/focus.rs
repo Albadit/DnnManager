@@ -142,6 +142,24 @@ struct Layers {
 
 thread_local! {
     static LAYERS: RefCell<Layers> = RefCell::new(Layers::default());
+    /// The inert regions drawn in the last frame ([`inert`]).
+    static INERT: RefCell<Vec<FocusHandle>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Makes `element` inert while it is drawn - a page that can't be used now: Tab and Shift+Tab pass over its controls,
+/// and the focus leaves it if it was inside. (The mouse is the caller's: an occluding layer over it.)
+pub fn inert<E: InteractiveElement + ParentElement>(element: E, handle: &FocusHandle) -> E {
+    let marked = handle.clone();
+    element.track_focus(handle).child(
+        canvas(|_, _, _| {}, move |_, _, _, _| INERT.with(|r| r.borrow_mut().push(marked)))
+            .absolute()
+            .size_0(),
+    )
+}
+
+/// Whether the focus is inside an inert region.
+fn in_inert(window: &Window, cx: &App) -> bool {
+    INERT.with(|r| r.borrow().iter().any(|h| h.contains_focused(window, cx)))
 }
 
 /// Makes `element` a layer that holds the focus while it is drawn - a dialog, a prompt, a menu: Tab and Shift+Tab go
@@ -163,6 +181,7 @@ pub fn begin_frame(root: &FocusHandle, window: &mut Window) {
     let schedule = LAYERS.with(|l| {
         let mut l = l.borrow_mut();
         l.painted.clear();
+        INERT.with(|r| r.borrow_mut().clear());
         l.root = Some(root.clone());
         !std::mem::replace(&mut l.checking, true)
     });
@@ -226,10 +245,10 @@ fn after_frame(window: &mut Window, cx: &mut App) {
             }
         }
     }
-    // Nothing drawn has the focus - its element gone: the keys go to the window again (GPUI would send them nowhere,
-    // and Tab would start again from the top).
+    // Nothing drawn has the focus - its element gone - or it is in a region gone inert: the keys go to the window
+    // again (GPUI would send them nowhere, and Tab would start again from the top).
     if let Some(root) = root.as_ref()
-        && !root.contains_focused(window, cx)
+        && (!root.contains_focused(window, cx) || in_inert(window, cx))
     {
         window.focus(root);
     }
@@ -254,13 +273,16 @@ pub fn move_focus(forward: bool, window: &mut Window, cx: &mut App) {
             window.focus_prev();
         }
         let now = window.focused(cx);
-        let Some(layer) = layer.as_ref() else { return };
-        if layer.contains_focused(window, cx) {
+        // A control of the open layer (or of the window), not in an inert region.
+        if layer.as_ref().is_none_or(|l| l.contains_focused(window, cx)) && !in_inert(window, cx) {
             return;
         }
         if now.is_none() || now == first {
-            // No control in the layer: the layer itself.
-            window.focus(layer);
+            // No control to go to: the layer itself, or the window.
+            let fallback = layer.clone().or_else(|| LAYERS.with(|l| l.borrow().root.clone()));
+            if let Some(fallback) = fallback {
+                window.focus(&fallback);
+            }
             return;
         }
         if first.is_none() {

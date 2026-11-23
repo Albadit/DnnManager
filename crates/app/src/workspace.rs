@@ -160,6 +160,11 @@ pub fn set_app_menus(cx: &mut App) {
     ]);
 }
 
+/// Why New project is locked now: off Windows (no IIS), or while an operation runs.
+fn setup_lock(store: &Store) -> Option<SharedString> {
+    dnnm_dialogs::setup_page::lock_reason(cfg!(windows), store.running_title().as_ref().map(|t| t.as_ref())).map(Into::into)
+}
+
 /// A switch of the Find bar's (`c`ase, `w`hole word, `r`egular expression): its key binding and how it is written -
 /// Alt+C, or ⌥⌘C on macOS, where ⌥C alone types ç.
 fn find_option_key(letter: char, os: Os) -> (String, String) {
@@ -434,12 +439,14 @@ impl Workspace {
                     }
                 }
                 let read = store.read(cx).sites_read;
-                if let Some(setup) = this.setup.clone()
-                    && read != this.setup_sites_read
-                {
-                    this.setup_sites_read = read;
-                    let sites = store.read(cx).all_sites.clone();
-                    setup.update(cx, |p, cx| p.set_sites(sites, cx));
+                if let Some(setup) = this.setup.clone() {
+                    if read != this.setup_sites_read {
+                        this.setup_sites_read = read;
+                        let sites = store.read(cx).all_sites.clone();
+                        setup.update(cx, |p, cx| p.set_sites(sites, cx));
+                    }
+                    let lock = setup_lock(store.read(cx));
+                    setup.update(cx, |p, cx| p.set_locked(lock, cx));
                 }
                 cx.notify();
             }),
@@ -682,7 +689,9 @@ impl Workspace {
             Arc::new(dnnm_wiring::setup_project::page_lookups(&services));
         let (settings, sites) = (store.settings.clone(), store.all_sites.clone());
         self.setup_sites_read = store.sites_read;
+        let lock = setup_lock(store);
         let page = cx.new(|cx| SetupPage::new(lookups, settings, sites, window, cx));
+        page.update(cx, |p, cx| p.set_locked(lock, cx));
         let sub = cx.subscribe_in(&page, window, |ws, page, e: &SetupPageEvent, _, cx| {
             let services = ws.store.read(cx).services();
             let page = page.downgrade();

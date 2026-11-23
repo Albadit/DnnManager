@@ -51,9 +51,22 @@ impl PanelAlignment {
     }
 }
 
-/// The defaults of `UserSettings` for what this build reads. A missing row reads as its default.
+/// The projects folder when none is chosen: `C:\DNN` on Windows; on macOS and Linux `DNN` in the home folder
+/// (`/Users/you/DNN`, `/home/you/DNN`) - a Windows path is no folder there.
+pub fn default_projects_folder() -> String {
+    let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(std::path::PathBuf::from);
+    projects_folder_for(cfg!(windows), home.as_deref())
+}
+
+fn projects_folder_for(windows: bool, home: Option<&std::path::Path>) -> String {
+    if windows {
+        return r"C:\DNN".into();
+    }
+    home.unwrap_or(std::path::Path::new("/")).join("DNN").display().to_string()
+}
+
+/// The defaults of `UserSettings` for what this build reads (the projects folder's is [`default_projects_folder`]). A missing row reads as its default.
 const DEFAULTS: &[(&str, &str)] = &[
-    ("projects.baseDirectory", r"C:\DNN"),
     ("projects.hostnameSuffix", "dnndev.me"),
     ("projects.sitePort", "80"),
     ("projects.keepWarm.pingMinutes", "5"),
@@ -209,7 +222,7 @@ impl Settings {
 
     /// The projects folder: a site whose folder is inside it is a DNN Manager project.
     pub fn base_directory(&self) -> String {
-        self.get("projects.baseDirectory").unwrap_or(r"C:\DNN").to_string()
+        self.get("projects.baseDirectory").map_or_else(default_projects_folder, str::to_string)
     }
 
     /// The Projects table's optional columns, in the order chosen.
@@ -239,11 +252,23 @@ mod tests {
     }
 
     #[test]
+    fn the_projects_folder_is_c_dnn_on_windows_and_in_the_home_folder_elsewhere() {
+        use std::path::Path;
+        assert_eq!(projects_folder_for(true, Some(Path::new("/Users/ann"))), r"C:\DNN");
+        let mac = projects_folder_for(false, Some(Path::new("/Users/ann")));
+        assert_eq!(Path::new(&mac), Path::new("/Users/ann/DNN"));
+        assert_eq!(Path::new(&projects_folder_for(false, None)), Path::new("/DNN"));
+        if cfg!(windows) {
+            assert_eq!(default_projects_folder(), r"C:\DNN");
+        }
+    }
+
+    #[test]
     fn missing_rows_read_as_defaults() {
         let s = Settings::default();
         assert_eq!(s.theme(), ThemeChoice::System);
         assert_eq!(s.font_size(), 13);
-        assert_eq!(s.base_directory(), r"C:\DNN");
+        assert_eq!(s.base_directory(), default_projects_folder());
         assert_eq!(s.project_columns().len(), 8);
         assert!(s.animations() && s.status_bar_visible());
     }

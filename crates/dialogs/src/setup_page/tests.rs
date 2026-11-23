@@ -292,3 +292,15 @@ fn defaults_come_from_the_settings() {
     let other = database_defaults(&Settings::default(), &secrets, DbType::SqlServer, "shop");
     assert_eq!((other.server.as_str(), other.sql_auth, other.password.as_str()), (r".\SQLEXPRESS", false, ""));
 }
+
+#[test]
+fn the_page_is_locked_off_windows_and_while_something_runs() {
+    assert_eq!(lock_reason(true, None), None);
+    assert_eq!(
+        lock_reason(true, Some("Create 'test'")).as_deref(),
+        Some("Create 'test' is running - this page opens again when it is done. The panel below shows each step.")
+    );
+    let elsewhere = lock_reason(false, None).unwrap();
+    assert!(elsewhere.contains("only on Windows"), "{elsewhere}");
+    assert_eq!(lock_reason(false, Some("Create 'test'")).as_deref(), Some(elsewhere.as_str()), "IIS first");
+}

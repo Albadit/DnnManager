@@ -752,9 +752,12 @@ impl ProjectsPage {
         }
         Some(match () {
             _ if store.connection == Connection::Connecting => "Loading projects…".into(),
-            // IIS is a Windows web server: elsewhere there are no sites to list.
-            _ if store.iis_state == IisServerState::NotInstalled && !cfg!(windows) => {
-                "IIS runs only on Windows - this system has no websites for DNN Manager to manage.".into()
+            // IIS is a Windows web server: elsewhere the projects folder's DNN folders are listed.
+            _ if !cfg!(windows) && store.projects.is_empty() && q.is_empty() => {
+                format!(
+                    "IIS runs only on Windows, so the DNN folders in your projects folder are listed here - {} has none. Choose the folder in Settings → Projects.",
+                    store.settings.base_directory()
+                )
             }
             _ if store.iis_state == IisServerState::NotInstalled => {
                 "IIS isn't installed - enable its Windows features in Settings → IIS.".into()
@@ -993,7 +996,13 @@ impl Render for ProjectsPage {
                 this.columns_open = !this.columns_open;
                 cx.notify();
             }))
-            .child(ui::icon(Icon::Columns, if self.columns_open { c.link_fg } else { c.text_primary }, cx));
+            // At the sidebar's size: at 13 px its frame came out 10 px wide, small in the 32 px button.
+            .child(ui::icon_sized(
+                Icon::Columns,
+                dnnm_ui::IconSize::Nav,
+                if self.columns_open { c.link_fg } else { c.text_primary },
+                cx,
+            ));
 
         let only_running = self.only_running;
         let toolbar = div()

@@ -59,6 +59,22 @@ pub struct ProjectState {
 
 impl ProjectState {
     /// A project as IIS alone tells it - before its folder has been read.
+    /// A project's folder where there is no IIS: no site, no bindings, no address - only what the folder says.
+    pub fn from_folder(name: String, directory: std::path::PathBuf) -> Self {
+        Self::from_site(
+            name,
+            IisSiteRuntime {
+                id: 0,
+                state: states::NOT_IN_IIS.into(),
+                app_pool: String::new(),
+                app_pool_state: None,
+                worker_process_ids: Vec::new(),
+                bindings: Vec::new(),
+                physical_path: directory,
+            },
+        )
+    }
+
     pub fn from_site(name: String, site: IisSiteRuntime) -> Self {
         Self {
             site_url: site.browse_url().unwrap_or_default(),
@@ -89,6 +105,8 @@ pub enum SiteRunState {
     Stopping,
     Stopped,
     Unknown,
+    /// A project's folder without an IIS site (no IIS on this system): nothing to start or stop.
+    NotInIis,
 }
 
 /// The row texts of the Projects table.
@@ -109,6 +127,7 @@ pub mod view {
             states::STOPPED => SiteRunState::Stopped,
             states::STARTING => SiteRunState::Starting,
             states::STOPPING => SiteRunState::Stopping,
+            states::NOT_IN_IIS => SiteRunState::NotInIis,
             _ => SiteRunState::Unknown,
         }
     }
@@ -126,6 +145,7 @@ pub mod view {
             SiteRunState::Starting => "Starting…",
             SiteRunState::Stopping => "Stopping…",
             SiteRunState::Unknown => "State unknown",
+            SiteRunState::NotInIis => "Folder - no IIS",
         }
     }
 
