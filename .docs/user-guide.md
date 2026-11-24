@@ -35,10 +35,10 @@ menu) say whether there is a newer release.
 
 | Part | What it does |
 |---|---|
-| Activity bar | The icons on the left: **Projects** (every DNN website in IIS) and **New project**; the gear opens Settings, themes, Customize Layout, Troubleshoot and Check for Updates. Customize Layout hides it or puts it on the right. |
+| Activity bar | The icons on the left: **Projects** (every DNN website in IIS), **New project** and **Source Control**; the gear opens Settings, themes, Customize Layout, Troubleshoot and Check for Updates. Customize Layout hides it or puts it on the right. |
 | Side bars | A **primary** side bar beside the activity bar (**Ctrl+B**) and a **secondary** one on the other side (**Ctrl+Alt+B**) - empty for now, kept for what comes later. Drag their edges to resize them. |
 | Title bar | The search in the middle finds a project; type `>` for any command (**Ctrl+Shift+P**). **?** is help. |
-| Bottom panel | **Output** (what an operation does, step by step), **Logs** (the sites' and DNN Manager's logs), **Terminal**. **Ctrl+J** opens and closes it; drag its top edge to resize it (it stops at its smallest size), or the corner where it meets the primary side bar to resize both. **Ctrl+F** (or 🔍) finds text in the tab shown: **Aa** match case, **ab** whole word, **.\*** regular expression; **Enter** / **Shift+Enter** go to the next / previous match, **Esc** closes it. |
+| Bottom panel | **Output** (what an operation does, step by step), **Logs** (the sites' and DNN Manager's logs), **Terminal**. **Ctrl+J** opens and closes it; drag its top edge to resize it (it stops at its smallest size), or the corner where it meets the primary side bar to resize both. **Ctrl+F** (or 🔍) finds text in the tab shown: **Aa** match case, **ab** whole word, **.\*** regular expression; **Enter** / **Shift+Enter** go to the next / previous match, **Esc** closes it. The text in Output and Logs wraps in the panel's width and can be selected: drag over it, double-click a word, triple-click a line; **Ctrl+C** (⌘C) copies, **Ctrl+A** (⌘A) selects all, and the right-click menu has both. |
 | Status bar | IIS's state with Start / Stop / Restart (these affect every site), memory, processor and the disk of the projects folder. A figure that can't be read shows dashes (`--.--`), and processor use shows from its second reading on, two seconds after the start. |
 
 **Without a mouse**: **Tab** and **Shift+Tab** go from control to control, **Enter** or **Space** presses the one
@@ -103,6 +103,65 @@ Every password box has an eye button that shows and hides what you typed.
 While a project is being made (or any other operation runs), the page is dimmed and can't be used - a note above it
 says what runs, and it opens again when that is done. On macOS and Linux it stays locked: it needs IIS.
 
+## Source Control
+
+**Source Control** (**Ctrl+3**, ⌘3 on macOS) compares a project's files with a server's - over SFTP, FTPS or FTP - and
+sends them either way, as VS Code's Source Control lists changes. Nothing on a server is replaced or deleted without
+asking you first.
+
+1. Choose the project at the top, then **+** to add an **environment**: a server for it - its name and kind
+   (Development, Test, Acceptance, Production), the **protocol** (SFTP, FTPS - FTP over TLS - or plain FTP), the host,
+   port and user, a password (or for SFTP a private key file), and the site's folder on the server. Optional: **Mappings** to deploy only parts of the project, each to its own
+   server folder (`DesktopModules/Shop => /var/www/shop/DesktopModules/Shop`, `;` between them); more files to
+   ignore; files to protect; and **Back up the server's copy** before replacing or deleting it. The password goes in
+   your account's secure store, never in the settings.
+2. **Refresh** (↻) reads both sides and compares them. The first time, for SFTP DNN Manager shows the server's key
+   fingerprint and asks whether to trust it; later a different key is refused (edit and save the environment to
+   trust a new one). FTPS checks the server's certificate against the ones your computer trusts, every time - a
+   self-signed certificate is refused. Plain FTP sends the password and the files unencrypted: DNN Manager warns
+   once and connects only if you say so - use SFTP or FTPS when the server has either. Generated and local-only files are never compared: `.git/`, `node_modules/`, `App_Data/`, logs,
+   caches, `*.tmp`, `*.log`, `*.bak`.
+3. The files are listed in **Conflicts**, **Changes** and **Server changes**, as folder trees:
+
+| | Means | What to do |
+|---|---|---|
+| **M** Modified, **A** Added | Changed or new here since the last sync | **Upload** |
+| **I** Changed on the server, **R** Only on the server | Changed there, or only there | **Download** - a file only on the server is never deleted because it is missing here |
+| **C** Conflict | Changed on both sides | Compare, then **Keep mine** (upload) or **Keep the server's** (download) |
+| **D** Deleted | Deleted here after a sync; the server still has it | **Delete on server…** only if you mean to |
+| **S** Deleted on the server | Deleted there after a sync | **Upload** to put it back, or leave it |
+
+Click a file to see the server's copy (left) next to the project's (right), the changed lines coloured and the code
+in its syntax colours (C#, JavaScript, TypeScript, JSON, CSS, HTML, XML, ASP.NET and Razor files, config, SQL);
+**Inline** shows the changes in one column instead. ↑ ↓ (or **F7** / **Shift+F7**) go from change to change. A
+binary file shows its sizes and times instead. While the page is open, a file you save, add or delete in the project
+updates the list by itself - against the server as the last Refresh read it; **Refresh** to see the server's own
+changes.
+
+A **conflict** can also be merged by hand: **Merge…** writes both copies into the project's file, each difference
+between `<<<<<<< <environment>`, `=======` and `>>>>>>> project` (git's markers), keeps your copy in the backups
+folder first, and opens the file in your editor (VS Code when it is installed). Keep what belongs, remove the
+markers, save, **Refresh**, then **Keep mine** to upload the merged file - an upload is refused while markers are
+left. Ctrl+click (⌘ on
+macOS) and Shift+click select several; the right-click menu has Compare, Upload, Download, Revert local, the conflict
+choices and Delete on server. **Upload** and **Download** in the toolbar take the selected files, or all those shown;
+the filter box, the change chips and the **part** picker narrow the list - **Whole project**, or one module
+(`DesktopModules/<name>`), skin or container (`Portals/<portal>/Skins|Containers/<name>`) to deploy on its own.
+
+Before anything is sent, a **preview** lists every file and what happens to it - new on the server, replaced there,
+deleted there, new in the project, replaced in the project - with the sizes, the protected files marked, and what
+is left alone and why (a conflict without a choice, a file no mapping holds). **Deploy** sends them; Cancel or Esc
+sends nothing. When the page opens on an environment it shows the last comparison at once - the server as it was
+last read, the project as it is now - marked "saved"; **Refresh** reads the server again. **⋮** has Upload all, Download all, the history of what was sent,
+the backups folder and the environment's edit and delete.
+
+What keeps a server safe: each file is checked again right before it is sent, and left alone if it changed on
+either side since the comparison; replacing or deleting server files is shown in the preview first, naming them; on Production
+`web.config`, `*.config`, `bin/`, `App_Data/` and `Portals/` are asked about again; with backups on, the server's
+copy is kept first in `backups\<project>\server\`. An upload is written under a temporary name and put in place
+only once it is whole, so one that breaks off leaves the old file; a lost connection is tried again, up to three
+times. Sending shows in **Output** with each file, and **Cancel** stops it between files.
+
 ## Settings and Troubleshoot
 
 **Settings** (**Ctrl+,**) has General, Projects, DNN releases, Database server, Docker container, IIS, Keyboard
@@ -127,6 +186,7 @@ backups).
 | `logs\` | DNN Manager's own log, one file per day - also in **Logs → DNN Manager** |
 | `backups\<project>\` | Backups made by Export, Upgrade and Restore |
 | `deployments\` | Packages made by Export for deployment |
+| `backups\<project>\server\` | Source Control's copies of server files, kept before they were replaced or deleted |
 
 Passwords are never kept in plain text. The default host password and the database server login's password are in
 your account's secure store: the Windows Credential Manager, the macOS Keychain, or on Linux the keyring (GNOME

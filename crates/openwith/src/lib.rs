@@ -237,6 +237,26 @@ pub fn open_in_ide(ide: &Ide, _project_dir: &Path) -> Result<(), String> {
     Err(format!("Could not start {}: opening an editor from DNN Manager works only on Windows.", ide.name))
 }
 
+/// Opens one file in `ide` (Source Control's merge) - as the signed-in user only: a file a server sent isn't opened
+/// with administrator rights.
+#[cfg(windows)]
+pub fn open_file_in_ide(ide: &Ide, file: &Path, project_dir: &Path) -> Result<(), String> {
+    if !file.is_file() {
+        return Err(format!("The file isn't there: {}", file.display()));
+    }
+    let text = file.display().to_string();
+    if start_unelevated(&ide.exe_path, &[&text], Some(project_dir)) {
+        Ok(())
+    } else {
+        Err(format!("Could not start {} as you to open {}.", ide.name, file.display()))
+    }
+}
+
+#[cfg(not(windows))]
+pub fn open_file_in_ide(ide: &Ide, _file: &Path, _project_dir: &Path) -> Result<(), String> {
+    Err(format!("Could not start {}: opening an editor from DNN Manager works only on Windows.", ide.name))
+}
+
 /// Opens `project_dir` (or its only solution file) in `ide` - Windows.
 #[cfg(windows)]
 pub fn open_in_ide(ide: &Ide, project_dir: &Path) -> Result<(), String> {

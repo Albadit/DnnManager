@@ -15,6 +15,7 @@ dnnm-dnn = { path = "../dnn" }
 dnnm-system = { path = "../system" }
 dnnm-keepwarm = { path = "../keepwarm" }
 dnnm-openwith = { path = "../openwith" }
+dnnm-remote = { path = "../remote" }
 log.workspace = true
 # Change connection, Change host password and the Details' database read: web.config's SiteSqlServer written in place
 # (roxmltree for where it is), the diagnostics records, and tiberius' cells for the dates and decimals it reads.

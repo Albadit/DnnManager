@@ -11,6 +11,10 @@ dnnm-application.workspace = true
 log.workspace = true
 roxmltree.workspace = true
 rusqlite.workspace = true
+# Source Control's content hashes.
+sha2 = "0.11"
+# Source Control's watch on a project's folder (ReadDirectoryChangesW, FSEvents, inotify).
+notify = "9"
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62"

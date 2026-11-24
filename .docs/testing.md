@@ -5,7 +5,7 @@ How DNN Manager is tested, what was checked in the running app, and what wasn't 
 ## Automated tests
 
 ```powershell
-cargo test --workspace        # 867 tests (12 ignored), a few seconds once built
+cargo test --workspace        # 952 tests (12 ignored), a few seconds once built
 cargo clippy --workspace --all-targets
 ```
 
@@ -15,22 +15,48 @@ are run by hand.
 
 | Crate | Tests | What they hold |
 |---|---|---|
-| `dnnm-application` | 166 | The use cases against stand-in traits: their steps in order, messages word for word, undo last-first on a failure or a cancel, Keep, the questions they ask; settings rows and defaults; row texts |
-| `dnnm-dialogs` | 113 | The dialogs' and pages' rules as pure functions: settings validation and categories, shortcuts (each OS's text, macOS's ⌘ defaults), the upgrade path file, the setup page's checks, Markdown, the guide and tour stops, release notes between versions |
+| `dnnm-application` | 215 | The use cases against stand-in traits: their steps in order, messages word for word, undo last-first on a failure or a cancel, Keep, the questions they ask; settings rows and defaults; row texts; Source Control against an in-memory project and server that loses its connection, refuses a path or changes behind the comparison; 20 000 files compared within a time limit |
+| `dnnm-dialogs` | 124 | The dialogs' and pages' rules as pure functions: settings validation and categories, shortcuts (each OS's text, macOS's ⌘ defaults), the upgrade path file, the setup page's checks, Source Control's list and environment form, Markdown, the guide and tour stops, release notes between versions |
 | `dnnm-dnn` | 105 (2 ignored) | DNN packages and releases, the installer's web.config edits, upgrade path and plan |
 | `dnnm-system` | 86 (1 ignored) | Hosts file, ACLs, secrets (AES-256-GCM with stand-in keys, reading old DPAPI values), sign-in task arguments, updates and the update helper's plan, single instance |
 | `dnnm-sql` | 77 (3 ignored) | Connection strings, LocalDB, SQL texts, docker-compose, the provisioner's checks |
 | `dnnm-wiring` | 54 (1 ignored) | The real adapters in temporary folders: zip round trips, web.config rewrites, backups and their clean-up, setup drafts |
-| `dnnm-infrastructure` | 56 | appcmd's XML and errors, web.config, `dnnmanager.db` (its schema, changed rows only), Windows calls, the status bar's memory / processor / disk (read for real on the OS the tests run on) |
+| `dnnm-infrastructure` | 66 | appcmd's XML and errors, web.config, `dnnmanager.db` (its schema, changed rows only), Source Control's folder scan, writes and tables, Windows calls, the status bar's memory / processor / disk (read for real on the OS the tests run on) |
 | `dnnm-logs` | 44 (1 ignored) | Log catalogs, the daily file, the run log, Find |
 | `dnnm-terminal` | 39 | Shell discovery, the VT screen, each OS's copy and paste keys |
-| `dnnm-ui` | 35 | Text field editing for each OS (words, undo, IME, selection) and its key tables, how each OS writes a shortcut, icons, tips, selects |
+| `dnnm-ui` | 39 | Text field editing for each OS (words, undo, IME, selection) and its key tables, how each OS writes a shortcut, icons, tips, selects |
 | `dnnm-keepwarm` | 28 | Ping rules and intervals, statuses |
 | `dnnm-openwith` | 27 (3 ignored) | Editors and SSMS found, the menu's entries, the clipboard secret |
 | `dnnm-diagnostics` | 23 | The Details tabs and the health checks |
 | `dnnm-domain` | 5 | Project name rules |
 | `dnnm-tray` | 5 (1 ignored) | The icon's image and tooltip; the ignored one adds and removes a real icon |
 | `dnnmanager` | 4 | Column keys and defaults |
+| `dnnm-remote` | 4 | SFTP: an untrusted server is never signed in to; FTP listings in both forms; the TLS settings; with `DNNM_SFTP_TEST` / `DNNM_FTP_TEST` / `DNNM_FTPS_READONLY` set, real servers end to end (below) |
+
+Source Control against real servers - these tests pass without doing anything unless `DNNM_SFTP_TEST` or
+`DNNM_FTP_TEST` names one. With Docker:
+
+```powershell
+docker run -d --name dnnm-sftp-test -p 127.0.0.1:2222:22 atmoz/sftp tester:secret:::upload
+docker run -d --name dnnm-ftp-test -p 127.0.0.1:2121:21 -p 127.0.0.1:30000-30009:30000-30009 -e PUBLICHOST=127.0.0.1 -e FTP_USER_NAME=tester -e FTP_USER_PASS=secret -e FTP_USER_HOME=/home/tester stilliard/pure-ftpd
+$env:DNNM_SFTP_TEST = "127.0.0.1:2222:tester:secret:/upload"; $env:DNNM_FTP_TEST = "127.0.0.1:2121:tester:secret:/"
+cargo test -p dnnm-remote -- --test-threads=1
+docker rm -f dnnm-sftp-test dnnm-ftp-test
+```
+
+A Docker FTPS server's self-signed certificate is (rightly) refused, so FTPS is checked against a real site, read
+only: `live_read_only.rs` signs in, compares the whole folder with an empty project, reads a file's facts, previews
+and downloads five small files, compares again, shows the cached comparison and reads both copies for the diff -
+nothing on the server is changed. For an Azure App Service, with the FTPS details from its publish profile:
+
+```powershell
+$env:DNNM_FTPS_READONLY = 'waws-prod-xx-000.ftp.azurewebsites.windows.net:21:app\$app:<password>:/site/wwwroot'
+cargo test -p dnnm-remote --test live_read_only -- --nocapture
+```
+
+`real_server.rs` streams, replaces and removes a file and checks a wrong host key is refused; `source_control_end_to_end.rs`
+runs compare → upload → change on each side and both → diff → upload, download, keep the server's side → delete on
+the server, through the real SFTP client, project folder and tables.
 
 ## The stand-in IIS
 

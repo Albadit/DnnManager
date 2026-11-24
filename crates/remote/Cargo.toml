@@ -1,0 +1,26 @@
+[package]
+name = "dnnm-remote"
+description = "Remote servers for Source Control: SFTP (russh, russh-sftp) behind the RemoteFs trait of dnnm-application."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+dnnm-application.workspace = true
+log.workspace = true
+# Several folders listed at once over one SFTP session.
+futures = "0.3"
+# ring for its cryptography: the default aws-lc-rs needs CMake and NASM to build on Windows.
+russh = { version = "0.65.4", default-features = false, features = ["ring", "flate2", "rsa"] }
+russh-sftp = "4.0.0"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "io-util", "sync"] }
+# FTP and FTPS (explicit TLS) through the system's TLS - Schannel on Windows, Secure Transport on macOS, OpenSSL on
+# Linux, built in ("vendored"), so the package needs no libssl. Not rustls: Azure App Service's FTPS, and many other
+# servers, offer only TLS 1.2 CBC suites, which rustls doesn't have.
+suppaftp = { version = "13", default-features = false, features = ["native-tls-vendored"] }
+
+[dev-dependencies]
+# The end-to-end test: the real project folder and tables.
+dnnm-infrastructure.workspace = true
+tempfile.workspace = true

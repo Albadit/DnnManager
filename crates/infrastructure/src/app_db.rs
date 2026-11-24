@@ -72,6 +72,11 @@ impl AppDatabase {
         Ok(connection)
     }
 
+    /// A connection of its own, for a module with tables of its own (Source Control's).
+    pub(crate) fn connection(&self) -> Result<Connection, String> {
+        self.open()
+    }
+
     /// The sites kept warm.
     pub fn keep_warm_sites(&self) -> Result<Vec<String>, String> {
         let connection = self.open()?;

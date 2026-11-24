@@ -14,7 +14,7 @@ flowchart TD
     G["dnnm-dialogs<br/>dialogs, New project, Settings,<br/>Troubleshoot, guide, tour"]
     U["dnnm-ui<br/>theme, controls, menu, text field"]
     B["dnnm-application<br/>use cases, operation and undo,<br/>traits, settings model"]
-    I["adapters: infrastructure, sql, dnn,<br/>system, keepwarm, logs, terminal,<br/>openwith, diagnostics, tray"]
+    I["adapters: infrastructure, sql, dnn,<br/>system, keepwarm, logs, terminal,<br/>openwith, diagnostics, tray, remote"]
     D["dnnm-domain<br/>records and rules"]
     A --> W
     A --> G
@@ -39,7 +39,7 @@ The use cases (`dnnm-application`) know only traits; `dnnm-wiring` hands each on
 | `crates/app/src/store.rs` | The live state reads, operations, Output runs, questions, toasts, settings saves |
 | `crates/app/src/runner.rs` | An operation on its own thread: lines, facts and questions streamed to the store, Cancel and Stop undoing |
 | `crates/app/src/pages/` | `projects.rs` (the table and its menu), `project_view.rs` (Details), `columns.rs` |
-| `crates/dialogs/src/` | One file per dialog and page (`setup_page.rs`, `settings_page.rs`, `troubleshoot_page.rs`, `guide.rs`, `tour.rs`, …) |
+| `crates/dialogs/src/` | One file per dialog and page (`setup_page.rs`, `settings_page.rs`, `troubleshoot_page.rs`, `guide.rs`, `tour.rs`, `source_control_page.rs`, …) |
 | `crates/ui/src/` | `theme.rs` (the design tokens - [design-system.md](design-system.md)), controls, `menu.rs`, `dialog.rs`, `text_input.rs` (the text field and its keys) on `text_edit.rs` (its editing, without GPUI), `keys.rs` (each OS's keys and how it writes a shortcut) |
 
 ## How the window stays current
@@ -97,6 +97,47 @@ three, and a release packages all three): code that calls Windows APIs is behind
 says the feature needs Windows. On macOS and Linux the window opens, the Projects page says IIS isn't available on
 that system, and what doesn't depend on Windows (settings, release lists, a SQL Server check with a SQL login) works.
 
+## Source Control
+
+Comparing a project with a server and sending files over SFTP, split as the layers are:
+
+| Where | What |
+|---|---|
+| `dnnm-application/src/source_control/` | `model.rs` (environments and their protocol, a file's facts, the record of its last sync, the changes), `paths.rs` (ignore and protect rules, mappings), `classify.rs` (each file's change from both sides and its record), `diff.rs` (the side-by-side and inline line diff with `similar`, merge markers), `highlight.rs` (syntax colours: a small tokenizer per kind of file), `plan.rs` (the deployment preview), `sync.rs` (the use cases `scan`, `cached`, `reclassify_local`, `transfer`, `start_merge`, `read_both`, and the traits `LocalFiles`, `Remote`/`RemoteFs`, `SyncState`) |
+| `dnnm-remote` | `sftp.rs`: `russh` / `russh-sftp` - host key checked by its SHA-256 fingerprint, password or key file. `ftp.rs`: `suppaftp` - FTPS (explicit TLS through the system's TLS: Schannel, Secure Transport, OpenSSL built in on Linux - not rustls, which lacks the TLS 1.2 CBC suites Azure App Service's FTPS offers; certificate and name checked against the system's roots) and plain FTP; MLSD, else LIST; a listing whose connection is dropped (Azure drops it after a few hundred commands) signs in again and is repeated, up to 3 times. SFTP lists 8 folders at once over its one session; files are sent one at a time, so a server never gets more than one transfer from DNN Manager. Files in 64 KB chunks, uploads under a temporary name renamed over the old file |
+| `dnnm-infrastructure/src/source_control.rs` | The project's folder (`ProjectFiles`: scan without ignored folders or links, SHA-256, all-or-nothing writes), its watch (`notify`: ReadDirectoryChangesW, FSEvents, inotify) and the tables (`SourceControlStore`) |
+| `dnnm-wiring/src/source_control.rs` | The real adapters; passwords from `dnnm_system::secrets`; backups in `backups\<project>\server` |
+| `dnnm-dialogs` | `source_control_page.rs` (the page), `source_control_list.rs` (its sections, folder trees and DNN parts, without GPUI), `source_control_environment.rs` (the environment dialog), `source_control_preview.rs` (the deployment preview) |
+| `crates/app/src/workspace/source_control.rs` | The page in the window; comparing and sending run as operations (`Store::run_remote`, which the stand-in IIS doesn't refuse) |
+
+```mermaid
+flowchart LR
+    P[Page] -- Scan / Transfer --> O[Operation]
+    O --> S[sync::scan / transfer]
+    S --> L[ProjectFiles]
+    S --> R[Sftp]
+    S --> T[(sc_records, sc_history)]
+    S -- before replacing --> B[backups/project/server]
+```
+
+A file's change comes from both sides and the record of its last sync (`sc_records`): without a record, a file only
+on the server is **R** and never a deletion; with one, a file gone here whose server copy is unchanged is **D**. Both
+sides changed is a conflict, never sent without a choice. `transfer` checks each file again right before it sends
+it, asks before replacing or deleting server files (protected ones apart), backs the server's copy up, retries a lost
+connection, and writes the record only once the file is whole. A server's key is trusted after a question, before a
+password is sent, and stored in `sc_environments`; a different key is refused. FTPS needs no question (its
+certificate is checked at every connection); plain FTP is used only after a warning the user accepted.
+
+Every transfer is shown first as a preview (`plan::preview`: each file's step, bytes, protection, and what is left
+alone); confirmed, `transfer` runs with `previewed` and asks nothing more - it still checks each file again right
+before sending it. A comparison saves the server's listing (`sc_listing`, `sc_listed`), and each transfer keeps it
+up file by file, so `cached` shows the last comparison when the page opens without connecting.
+
+While the page is open the project's folder is watched; once it has been quiet for 0.8 s, `reclassify_local`
+compares the project read anew with the server side of the last comparison - no connection. A conflict merged by
+hand (`start_merge`) is the project's file with git's markers around each difference; `transfer` refuses to upload a
+text file that still has them.
+
 ## Shared data
 
 DNN Manager keeps its data in `Documents\DnnManager\dnnmanager.db` (`app_db.rs`), the same file and schema as
@@ -107,6 +148,8 @@ the earlier C# (WPF) versions, so an installation keeps its settings:
 - Settings with a higher `version` than 3 were written by a newer DNN Manager: they aren't used or changed.
 - A new database gets the five schema steps' tables and `PRAGMA user_version = 5`.
 - Each call opens its own short connection with a 5 s busy timeout.
+- Source Control's tables (`sc_environments`, `sc_records`, `sc_history`, `sc_listing`, `sc_listed`) are this build's own, made when first used
+  (`CREATE TABLE IF NOT EXISTS`); the schema version isn't raised, so the WPF app still opens the file.
 
 ## Decisions and deviations
 

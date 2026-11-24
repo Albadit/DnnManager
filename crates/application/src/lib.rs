@@ -6,6 +6,7 @@ pub mod operation;
 pub mod project;
 pub mod records;
 pub mod settings;
+pub mod source_control;
 pub mod use_cases;
 
 pub use dnnm_domain as domain;

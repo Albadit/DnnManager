@@ -18,6 +18,7 @@ mod commands;
 mod help;
 mod modals;
 mod shortcuts;
+mod source_control;
 mod updates;
 
 pub use actions::ProjectAction;
@@ -61,6 +62,7 @@ actions!(
         FindToggleCase,
         FindToggleWord,
         FindToggleRegex,
+        GoToSourceControl,
         HideApp,
         HideOtherApps,
         MinimizeWindow
@@ -100,6 +102,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("secondary-j", TogglePanel, None),
         KeyBinding::new("secondary-1", GoToProjects, None),
         KeyBinding::new("secondary-2", GoToNewProject, None),
+        KeyBinding::new("secondary-3", GoToSourceControl, None),
         KeyBinding::new("secondary-,", OpenSettings, None),
         KeyBinding::new("secondary-w", CloseView, None),
         KeyBinding::new("escape", CloseView, Some("Modal")),
@@ -294,6 +297,7 @@ const PANEL_LEAVES: f32 = 300.0;
 pub enum Page {
     Projects,
     NewProject,
+    SourceControl,
 }
 
 pub struct Workspace {
@@ -308,6 +312,9 @@ pub struct Workspace {
     output_marks: std::collections::HashMap<usize, ui::LineMarks>,
     output_reveal: std::cell::Cell<Option<usize>>,
     output_scroll: gpui::ScrollHandle,
+    /// The Output's lines as selectable text, and the keyboard's place there (for Copy and Select all).
+    output_selection: dnnm_ui::selection::LinesSelection,
+    output_text_focus: FocusHandle,
     /// The Output's stage list's scroll position: it follows the stage that runs.
     stages_scroll: gpui::ScrollHandle,
     /// How many Output lines and which stage were last followed - the view keeps up with the run while it is at the end.
@@ -319,6 +326,10 @@ pub struct Workspace {
     projects: Entity<ProjectsPage>,
     /// New project - made the first time it is shown.
     setup: Option<Entity<dnnm_dialogs::setup_page::SetupPage>>,
+    /// Source Control, made the first time it is shown.
+    source_control: Option<Entity<dnnm_dialogs::source_control_page::SourceControlPage>>,
+    /// The watch on the Source Control page's project folder, and the task that waits for it to be quiet.
+    source_control_watch: Option<(dnnm_infrastructure::source_control::ProjectWatcher, gpui::Task<()>)>,
     /// The IIS read New project last got (`Store::sites_read`).
     setup_sites_read: u64,
     /// Settings or Troubleshoot, open over the page.
@@ -448,6 +459,7 @@ impl Workspace {
                     let lock = setup_lock(store.read(cx));
                     setup.update(cx, |p, cx| p.set_locked(lock, cx));
                 }
+                this.sync_source_control_projects(cx);
                 cx.notify();
             }),
             cx.observe_window_appearance(window, |this, window, cx| {
@@ -475,6 +487,7 @@ impl Workspace {
                 Some("Settings") => ws.open_settings_on(None, window, cx),
                 Some("Troubleshoot") => ws.open_troubleshoot(window, cx),
                 Some("Setup") => ws.go(Page::NewProject, window, cx),
+                Some("SourceControl") => ws.go(Page::SourceControl, window, cx),
                 _ => {}
             }
             // The fixture is a UI check: no icon, nothing deleted, no onboarding state written.
@@ -489,6 +502,8 @@ impl Workspace {
             page: Page::Projects,
             projects,
             setup: None,
+            source_control: None,
+            source_control_watch: None,
             setup_sites_read: 0,
             settings: None,
             sidebar_visible: !saved_window.sidebar_hidden,
@@ -530,10 +545,12 @@ impl Workspace {
             output_marks: Default::default(),
             output_reveal: Default::default(),
             output_scroll: gpui::ScrollHandle::new(),
+            output_selection: dnnm_ui::selection::LinesSelection::default(),
+            output_text_focus: cx.focus_handle(),
             stages_scroll: gpui::ScrollHandle::new(),
             followed_lines: Default::default(),
             followed_stage: Default::default(),
-            logs: cx.new(|_| LogsView::new(store_for_logs)),
+            logs: cx.new(|cx| LogsView::new(store_for_logs, cx)),
             terminal: None,
             focus,
             layers: Layers::new(cx),
@@ -628,6 +645,7 @@ impl Workspace {
             (Some(modal), _) => modal.key().into(),
             (None, Page::Projects) => "Projects".into(),
             (None, Page::NewProject) => "Setup".into(),
+            (None, Page::SourceControl) => "SourceControl".into(),
         });
         workspace.projects = self.projects.read(cx).capture(cx);
         let details = self.projects.read(cx).details_of(cx);
@@ -768,10 +786,12 @@ impl Workspace {
         self.open_settings_on(None, window, cx);
     }
 
-    /// Next / previous page (Ctrl+Tab): Projects ↔ New project.
-    fn step_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let next = if self.page == Page::Projects { Page::NewProject } else { Page::Projects };
-        self.go(next, window, cx);
+    /// Next / previous page (Ctrl+Tab, Ctrl+Shift+Tab): Projects → New project → Source Control, round.
+    fn step_page(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        const ORDER: [Page; 3] = [Page::Projects, Page::NewProject, Page::SourceControl];
+        let at = ORDER.iter().position(|p| *p == self.page).unwrap_or(0);
+        let next = if forward { (at + 1) % ORDER.len() } else { (at + ORDER.len() - 1) % ORDER.len() };
+        self.go(ORDER[next], window, cx);
     }
 
     /// Whether Close this view has something to close: Settings or Troubleshoot, or a project's details.
@@ -1077,6 +1097,7 @@ impl Render for Workspace {
         let page: gpui::AnyElement = match self.page {
             Page::Projects => self.projects.clone().into_any_element(),
             Page::NewProject => self.setup_page(window, cx).into_any_element(),
+            Page::SourceControl => self.source_control_page(window, cx).into_any_element(),
         };
 
         let card = |content: gpui::AnyElement, bg| {
@@ -1458,6 +1479,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &NewTerminal, window, cx| this.new_terminal(None, false, window, cx)))
             .on_action(cx.listener(|this, _: &GoToProjects, window, cx| this.go(Page::Projects, window, cx)))
             .on_action(cx.listener(|this, _: &GoToNewProject, window, cx| this.go(Page::NewProject, window, cx)))
+            .on_action(cx.listener(|this, _: &GoToSourceControl, window, cx| this.go(Page::SourceControl, window, cx)))
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)))
             .on_action(cx.listener(|this, e: &RunCommand, window, cx| this.run_command(&e.id, window, cx)))
             .on_action(cx.listener(|this, _: &CloseView, window, cx| {
@@ -1883,6 +1905,21 @@ impl Workspace {
                         )
                         .on_click(
                             cx.listener(|this, _: &ClickEvent, window, cx| this.go(Page::NewProject, window, cx)),
+                        ),
+                    )
+                    .child(
+                        entry(
+                            "nav-source-control",
+                            Icon::SourceControl,
+                            shortcuts::with_shortcut(
+                                "Source Control - compare a project with its servers and deploy it over SFTP, FTPS or FTP",
+                                "pages.sourceControl",
+                                &self.store.read(cx).settings,
+                            ),
+                            self.page == Page::SourceControl,
+                        )
+                        .on_click(
+                            cx.listener(|this, _: &ClickEvent, window, cx| this.go(Page::SourceControl, window, cx)),
                         ),
                     ),
             )
@@ -2710,9 +2747,17 @@ impl Workspace {
             .child(div().flex().flex_col().flex_none().pad(px(0.0), px(10.0)).child(summary));
 
         // The lines, each a child of the scrolled column so the Find bar can bring one into view; a stage's heading 3 px
-        // padded above and below, so stages stand 6 px apart without a spacer between them.
+        // padded above and below, so stages stand 6 px apart without a spacer between them. Their text wraps in the
+        // panel's width and can be selected - dragged over, double-clicked (a word), triple-clicked (a line), copied
+        // with Ctrl / ⌘ + C or the right-click menu.
+        let selection = self.output_selection.clone();
+        selection.begin(&format!("{}@{:?}", run.title, run.started));
+        let texts: std::rc::Rc<Vec<SharedString>> = std::rc::Rc::new(run.lines.iter().map(|l| l.text.clone()).collect());
+        let (press, drag, release, release_out) = (selection.clone(), selection.clone(), selection.clone(), selection.clone());
+        let (keys, press_texts, key_texts) = (selection.clone(), texts.clone(), texts.clone());
         let mut lines = div()
             .id("output-lines")
+            .track_focus(&self.output_text_focus)
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -2720,7 +2765,42 @@ impl Workspace {
             .flex()
             .flex_col()
             .pad(px(8.0), px(12.0))
-            .font_family(theme.mono_font.clone());
+            .font_family(theme.mono_font.clone())
+            .cursor(gpui::CursorStyle::IBeam)
+            .on_mouse_down(MouseButton::Left, move |e: &gpui::MouseDownEvent, window, _| {
+                press.press(e.position, e.modifiers.shift, e.click_count, &|i| press_texts.get(i).cloned());
+                window.refresh();
+            })
+            .on_mouse_move(move |e: &gpui::MouseMoveEvent, window, _| {
+                if e.pressed_button == Some(MouseButton::Left) && drag.drag(e.position) {
+                    window.refresh();
+                }
+            })
+            .on_mouse_up(MouseButton::Left, move |_, _, _| release.release())
+            .on_mouse_up_out(MouseButton::Left, move |_, _, _| release_out.release())
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, e: &gpui::MouseDownEvent, window, cx| this.output_text_menu(e.position, window, cx)),
+            )
+            .on_key_down(move |e: &gpui::KeyDownEvent, window, cx| {
+                let k = &e.keystroke;
+                if !k.modifiers.secondary() || k.modifiers.alt || k.modifiers.shift {
+                    return;
+                }
+                match k.key.as_str() {
+                    "c" => {
+                        if let Some(text) = keys.copied(&|i| key_texts.get(i).cloned()) {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                        }
+                    }
+                    "a" => {
+                        keys.select_all(key_texts.len(), key_texts.last().map_or(0, |t| t.len()));
+                        window.refresh();
+                    }
+                    _ => return,
+                }
+                cx.stop_propagation();
+            });
         let reveal = self.output_reveal.take();
         // New lines keep the view at the end while it is there (scrolled up to read, it stays put); a Find match to
         // bring into view goes first.
@@ -2757,10 +2837,21 @@ impl Workspace {
             if reveal == Some(index) {
                 self.output_scroll.scroll_to_item(index);
             }
-            let text: gpui::AnyElement = match self.output_marks.get(&index) {
-                Some(marks) => ui::marked_text(line.text.clone(), marks, cx).into_any_element(),
-                None => line.text.clone().into_any_element(),
-            };
+            let (other, current) = ui::find_colors(cx);
+            let marks: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> = self
+                .output_marks
+                .get(&index)
+                .map(|marks| {
+                    marks
+                        .iter()
+                        .map(|(range, is_current)| {
+                            let background_color = Some(if *is_current { current } else { other });
+                            (range.clone(), gpui::HighlightStyle { background_color, ..Default::default() })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let text = selection.line(index, line.text.clone(), marks, cx);
             lines = lines.child(
                 div()
                     .flex()
@@ -2782,6 +2873,37 @@ impl Workspace {
             .flex_col()
             .child(header)
             .child(div().flex().flex_1().min_h_0().child(rail).child(self.stages_sash(stages_width, cx)).child(lines))
+    }
+
+    /// The Output's right-click menu: Copy what is selected, Select all.
+    fn output_text_menu(&mut self, position: gpui::Point<gpui::Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.output_text_focus);
+        let Some(run) = self.store.read(cx).runs.last() else { return };
+        let texts: std::rc::Rc<Vec<SharedString>> = std::rc::Rc::new(run.lines.iter().map(|l| l.text.clone()).collect());
+        let selection = self.output_selection.clone();
+        let keys = dnnm_ui::keys::Os::CURRENT;
+        let shortcut = |key: &str| {
+            Some(dnnm_ui::keys::label(keys, keys != dnnm_ui::keys::Os::Mac, false, false, keys == dnnm_ui::keys::Os::Mac, key))
+        };
+        let (copy_sel, copy_texts) = (selection.clone(), texts.clone());
+        let (all_sel, all_texts) = (selection.clone(), texts.clone());
+        let items = vec![
+            dnnm_ui::menu::MenuItem::new("Copy", move |_, cx| {
+                if let Some(text) = copy_sel.copied(&|i| copy_texts.get(i).cloned()) {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                }
+            })
+            .enabled(selection.has_selection())
+            .shortcut(shortcut("C")),
+            dnnm_ui::menu::MenuItem::new("Select all", move |window, _| {
+                all_sel.select_all(all_texts.len(), all_texts.last().map_or(0, |t| t.len()));
+                window.refresh();
+            })
+            .enabled(!texts.is_empty())
+            .shortcut(shortcut("A")),
+        ];
+        self.menu = Some(dnnm_ui::menu::ContextMenu::new(position, items));
+        cx.notify();
     }
 
     /// The edge between the Output's stage list and its lines: a 1 px line, dragged sideways to make the list wider or

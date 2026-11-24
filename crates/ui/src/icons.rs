@@ -75,6 +75,10 @@ pub enum Icon {
     Dash,
     Delete,
     Download,
+    /// Upload: an arrow up to a line.
+    Upload,
+    /// Source Control's page: one arrow up, one down - the files going both ways.
+    SourceControl,
     Hide,
     /// The panel's maximize: four corners pointing out.
     PanelMaximize,
@@ -405,6 +409,8 @@ impl Icon {
         Icon::Dash,
         Icon::Delete,
         Icon::Download,
+        Icon::Upload,
+        Icon::SourceControl,
         Icon::Hide,
         Icon::PanelMaximize,
         Icon::PanelRestore,
@@ -448,6 +454,8 @@ impl Icon {
             Icon::Dash => "dash",
             Icon::Delete => "delete",
             Icon::Download => "download",
+            Icon::Upload => "upload",
+            Icon::SourceControl => "source-control",
             Icon::Hide => "hide",
             Icon::PanelMaximize => "panel-maximize",
             Icon::PanelRestore => "panel-restore",
@@ -503,6 +511,11 @@ impl Icon {
                 String::new(),
             ),
             Icon::Download => ("M8,2.5 V10.5 M4.5,7 L8,10.5 L11.5,7 M2.5,13.5 H13.5".into(), String::new()),
+            Icon::Upload => ("M8,13.5 V5.5 M4.5,9 L8,5.5 L11.5,9 M2.5,2.5 H13.5".into(), String::new()),
+            Icon::SourceControl => (
+                "M5,13.5 V2.5 M2.5,5 L5,2.5 L7.5,5 M11,2.5 V13.5 M8.5,11 L11,13.5 L13.5,11".into(),
+                String::new(),
+            ),
             Icon::Hide => (format!("{EYE} {} M2.5,2.5 L13.5,13.5", circle(8.0, 8.0, 2.0)), String::new()),
             Icon::PanelMaximize => ("M2.5,6 V2.5 H6 M10,2.5 H13.5 V6 M13.5,10 V13.5 H10 M6,13.5 H2.5 V10".into(), String::new()),
             Icon::PanelRestore => ("M6,2.5 V6 H2.5 M10,2.5 V6 H13.5 M13.5,10 H10 V13.5 M6,13.5 V10 H2.5".into(), String::new()),

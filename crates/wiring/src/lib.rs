@@ -22,6 +22,7 @@ pub mod host_project;
 pub mod hosting;
 pub mod sql_container;
 pub mod open_with;
+pub mod source_control;
 use std::sync::Arc;
 
 use dnnm_application::iis::IisManager;

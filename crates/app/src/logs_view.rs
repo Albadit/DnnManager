@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use gpui::{ClickEvent, Context, Entity, ListHorizontalSizingBehavior, SharedString, Task, UniformListScrollHandle, Window, div, prelude::*, uniform_list};
+use gpui::{ClickEvent, Context, Entity, FocusHandle, ListAlignment, ListState, MouseButton, SharedString, Task, Window, div, list, prelude::*};
 
 use dnnm_logs::catalog::{self, SiteLogSource};
 use dnnm_logs::tail::{LogTail, MAX_LINES};
@@ -53,11 +53,17 @@ pub struct LogsView {
     opened_at: Option<Instant>,
     /// Which picker's list is open.
     menu: Option<Open>,
-    scroll: UniformListScrollHandle,
+    /// The lines as a list of rows of their own heights - a line wraps in the panel's width.
+    scroll: ListState,
+    /// The lines as selectable text, and the keyboard's place there (Copy, Select all).
+    selection: ui::selection::LinesSelection,
+    text_focus: FocusHandle,
     /// Polling only while the tab is on screen (`LogsView.Paused`).
     pub shown: bool,
     /// The panel's Find bar's matches, by line.
     find_marks: Arc<std::collections::HashMap<usize, ui::LineMarks>>,
+    /// The right-click menu over the lines, while it is open.
+    text_menu: Option<ui::menu::ContextMenu>,
     _poll: Option<Task<()>>,
 }
 
@@ -81,12 +87,12 @@ impl LogsView {
             cx.notify();
         }
         if reveal && let Some(m) = current.and_then(|i| matches.get(i)) {
-            self.scroll.scroll_to_item(m.line, gpui::ScrollStrategy::Center);
+            self.scroll.scroll_to_reveal_item(m.line);
             cx.notify();
         }
     }
 
-    pub fn new(store: Entity<Store>) -> Self {
+    pub fn new(store: Entity<Store>, cx: &mut Context<Self>) -> Self {
         Self {
             store,
             site: None,
@@ -97,9 +103,12 @@ impl LogsView {
             file_size: None,
             opened_at: None,
             menu: None,
-            scroll: UniformListScrollHandle::new(),
+            scroll: ListState::new(0, ListAlignment::Top, px(400.0)),
+            selection: ui::selection::LinesSelection::default(),
+            text_focus: cx.focus_handle(),
             shown: false,
             find_marks: Arc::default(),
+            text_menu: None,
             _poll: None,
         }
     }
@@ -133,6 +142,7 @@ impl LogsView {
         self.menu = None;
         self.current = index;
         self.lines.clear();
+        self.scroll.reset(0);
         self.tail = None;
         self.file_size = None;
         self._poll = None;
@@ -185,22 +195,27 @@ impl LogsView {
         self.file_size = size;
         if update.replaced {
             self.lines.clear();
+            self.scroll.reset(0);
         }
         if update.lines.is_empty() && !update.replaced {
             // Still nothing: the hint shows after a moment, so a timer repaint is enough.
             cx.notify();
             return;
         }
+        let before = self.lines.len();
         self.lines.extend(update.lines.iter().map(|l| {
             let (text, level) = logs::log_line(l);
             (SharedString::from(text), level)
         }));
+        // The list measures only the new rows.
+        self.scroll.splice(before..before, self.lines.len() - before);
         if self.lines.len() > MAX_LINES {
             let over = self.lines.len() - MAX_LINES;
             self.lines.drain(..over);
+            self.scroll.splice(0..over, 0);
         }
         // Follows the end, as a log view does.
-        self.scroll.scroll_to_item(self.lines.len().saturating_sub(1), gpui::ScrollStrategy::Top);
+        self.scroll.scroll_to_reveal_item(self.lines.len().saturating_sub(1));
         cx.notify();
     }
 
@@ -329,8 +344,38 @@ fn picker(
     ))
 }
 
+impl LogsView {
+    /// The right-click menu over the lines: Copy what is selected, Select all.
+    fn text_menu(&mut self, position: gpui::Point<gpui::Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.text_focus);
+        let lines: std::rc::Rc<Vec<SharedString>> = std::rc::Rc::new(self.lines.iter().map(|(t, _)| t.clone()).collect());
+        let os = ui::keys::Os::CURRENT;
+        let mac = os == ui::keys::Os::Mac;
+        let shortcut = |key: &str| Some(ui::keys::label(os, !mac, false, false, mac, key));
+        let (copy, all) = (self.selection.clone(), self.selection.clone());
+        let (copy_lines, all_lines) = (lines.clone(), lines.clone());
+        let items = vec![
+            ui::menu::MenuItem::new("Copy", move |_, cx| {
+                if let Some(text) = copy.copied(&|i| copy_lines.get(i).cloned()) {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                }
+            })
+            .enabled(self.selection.has_selection())
+            .shortcut(shortcut("C")),
+            ui::menu::MenuItem::new("Select all", move |window, _| {
+                all.select_all(all_lines.len(), all_lines.last().map_or(0, |t| t.len()));
+                window.refresh();
+            })
+            .enabled(!lines.is_empty())
+            .shortcut(shortcut("A")),
+        ];
+        self.text_menu = Some(ui::menu::ContextMenu::new(position, items));
+        cx.notify();
+    }
+}
+
 impl Render for LogsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
         let c = theme.colors;
         if self.site.is_none() {
@@ -347,35 +392,84 @@ impl Render for LogsView {
             }
             _ => None,
         };
-        let lines = self.lines.clone();
-        // A long line isn't cut: the list scrolls sideways, as wide as its longest line.
-        let longest = lines.iter().enumerate().max_by_key(|(_, (text, _))| text.chars().count()).map(|(i, _)| i);
+        let lines = std::rc::Rc::new(self.lines.clone());
         let colors = (c.log_fg, c.log_warn, c.log_fail, c.log_muted);
         let marks = self.find_marks.clone();
-        let list = uniform_list("log-lines", lines.len(), move |range, _, cx| {
-            range
-                .map(|i| {
-                    let (text, level) = &lines[i];
-                    let color = match level {
-                        LogLineLevel::Normal => colors.0,
-                        LogLineLevel::Warning => colors.1,
-                        LogLineLevel::Error => colors.2,
-                        LogLineLevel::Note => colors.3,
-                    };
-                    let line = div().pad(px(0.0), px(12.0)).whitespace_nowrap().text_color(color);
-                    match marks.get(&i) {
-                        Some(found) => line.child(ui::marked_text(text.clone(), found, cx)),
-                        None => line.child(text.clone()),
-                    }
+        let (other, current) = ui::find_colors(cx);
+        // A line wraps in the panel's width, and can be selected - dragged over, double-clicked (a word),
+        // triple-clicked (a line), copied with Ctrl / ⌘ + C or the right-click menu.
+        let selection = self.selection.clone();
+        selection.begin(&format!("{:?}", self.current_source().map(|s| s.title.clone())));
+        let (rows, row_selection) = (lines.clone(), selection.clone());
+        let list = list(self.scroll.clone(), move |i, _, cx| {
+            let Some((text, level)) = rows.get(i) else { return div().into_any_element() };
+            let color = match level {
+                LogLineLevel::Normal => colors.0,
+                LogLineLevel::Warning => colors.1,
+                LogLineLevel::Error => colors.2,
+                LogLineLevel::Note => colors.3,
+            };
+            let found: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> = marks
+                .get(&i)
+                .map(|found| {
+                    found
+                        .iter()
+                        .map(|(range, is_current)| {
+                            let background_color = Some(if *is_current { current } else { other });
+                            (range.clone(), gpui::HighlightStyle { background_color, ..Default::default() })
+                        })
+                        .collect()
                 })
-                .collect()
+                .unwrap_or_default();
+            div().pad(px(0.0), px(12.0)).text_color(color).child(row_selection.line(i, text.clone(), found, cx)).into_any_element()
         })
-        .track_scroll(self.scroll.clone())
-        .with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
-        .with_width_from_item(longest)
         .size_full();
+        let text_of = move |lines: &std::rc::Rc<Vec<(SharedString, LogLineLevel)>>, i: usize| lines.get(i).map(|(t, _)| t.clone());
+        let (press, drag, release, release_out, keys) =
+            (selection.clone(), selection.clone(), selection.clone(), selection.clone(), selection.clone());
+        let (press_lines, key_lines) = (lines.clone(), lines.clone());
+        let list = div()
+            .id("log-lines")
+            .track_focus(&self.text_focus)
+            .size_full()
+            .cursor(gpui::CursorStyle::IBeam)
+            .on_mouse_down(MouseButton::Left, move |e: &gpui::MouseDownEvent, window, _| {
+                press.press(e.position, e.modifiers.shift, e.click_count, &|i| text_of(&press_lines, i));
+                window.refresh();
+            })
+            .on_mouse_move(move |e: &gpui::MouseMoveEvent, window, _| {
+                if e.pressed_button == Some(MouseButton::Left) && drag.drag(e.position) {
+                    window.refresh();
+                }
+            })
+            .on_mouse_up(MouseButton::Left, move |_, _, _| release.release())
+            .on_mouse_up_out(MouseButton::Left, move |_, _, _| release_out.release())
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, e: &gpui::MouseDownEvent, window, cx| this.text_menu(e.position, window, cx)),
+            )
+            .on_key_down(move |e: &gpui::KeyDownEvent, window, cx| {
+                let k = &e.keystroke;
+                if !k.modifiers.secondary() || k.modifiers.alt || k.modifiers.shift {
+                    return;
+                }
+                match k.key.as_str() {
+                    "c" => {
+                        if let Some(text) = keys.copied(&|i| text_of(&key_lines, i)) {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                        }
+                    }
+                    "a" => {
+                        keys.select_all(key_lines.len(), key_lines.last().map_or(0, |(t, _)| t.len()));
+                        window.refresh();
+                    }
+                    _ => return,
+                }
+                cx.stop_propagation();
+            })
+            .child(list);
         let header = self.render_header(cx);
-        div()
+        let view = div()
             .relative()
             .size_full()
             .flex()
@@ -402,6 +496,23 @@ impl Render for LogsView {
                         .text_color(c.log_muted)
                         .child(hint),
                 )
-            })
+            });
+        // Last: the menu borrows `cx` for as long as it is drawn.
+        let menu = self.text_menu.as_ref().map(|menu| {
+            let weak = cx.entity().downgrade();
+            ui::menu::render(
+                menu,
+                move |_, cx| {
+                    let _ = weak.update(cx, |v, cx| {
+                        v.text_menu = None;
+                        cx.notify();
+                    });
+                },
+                |_, _, _| {},
+                window,
+                cx,
+            )
+        });
+        view.children(menu)
     }
 }

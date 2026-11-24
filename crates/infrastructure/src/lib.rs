@@ -15,6 +15,7 @@ pub mod process;
 pub mod process_stats;
 pub mod sha1;
 pub mod shell;
+pub mod source_control;
 pub mod site_folder;
 pub mod web_config;
 pub mod windows_security;

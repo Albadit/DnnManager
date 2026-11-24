@@ -115,6 +115,7 @@ pub fn help_for(page: HelpPage) -> Vec<&'static GuideStep> {
     match page {
         HelpPage::Details => vec![&DETAILS],
         HelpPage::Setup => vec![&NEW_PROJECT],
+        HelpPage::SourceControl => vec![&SOURCE_CONTROL],
         HelpPage::Settings => vec![&SETTINGS],
         HelpPage::Troubleshoot => vec![&TROUBLESHOOTING],
         HelpPage::Projects => vec![&WEBSITES, &ACTIONS],
@@ -746,6 +747,41 @@ const DETAILS: GuideStep = GuideStep {
         ),
     ],
     tip: Some("An orange dot marks a value worth a look, a red dot a problem - the line under it says why."),
+    since: 1,
+};
+
+const SOURCE_CONTROL: GuideStep = GuideStep {
+    title: "Source Control",
+    short_title: "Source Control",
+    intro: "Compares a project's files with a server's over SFTP, FTPS or FTP and sends them either way - as VS Code's Source Control lists changes. Nothing on the server is replaced or deleted without asking you first.",
+    sections: &[
+        section(
+            "Getting started",
+            &[
+                item("GlyphAdd", "Add environment", "A server for the project: its protocol (SFTP, FTPS or FTP), host, user and password (or for SFTP a key file), the site's folder there, and what kind it is - Development to Production."),
+                item("GlyphRefresh", "Refresh", "Reads both sides and compares them. The first time, DNN Manager shows the server's key fingerprint and asks whether to trust it."),
+            ],
+        ),
+        section(
+            "The letters",
+            &[
+                item("GlyphInfo", "M, A", "Modified or added here since the last sync - upload them."),
+                item("GlyphInfo", "I, R", "Changed on the server, or only there - download them. A file only on the server is never deleted because it is missing here."),
+                item("GlyphWarning", "C", "A conflict: both sides changed. Compare them, then keep mine or the server's."),
+                item("GlyphDelete", "D", "Deleted here after a sync. Delete it on the server only if you mean to - DNN Manager asks first."),
+            ],
+        ),
+        section(
+            "Safe by default",
+            &[risk(
+                "GlyphWarning",
+                "Before anything is replaced",
+                "Each file is checked again right before it is sent: if it changed since the comparison it is left alone. Replacing or deleting server files asks first; on Production web.config, bin, App_Data and Portals are asked about again. With backups on, the server's copy is kept in the backups folder first.",
+                GuideRisk::Careful,
+            )],
+        ),
+    ],
+    tip: Some("Click a file to see the server's copy (left) next to the project's (right); F7 goes to the next change."),
     since: 1,
 };
 
@@ -1563,6 +1599,7 @@ mod tests {
         );
         assert_eq!(help_for(HelpPage::Details)[0].title, "A website's details");
         assert_eq!(help_for(HelpPage::Setup)[0].title, "New project");
+        assert_eq!(help_for(HelpPage::SourceControl)[0].title, "Source Control");
         assert_eq!(help_for(HelpPage::Settings)[0].title, "Settings");
         assert_eq!(help_for(HelpPage::Troubleshoot)[0].title, "When something goes wrong");
     }

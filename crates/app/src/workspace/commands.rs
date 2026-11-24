@@ -369,6 +369,14 @@ fn commands() -> Vec<Command> {
             run: Now(|ws, window, cx| ws.go(Page::NewProject, window, cx), always),
         },
         Command {
+            id: "pages.sourceControl",
+            title: "Source Control",
+            area: "Pages",
+            shortcut: "Ctrl+3",
+            keywords: "deploy sftp ftp upload download server compare diff sync environment production",
+            run: Now(|ws, window, cx| ws.go(Page::SourceControl, window, cx), always),
+        },
+        Command {
             id: "settings.open",
             title: "Open Settings",
             area: "Pages",
@@ -399,7 +407,7 @@ fn commands() -> Vec<Command> {
             area: "Pages",
             shortcut: "Ctrl+Tab",
             keywords: "switch view",
-            run: Now(|ws, window, cx| ws.step_page(window, cx), always),
+            run: Now(|ws, window, cx| ws.step_page(true, window, cx), always),
         },
         Command {
             id: "view.previous",
@@ -407,7 +415,7 @@ fn commands() -> Vec<Command> {
             area: "Pages",
             shortcut: "Ctrl+Shift+Tab",
             keywords: "switch view",
-            run: Now(|ws, window, cx| ws.step_page(window, cx), always),
+            run: Now(|ws, window, cx| ws.step_page(false, window, cx), always),
         },
         Command {
             id: "view.close",

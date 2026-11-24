@@ -39,6 +39,7 @@ impl Workspace {
             Some(Modal::Troubleshoot(_, _)) => HelpPage::Troubleshoot,
             None => match self.page {
                 Page::NewProject => HelpPage::Setup,
+                Page::SourceControl => HelpPage::SourceControl,
                 Page::Projects if self.projects.read(cx).details_of(cx).is_some() => HelpPage::Details,
                 Page::Projects => HelpPage::Projects,
             },

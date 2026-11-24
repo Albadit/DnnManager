@@ -827,6 +827,23 @@ impl Store {
         self.run_operation(title, Vec::new(), "", work, cx);
     }
 
+    /// [`Store::run_then`] for Source Control: it changes no IIS site, so the stand-in IIS doesn't refuse it (only
+    /// another operation running does).
+    pub fn run_remote(
+        &mut self,
+        title: String,
+        work: impl FnOnce(&mut dnnm_application::operation::Operation) -> Result<(), String> + Send + 'static,
+        done: impl FnOnce(&Outcome, &mut App) + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        if self.refuse_if_busy(cx) {
+            return;
+        }
+        self.success_toast = None;
+        self.on_done = Some(Box::new(done));
+        self.run_operation(title, Vec::new(), "", work, cx);
+    }
+
     /// A question of the UI's own (`Dialogs.Confirm`): shown as an operation's are; the answer's index arrives on the
     /// receiver (None when closed).
     pub fn ask(

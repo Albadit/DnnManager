@@ -79,6 +79,18 @@ pub struct Colors {
     pub out_pill_fail_fg: Hsla,
     pub out_pill_neutral_bg: Hsla,
     pub out_pill_neutral_fg: Hsla,
+    /// Source Control's diff: the background of a line added here, and of one removed (VS Code's
+    /// diffEditor.insertedLineBackground / removedLineBackground, the same in both themes).
+    pub diff_added_bg: Hsla,
+    pub diff_removed_bg: Hsla,
+    /// Source Control's syntax colours (VS Code's Light / Dark Modern): keywords, strings, comments, numbers, markup
+    /// tags, attributes and properties.
+    pub syntax_keyword: Hsla,
+    pub syntax_string: Hsla,
+    pub syntax_comment: Hsla,
+    pub syntax_number: Hsla,
+    pub syntax_tag: Hsla,
+    pub syntax_attribute: Hsla,
     /// The close button's hover in the title bar - Windows' own red, the same in both themes.
     pub close_hover: Hsla,
 }
@@ -146,6 +158,14 @@ impl Colors {
             out_pill_fail_fg: c(0xB01011),
             out_pill_neutral_bg: c(0xE5E5E5),
             out_pill_neutral_fg: c(0x3B3B3B),
+            diff_added_bg: ca(0x339BB955),
+            diff_removed_bg: ca(0x33FF0000),
+            syntax_keyword: c(0x0000FF),
+            syntax_string: c(0xA31515),
+            syntax_comment: c(0x008000),
+            syntax_number: c(0x098658),
+            syntax_tag: c(0x800000),
+            syntax_attribute: c(0xE50000),
             close_hover: c(0xC42B1C),
         }
     }
@@ -212,6 +232,14 @@ impl Colors {
             out_pill_fail_fg: c(0xF88070),
             out_pill_neutral_bg: c(0x313131),
             out_pill_neutral_fg: c(0xCCCCCC),
+            diff_added_bg: ca(0x339BB955),
+            diff_removed_bg: ca(0x33FF0000),
+            syntax_keyword: c(0x569CD6),
+            syntax_string: c(0xCE9178),
+            syntax_comment: c(0x6A9955),
+            syntax_number: c(0xB5CEA8),
+            syntax_tag: c(0x569CD6),
+            syntax_attribute: c(0x9CDCFE),
             close_hover: c(0xC42B1C),
         }
     }

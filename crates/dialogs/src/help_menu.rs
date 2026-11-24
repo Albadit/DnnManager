@@ -20,6 +20,7 @@ pub enum HelpPage {
     Details,
     /// New project (`SetupPage`).
     Setup,
+    SourceControl,
     Settings,
     Troubleshoot,
 }
@@ -31,6 +32,7 @@ impl HelpPage {
             HelpPage::Projects => "Projects",
             HelpPage::Details => "Details",
             HelpPage::Setup => "Setup",
+            HelpPage::SourceControl => "SourceControl",
             HelpPage::Settings => "Settings",
             HelpPage::Troubleshoot => "Troubleshoot",
         }
@@ -41,6 +43,7 @@ impl HelpPage {
         match self {
             HelpPage::Details => "Project details",
             HelpPage::Setup => "New project",
+            HelpPage::SourceControl => "Source Control",
             other => other.key(),
         }
     }
