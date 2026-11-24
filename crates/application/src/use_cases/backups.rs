@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::operation::{CancelToken, Reporter};
+use crate::use_cases::portal_aliases::{AliasRow, Delocalized};
 
 /// A backup's notes, when something says why it was made (an upgrade's stages do): its first line names it.
 pub const NOTE_FILE: &str = "backup.txt";
@@ -354,7 +355,16 @@ pub trait Databases: Send + Sync {
     ) -> Result<(), String>;
     /// DNN's SSL setting on or off for every portal.
     fn set_ssl(&self, database: &SqlLogin, on: bool, cancel: &CancelToken) -> Result<(), String>;
+    /// Every portal alias, and each portal's noted live primary alias
+    /// ([`LIVE_PRIMARY_SETTING`](super::portal_aliases::LIVE_PRIMARY_SETTING)). Reads only.
+    fn portal_aliases(&self, database: &SqlLogin, cancel: &CancelToken) -> Result<PortalAliases, String>;
+    /// Makes the aliases as `plan` says - local ones removed, the live primary ones primary - and clears the noted
+    /// live primaries, in one transaction.
+    fn apply_live_aliases(&self, database: &SqlLogin, plan: &[Delocalized], cancel: &CancelToken) -> Result<(), String>;
 }
+
+/// A database's portal aliases, and each portal's noted live primary alias.
+pub type PortalAliases = (Vec<AliasRow>, std::collections::HashMap<i32, String>);
 
 #[cfg(test)]
 pub(crate) mod tests {

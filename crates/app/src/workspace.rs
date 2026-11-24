@@ -328,6 +328,8 @@ pub struct Workspace {
     setup: Option<Entity<dnnm_dialogs::setup_page::SetupPage>>,
     /// Source Control, made the first time it is shown.
     source_control: Option<Entity<dnnm_dialogs::source_control_page::SourceControlPage>>,
+    /// Its files, in the primary side bar while it is the page shown.
+    source_control_side: Option<Entity<dnnm_dialogs::source_control_page::SourceControlSide>>,
     /// The watch on the Source Control page's project folder, and the task that waits for it to be quiet.
     source_control_watch: Option<(dnnm_infrastructure::source_control::ProjectWatcher, gpui::Task<()>)>,
     /// The IIS read New project last got (`Store::sites_read`).
@@ -503,6 +505,7 @@ impl Workspace {
             projects,
             setup: None,
             source_control: None,
+            source_control_side: None,
             source_control_watch: None,
             setup_sites_read: 0,
             settings: None,
@@ -682,6 +685,10 @@ impl Workspace {
             let before = ws.page;
             ws.page = page;
             ws.store.update(cx, |s, _| s.projects_shown = page == Page::Projects);
+            // Source Control's files are in the primary side bar, as VS Code's: going there opens it.
+            if page == Page::SourceControl {
+                ws.primary_visible = true;
+            }
             if page == Page::NewProject && before != page {
                 let setup = ws.setup_page(window, cx);
                 setup.update(cx, |p, cx| p.shown(cx));
@@ -1099,6 +1106,9 @@ impl Render for Workspace {
             Page::NewProject => self.setup_page(window, cx).into_any_element(),
             Page::SourceControl => self.source_control_page(window, cx).into_any_element(),
         };
+        // What the primary side bar holds: Source Control's files on its page; empty on the others.
+        let mut primary_content: Option<gpui::AnyElement> =
+            (self.page == Page::SourceControl).then(|| self.source_control_side(cx).into_any_element());
 
         let card = |content: gpui::AnyElement, bg| {
             div()
@@ -1222,18 +1232,20 @@ impl Render for Workspace {
                 })
                 .cursor(gpui::CursorStyle::ResizeLeftRight)
         };
-        // An empty side bar - kept for what comes later. `out` of it shows while it slides: its content keeps its
-        // width and is cut off, so nothing in it moves about.
-        let side_card = |id: &'static str, width: gpui::Pixels, out: f32| {
+        // A side bar with its content (the page's, when it has one). `out` of it shows while it slides: its content keeps
+        // its width and is cut off, so nothing in it moves about.
+        let side_card = |id: &'static str, width: gpui::Pixels, out: f32, content: Option<gpui::AnyElement>| {
             div().flex_none().w(width * out).h_full().overflow_hidden().child(
                 div()
                     .id(id)
                     .w(width)
                     .h_full()
+                    .overflow_hidden()
                     .bg(c.window_bg)
                     .when(!compact_density, |d| {
                         d.rounded(theme.metrics.card_radius).border_1().border_color(c.card_border)
-                    }),
+                    })
+                    .children(content),
             )
         };
 
@@ -1259,7 +1271,7 @@ impl Render for Workspace {
                         cx.stop_propagation();
                     }),
                 );
-            (side_card("primary-side-bar", primary_width, primary_out), sash)
+            (side_card("primary-side-bar", primary_width, primary_out, primary_content.take()), sash)
         });
         let primary_group = (activity.is_some() || primary.is_some()).then(|| {
             // The primary side bar and its sash side by side (touching); the activity bar the card gap from them (none
@@ -1296,7 +1308,7 @@ impl Render for Workspace {
                     cx.stop_propagation();
                 }),
             );
-            let card = side_card("secondary-side-bar", secondary_width, secondary_out);
+            let card = side_card("secondary-side-bar", secondary_width, secondary_out, None);
             let parts: Vec<gpui::AnyElement> = if sidebar_right {
                 vec![card.into_any_element(), sash.into_any_element()]
             } else {

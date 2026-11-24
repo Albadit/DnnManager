@@ -94,6 +94,8 @@ pub enum Icon {
     // Things and places.
     Container,
     Database,
+    /// A file: a page with its corner folded (Source Control's rows).
+    File,
     Folder,
     FolderOpen,
     Globe,
@@ -422,6 +424,7 @@ impl Icon {
         Icon::Stop,
         Icon::Container,
         Icon::Database,
+        Icon::File,
         Icon::Folder,
         Icon::FolderOpen,
         Icon::Globe,
@@ -467,6 +470,7 @@ impl Icon {
             Icon::Stop => "stop",
             Icon::Container => "container",
             Icon::Database => "database",
+            Icon::File => "file",
             Icon::Folder => "folder",
             Icon::FolderOpen => "folder-open",
             Icon::Globe => "globe",
@@ -531,6 +535,7 @@ impl Icon {
                     .into(),
                 String::new(),
             ),
+            Icon::File => ("M3.5,1.5 H9.5 L12.5,4.5 V14.5 H3.5 Z M9.5,1.5 V4.5 H12.5".into(), String::new()),
             Icon::Folder => (
                 "M1.5,4 A1,1 0 0 1 2.5,3 H6 L7.5,4.5 H13.5 A1,1 0 0 1 14.5,5.5 V12 A1,1 0 0 1 13.5,13 H2.5 A1,1 0 0 1 1.5,12 Z".into(),
                 String::new(),

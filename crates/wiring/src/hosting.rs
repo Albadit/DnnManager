@@ -143,7 +143,7 @@ impl LocalSql for ContainerSql {
         hostname_suffix: &str,
         alias: &str,
         cancel: &CancelToken,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<dnnm_application::use_cases::portal_aliases::Localized>, String> {
         self.service.remap_portal_aliases(database, hostname_suffix, alias, cancel)
     }
     fn disable_ssl(&self, database: &str, cancel: &CancelToken) -> Result<i64, String> {

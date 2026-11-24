@@ -11,7 +11,9 @@ use dnnm_application::operation::{CancelToken, Outcome};
 use dnnm_application::source_control::model::{Entry, Environment, HistoryLine};
 use dnnm_application::source_control::sync::BothCopies;
 use dnnm_dialogs::source_control_environment::{EnvironmentDialog, EnvironmentEdit};
-use dnnm_dialogs::source_control_page::{SourceControlBackend, SourceControlEvent, SourceControlPage, Status};
+use dnnm_dialogs::source_control_page::{
+    SourceControlBackend, SourceControlEvent, SourceControlPage, SourceControlSide, Status,
+};
 use dnnm_dialogs::source_control_preview::PreviewDialog;
 use dnnm_wiring::source_control as wiring;
 
@@ -111,6 +113,17 @@ impl Workspace {
         page
     }
 
+    /// The page's files for the primary side bar - made with the page (which is made first).
+    pub(super) fn source_control_side(&mut self, cx: &mut Context<Self>) -> Entity<SourceControlSide> {
+        if let Some(side) = &self.source_control_side {
+            return side.clone();
+        }
+        let page = self.source_control.clone().expect("the page is made before its side bar");
+        let side = cx.new(|cx| SourceControlSide::new(page, cx));
+        self.source_control_side = Some(side.clone());
+        side
+    }
+
     /// The projects the page offers: every DNN site the store knows, with its folder.
     pub(super) fn sync_source_control_projects(&mut self, cx: &mut Context<Self>) {
         let Some(page) = self.source_control.clone() else { return };
@@ -205,7 +218,7 @@ impl Workspace {
                                 let id = edit.env.id.clone();
                                 let _ = weak.update(cx, |p, cx| p.reload_environments(Some(id), cx));
                                 ws.store.update(cx, |s, cx| {
-                                    s.toast(ToastKind::Success, format!("Saved the environment {}", edit.env.name), false, cx)
+                                    s.toast(ToastKind::Success, format!("Saved the server {}", edit.env.name), false, cx)
                                 });
                             }
                             Err(e) => ws.store.update(cx, |s, cx| s.toast(ToastKind::Error, e, false, cx)),
@@ -219,7 +232,7 @@ impl Workspace {
                 let answer = self.store.update(cx, |s, cx| {
                     s.ask(
                         format!(
-                            "Delete the environment {} ({})? Its records of what was synced and its history go too; nothing on the server or in the project is touched.",
+                            "Delete the server {} ({})? Its records of what was synced and its history go too, for every project; nothing on the server or in a project is touched.",
                             env.name, env.host
                         ),
                         vec!["Delete".into(), "Cancel".into()],

@@ -144,6 +144,13 @@ impl Environment {
         format!("{} - {}://{}@{}:{}", self.name, self.protocol.key(), self.user, self.host, self.port)
     }
 
+    /// Where what is kept between runs - the records of the last sync, the history, the server's last listing - is
+    /// kept: per server and project, as a server isn't tied to one project (`<id>@<project>`). The trusted key and
+    /// the secret are the server's (its `id`).
+    pub fn state_key(&self) -> String {
+        if self.project.is_empty() { self.id.clone() } else { format!("{}@{}", self.id, self.project.to_lowercase()) }
+    }
+
     /// The name its secret (password or passphrase) has in the OS's store.
     pub fn secret_name(&self) -> String {
         format!("source-control/{}", self.id)

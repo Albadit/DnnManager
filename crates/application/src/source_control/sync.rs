@@ -221,8 +221,8 @@ pub fn scan(deps: &SyncDeps, env: &Environment, op: &mut Operation) -> Result<Sc
 
     op.report.step("Compare");
     let listed: Vec<(String, FileMeta)> = remote.iter().map(|(p, m)| (p.clone(), m.clone())).collect();
-    deps.state.save_listing(&env.id, (deps.now)(), &listed)?;
-    let mut records = deps.state.records(&env.id)?;
+    deps.state.save_listing(&env.state_key(), (deps.now)(), &listed)?;
+    let mut records = deps.state.records(&env.state_key())?;
     let mut entries = compare(&local, &remote, &records);
     verify_same_size(deps, &env, fs.as_mut(), &mut entries, &mut records, op)?;
     let counts = super::classify::counts(&entries);
@@ -257,17 +257,17 @@ pub fn reclassify_local(deps: &SyncDeps, env: &Environment, last: &[Entry], canc
     let local = read_project(deps, env, cancel)?;
     let remote: BTreeMap<String, FileMeta> =
         last.iter().filter_map(|e| e.remote.clone().map(|m| (e.path.clone(), m))).collect();
-    let records = deps.state.records(&env.id)?;
+    let records = deps.state.records(&env.state_key())?;
     Ok(compare(&local, &remote, &records))
 }
 
 /// The last comparison again without connecting: the server's side as it was listed then (and kept up by every
 /// transfer since), the project's read now - with when the server was listed. None before a first comparison.
 pub fn cached(deps: &SyncDeps, env: &Environment, cancel: &CancelToken) -> Result<Option<(i64, Vec<Entry>)>, String> {
-    let Some((at, listed)) = deps.state.listing(&env.id)? else { return Ok(None) };
+    let Some((at, listed)) = deps.state.listing(&env.state_key())? else { return Ok(None) };
     let local = read_project(deps, env, cancel)?;
     let remote: BTreeMap<String, FileMeta> = listed.into_iter().collect();
-    let records = deps.state.records(&env.id)?;
+    let records = deps.state.records(&env.state_key())?;
     Ok(Some((at, compare(&local, &remote, &records))))
 }
 
@@ -307,7 +307,7 @@ fn verify_same_size(
                 remote: r.with_hash(local_hash),
                 synced: (deps.now)(),
             };
-            deps.state.set_record(&env.id, &entry.path, &record)?;
+            deps.state.set_record(&env.state_key(), &entry.path, &record)?;
             records.insert(entry.path.clone(), record);
             entry.change = Change::Unchanged;
             same += 1;
@@ -520,18 +520,18 @@ pub fn transfer(
         };
         match outcome {
             Ok(Sent::Done) => {
-                deps.state.add_history(&env.id, &line("Done"))?;
+                deps.state.add_history(&env.state_key(), &line("Done"))?;
                 result.done.push(item.path.clone());
             }
             Ok(Sent::Changed(why)) => {
                 op.report.warn(&format!("{}: left alone - {why}", item.path));
-                deps.state.add_history(&env.id, &line(&format!("Left alone: {why}")))?;
+                deps.state.add_history(&env.state_key(), &line(&format!("Left alone: {why}")))?;
                 result.skipped.push((item.path.clone(), why));
             }
             Err(e) if e == CANCELLED => return Err(e),
             Err(e) => {
                 op.report.fail(&format!("{}: {e}", item.path));
-                deps.state.add_history(&env.id, &line(&format!("Failed: {e}")))?;
+                deps.state.add_history(&env.state_key(), &line(&format!("Failed: {e}")))?;
                 result.failed.push((item.path.clone(), e));
             }
         }
@@ -647,9 +647,9 @@ fn send_one(
             if sent.size != meta.size {
                 return Err(RemoteError::Other(format!("the server has {} bytes of {}", sent.size, meta.size)));
             }
-            deps.state.update_listing(&env.id, &item.path, Some(&sent)).map_err(local_error)?;
+            deps.state.update_listing(&env.state_key(), &item.path, Some(&sent)).map_err(local_error)?;
             let record = SyncRecord { local: meta.with_hash(hash.clone()), remote: sent.with_hash(hash), synced: (deps.now)() };
-            deps.state.set_record(&env.id, &item.path, &record).map_err(local_error)?;
+            deps.state.set_record(&env.state_key(), &item.path, &record).map_err(local_error)?;
         }
         Action::Download => {
             let meta = remote_now.ok_or_else(|| RemoteError::Other("it isn't on the server any more".into()))?;
@@ -672,12 +672,12 @@ fn send_one(
             }
             let hash = deps.local.hash(root, &item.path).map_err(local_error)?;
             let record = SyncRecord { local: local.with_hash(hash.clone()), remote: meta.with_hash(hash), synced: (deps.now)() };
-            deps.state.set_record(&env.id, &item.path, &record).map_err(local_error)?;
+            deps.state.set_record(&env.state_key(), &item.path, &record).map_err(local_error)?;
         }
         Action::DeleteRemote => {
             fs.remove(remote)?;
-            deps.state.update_listing(&env.id, &item.path, None).map_err(local_error)?;
-            deps.state.remove_record(&env.id, &item.path).map_err(local_error)?;
+            deps.state.update_listing(&env.state_key(), &item.path, None).map_err(local_error)?;
+            deps.state.remove_record(&env.state_key(), &item.path).map_err(local_error)?;
         }
     }
     Ok(Sent::Done)
@@ -721,7 +721,7 @@ pub fn start_merge(deps: &SyncDeps, env: &Environment, path: &str, op: &mut Oper
     let merged = super::diff::merge_markers(&server_text, &project_text, &env.name);
     deps.local.write(&deps.project_dir, path, stamp, &mut |to| to.write_all(merged.as_bytes()).map_err(|e| e.to_string()))?;
     deps.state.add_history(
-        &env.id,
+        &env.state_key(),
         &HistoryLine { at: stamp, action: "Merge".into(), path: path.into(), outcome: "Started - markers written".into() },
     )?;
     op.report.success(&format!(

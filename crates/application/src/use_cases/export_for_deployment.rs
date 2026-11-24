@@ -2,7 +2,8 @@
 //! package for the live server in one folder - the site's files as `<project>.zip` without what only matters on this
 //! PC (source control, editor folders, logs, caches, the search index), its web.config made ready for the server (the
 //! live connection string or a placeholder, debug off, the HTTPS rules DNN Manager switched off back on); the database
-//! as `<project>.bacpac` with the live domains as portal 0's aliases and DNN's SSL setting to match; and DEPLOY.txt
+//! as `<project>.bacpac` with every portal's local aliases (this PC's addresses) left out and its live primary alias
+//! primary again, the live domains typed as portal 0's aliases and DNN's SSL setting to match; and DEPLOY.txt
 //! saying what to do with them. The local site and its database are not changed: the database is changed in a
 //! temporary copy (exported, imported under another name on the same server, changed, exported again, dropped).
 //!
@@ -13,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use super::backups::{Bacpacs, Databases, SiteFiles, SqlLogin, Stamp, is_same_or_inside};
+use super::portal_aliases;
 use crate::operation::{Operation, STEP_LIMIT};
 
 /// What the live site doesn't need: made on this PC, or made again by DNN.
@@ -100,6 +102,10 @@ pub struct ExportForDeploymentDeps<'a> {
     /// Not %TEMP%: the database's copy is read back from it - a folder only administrators can change.
     pub temp_folder: PathBuf,
     pub now: Stamp,
+    /// Settings → host-name suffix (`dnndev.me`): portal aliases under it are this PC's, left out of the package.
+    pub hostname_suffix: String,
+    /// The site's own host names here (its IIS bindings') - aliases on them, or under them, are left out too.
+    pub local_hosts: Vec<String>,
 }
 
 pub fn export_for_deployment(
@@ -180,8 +186,8 @@ pub fn export_for_deployment(
     Ok(())
 }
 
-/// The site's database as a .bacpac. With live domains or HTTPS, a temporary copy on the same server gets them first:
-/// exported, imported under another name, changed, exported again - then dropped.
+/// The site's database as a .bacpac. With local portal aliases to leave out, live domains or HTTPS, a temporary copy
+/// on the same server gets them first: exported, imported under another name, changed, exported again - then dropped.
 fn export_database(
     deps: &ExportForDeploymentDeps,
     bacpac_path: &Path,
@@ -190,7 +196,7 @@ fn export_database(
 ) -> Result<(), String> {
     let source = deps.bacpacs.export_source(&req.project_name, &req.project_directory)?;
     deps.bacpacs.ensure_available(op.report, &op.cancel)?;
-    if req.domains.is_empty() && !req.https {
+    if req.domains.is_empty() && !req.https && !has_local_aliases(deps, &source, op) {
         return deps.bacpacs.export(&source, bacpac_path, op.report, &op.cancel);
     }
 
@@ -224,6 +230,7 @@ fn change_copy(
     ));
     deps.bacpacs.export(source, temp_bacpac, op.report, &op.cancel)?;
     deps.bacpacs.import(copy, temp_bacpac, op.report, &op.cancel)?;
+    live_aliases(deps, copy, req, op)?;
     if let Some(primary) = req.domains.first() {
         deps.databases.replace_portal_aliases(copy, &req.domains, &op.cancel)?;
         op.report.success(&format!("Portal aliases: {} ({primary} primary).", req.domains.join(", ")));
@@ -233,6 +240,56 @@ fn change_copy(
         Err(e) => op.report.warn(&e),
     }
     deps.bacpacs.export(copy, bacpac_path, op.report, &op.cancel)
+}
+
+/// Whether the database has aliases of this PC's, or noted live primaries, to take out - read in the site's own
+/// database, which isn't changed. One that can't be read: no.
+fn has_local_aliases(deps: &ExportForDeploymentDeps, source: &SqlLogin, op: &mut Operation) -> bool {
+    match deps.databases.portal_aliases(source, &op.cancel) {
+        Ok((rows, noted)) => {
+            let plan = portal_aliases::delocalize(&rows, &noted, &deps.hostname_suffix, &deps.local_hosts);
+            portal_aliases::changes(&rows, &noted, &plan)
+        }
+        Err(e) => {
+            op.report.warn(&format!("The portal aliases couldn't be read, so they are exported as they are: {e}"));
+            false
+        }
+    }
+}
+
+/// In the copy: every portal's local aliases out, its live primary alias primary again - so it works on the server
+/// as it is. A portal with no live alias is said; portal 0's are the domains typed, when there are some.
+fn live_aliases(
+    deps: &ExportForDeploymentDeps,
+    copy: &SqlLogin,
+    req: &ExportForDeploymentRequest,
+    op: &mut Operation,
+) -> Result<(), String> {
+    let (rows, noted) = deps.databases.portal_aliases(copy, &op.cancel)?;
+    let plan = portal_aliases::delocalize(&rows, &noted, &deps.hostname_suffix, &deps.local_hosts);
+    if !portal_aliases::changes(&rows, &noted, &plan) {
+        return Ok(());
+    }
+    deps.databases.apply_live_aliases(copy, &plan, &op.cancel)?;
+    for d in &plan {
+        let typed = d.portal == 0 && !req.domains.is_empty();
+        match d.primary_alias(&rows) {
+            _ if typed => {}
+            Some(alias) if !d.remove.is_empty() => op.report.success(&format!(
+                "Portal {}: {alias} primary - {} local alias{} left out.",
+                d.portal,
+                d.remove.len(),
+                if d.remove.len() == 1 { "" } else { "es" }
+            )),
+            Some(_) => {}
+            None => op.report.warn(&format!(
+                "Portal {} has only this PC's addresses - add its live domain in DNN on the server (Settings → Site \
+                 Settings → Site Aliases).",
+                d.portal
+            )),
+        }
+    }
+    Ok(())
 }
 
 /// DEPLOY.txt: what to do with the package on the server.
@@ -267,7 +324,7 @@ pub fn instructions_text(name: &str, req: &ExportForDeploymentRequest, now: Stam
         if req.https { " - with a certificate on an https binding" } else { "" }
     ));
     lines.push(if req.domains.is_empty() {
-        "   DNN's portal aliases are as they were locally - add the live domain in DNN (Settings → Site Settings → Site Aliases).".into()
+        "   DNN's portal aliases are the live site's - this PC's addresses were left out. A portal made here needs its live domain in DNN (Settings → Site Settings → Site Aliases).".into()
     } else {
         format!("   DNN's portal aliases are already {domains}.")
     });
@@ -383,6 +440,9 @@ pub(crate) mod tests {
         pub calls: Mutex<Vec<String>>,
         pub fail_ssl: bool,
         pub fail_drop: bool,
+        /// The aliases the database has.
+        pub aliases: Vec<portal_aliases::AliasRow>,
+        pub noted: std::collections::HashMap<i32, String>,
     }
 
     impl Databases for FakeDatabases {
@@ -405,6 +465,15 @@ pub(crate) mod tests {
         fn set_ssl(&self, d: &SqlLogin, on: bool, _: &CancelToken) -> Result<(), String> {
             self.calls.lock().unwrap().push(format!("ssl {} {on}", d.database));
             if self.fail_ssl { Err("The database has no DNN portal settings.".into()) } else { Ok(()) }
+        }
+        fn portal_aliases(&self, _: &SqlLogin, _: &CancelToken) -> Result<super::super::backups::PortalAliases, String> {
+            Ok((self.aliases.clone(), self.noted.clone()))
+        }
+        fn apply_live_aliases(&self, d: &SqlLogin, plan: &[portal_aliases::Delocalized], _: &CancelToken) -> Result<(), String> {
+            let removed: Vec<String> = plan.iter().flat_map(|p| &p.remove).map(|id| id.to_string()).collect();
+            let primary: Vec<String> = plan.iter().filter_map(|p| p.primary).map(|id| id.to_string()).collect();
+            self.calls.lock().unwrap().push(format!("live aliases {} -{} +{}", d.database, removed.join(","), primary.join(",")));
+            Ok(())
         }
     }
 
@@ -450,6 +519,8 @@ pub(crate) mod tests {
                 databases: self.databases.clone(),
                 temp_folder: self.dir.path().join("temp"),
                 now: stamp("20260928_154210"),
+                hostname_suffix: "dnndev.me".into(),
+                local_hosts: vec!["shop.dnndev.me".into()],
             };
             let mut lines = Lines::default();
             let outcome =
@@ -518,6 +589,43 @@ pub(crate) mod tests {
                 .unwrap()
                 .contains("the whole database (its users too) and the live connection string, password included")
         );
+    }
+
+    #[test]
+    fn this_pcs_aliases_are_left_out_and_the_live_primary_ones_are_back() {
+        let row = |id: i64, portal: i32, alias: &str, primary: bool| portal_aliases::AliasRow {
+            id,
+            portal,
+            alias: alias.into(),
+            primary,
+        };
+        let databases = FakeDatabases {
+            aliases: vec![
+                row(1, 0, "shop.nl", false),
+                row(2, 0, "shop.dnndev.me", true),
+                row(3, 1, "outlet.nl", false),
+                row(4, 1, "outlet.shop.dnndev.me", true),
+                row(5, 2, "made-here.shop.dnndev.me", true),
+            ],
+            noted: [(0, "shop.nl".to_string()), (1, "outlet.nl".to_string())].into(),
+            ..FakeDatabases::default()
+        };
+        let s = Setup { databases: Arc::new(databases), ..Setup::new() };
+        // No domains typed, no HTTPS: a copy all the same, as the aliases change.
+        let req = ExportForDeploymentRequest { domains: vec![], https: false, ..s.request() };
+        let (outcome, lines) = s.run(&req);
+        assert_eq!(outcome, Outcome::Finished, "{lines:#?}");
+        assert_eq!(
+            *s.databases.calls.lock().unwrap(),
+            [
+                "live aliases shop_deploy_20260928154210 -2,4,5 +1,3",
+                "ssl shop_deploy_20260928154210 false",
+                "drop shop_deploy_20260928154210"
+            ]
+        );
+        assert!(lines.contains(&"ok Portal 0: shop.nl primary - 1 local alias left out.".into()), "{lines:#?}");
+        assert!(lines.contains(&"ok Portal 1: outlet.nl primary - 1 local alias left out.".into()));
+        assert!(lines.iter().any(|l| l.starts_with("warn Portal 2 has only this PC's addresses")));
     }
 
     #[test]

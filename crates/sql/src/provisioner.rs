@@ -9,6 +9,8 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use dnnm_application::operation::{CANCELLED, CancelToken};
+use dnnm_application::use_cases::backups::PortalAliases;
+use dnnm_application::use_cases::portal_aliases::{AliasRow, Delocalized, LIVE_PRIMARY_SETTING};
 
 use crate::address::SqlServerAddress;
 use crate::client::{Conn, Param, SqlError, Value, block_on, values};
@@ -352,6 +354,125 @@ impl DatabaseProvisioner {
         }
     }
 
+    /// Every portal alias, and each portal's noted live primary alias ([`LIVE_PRIMARY_SETTING`]). Reads only.
+    pub fn portal_aliases(
+        &self,
+        connection: &DatabaseConnection,
+        cancel: Option<&CancelToken>,
+    ) -> Result<PortalAliases, String> {
+        let c = connection.clone();
+        let result = block_on(cancel, async move {
+            let mut conn = open(&c, &c.database).await?;
+            let Some(q) = qualifier(&mut conn, "PortalAlias").await? else {
+                return Ok(Err("The database has no DNN portal aliases.".to_string()));
+            };
+            let primary = if has_is_primary(&mut conn, &q).await? { "CAST(IsPrimary AS int)" } else { "0" };
+            let rows = conn
+                .rows(
+                    &format!(
+                        "SELECT CAST(PortalAliasID AS bigint), CAST(PortalID AS int), HTTPAlias, {primary} FROM dbo.[{q}PortalAlias]"
+                    ),
+                    &[],
+                )
+                .await?;
+            let aliases = rows
+                .iter()
+                .filter_map(|r| {
+                    let v = values(r);
+                    Some(AliasRow {
+                        id: v.first()?.as_i64()?,
+                        portal: i32::try_from(v.get(1)?.as_i64()?).ok()?,
+                        alias: v.get(2)?.clone().into_text()?,
+                        primary: v.get(3).and_then(Value::as_i64) == Some(1),
+                    })
+                })
+                .collect();
+            let noted = conn
+                .rows(
+                    &format!(
+                        "IF OBJECT_ID(N'dbo.[{q}PortalSettings]') IS NOT NULL \
+                         SELECT CAST(PortalID AS int), SettingValue FROM dbo.[{q}PortalSettings] WHERE SettingName = @P1"
+                    ),
+                    &[LIVE_PRIMARY_SETTING.into()],
+                )
+                .await?
+                .iter()
+                .filter_map(|r| {
+                    let v = values(r);
+                    Some((i32::try_from(v.first()?.as_i64()?).ok()?, v.get(1)?.clone().into_text()?))
+                })
+                .collect();
+            Ok(Ok((aliases, noted)))
+        });
+        match result {
+            Ok(inner) => inner,
+            Err(e) => Err(fail(e, |m| format!("Could not read the portal aliases: {m}"))),
+        }
+    }
+
+    /// The aliases as `plan` says - local ones removed, the live primary ones primary - and the noted live primaries
+    /// cleared, in one transaction.
+    pub fn apply_live_aliases(
+        &self,
+        connection: &DatabaseConnection,
+        plan: &[Delocalized],
+        cancel: Option<&CancelToken>,
+    ) -> Result<(), String> {
+        let c = connection.clone();
+        let plan = plan.to_vec();
+        let result = block_on(cancel, async move {
+            let mut conn = open(&c, &c.database).await?;
+            let Some(q) = qualifier(&mut conn, "PortalAlias").await? else {
+                return Ok(Err("The database has no DNN portal aliases.".to_string()));
+            };
+            let has_primary = has_is_primary(&mut conn, &q).await?;
+            conn.batch("BEGIN TRANSACTION;").await?;
+            let outcome: Result<(), SqlError> = async {
+                let removed: Vec<String> = plan.iter().flat_map(|d| &d.remove).map(|id| id.to_string()).collect();
+                if !removed.is_empty() {
+                    conn.execute(
+                        &format!("DELETE FROM dbo.[{q}PortalAlias] WHERE PortalAliasID IN ({})", removed.join(", ")),
+                        &[],
+                    )
+                    .await?;
+                }
+                for d in plan.iter().filter(|_| has_primary) {
+                    if let Some(id) = d.primary {
+                        conn.execute(
+                            &format!(
+                                "UPDATE dbo.[{q}PortalAlias] SET IsPrimary = CASE WHEN PortalAliasID = {id} THEN 1 ELSE 0 END WHERE PortalID = {}",
+                                d.portal
+                            ),
+                            &[],
+                        )
+                        .await?;
+                    }
+                }
+                conn.execute(
+                    &format!(
+                        "IF OBJECT_ID(N'dbo.[{q}PortalSettings]') IS NOT NULL \
+                         DELETE FROM dbo.[{q}PortalSettings] WHERE SettingName = @P1"
+                    ),
+                    &[LIVE_PRIMARY_SETTING.into()],
+                )
+                .await?;
+                Ok(())
+            }
+            .await;
+            match outcome {
+                Ok(()) => conn.batch("COMMIT TRANSACTION;").await.map(Ok),
+                Err(e) => {
+                    let _ = conn.batch("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;").await;
+                    Err(e)
+                }
+            }
+        });
+        match result {
+            Ok(inner) => inner,
+            Err(e) => Err(fail(e, |m| format!("Could not set the live portal aliases: {m}"))),
+        }
+    }
+
     /// Switches DNN's SSL setting on or off for every portal (DNN 10: SSLSetup; DNN 9: SSLEnabled and SSLEnforced).
     pub fn set_ssl(
         &self,
@@ -442,6 +563,11 @@ async fn update_aliases(
 }
 
 /// Adds `alias` to portal 0 unless a portal has it already; 1 when added.
+/// Whether PortalAlias has IsPrimary (DNN 7.1 and later).
+async fn has_is_primary(conn: &mut Conn, q: &str) -> Result<bool, SqlError> {
+    Ok(!matches!(conn.scalar(&format!("SELECT COL_LENGTH('dbo.[{q}PortalAlias]', 'IsPrimary')"), &[]).await?, Value::Null))
+}
+
 async fn insert_alias(conn: &mut Conn, q: &str, alias: &str, primary: bool) -> Result<i64, SqlError> {
     // DNN 7.1 and later have BrowserType and IsPrimary; an older schema gets the columns every version has.
     let full = !matches!(

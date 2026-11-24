@@ -1,7 +1,8 @@
-//! The Source Control page: a project's files against one of its environments' server, as VS Code's Source Control
-//! lays it out - a toolbar (Refresh, Upload, Download, More), the files in sections (Conflicts, Changes, Server
-//! changes) as folder trees with their change letters, search and change filters, and on the right the side-by-side
-//! diff of the file chosen (the server's copy left, the project's right) or the history.
+//! The Source Control page: a project's files against a server, as VS Code's Source Control lays it out - in the
+//! primary side bar the title with its actions (Refresh, Upload, Download, More), the project and server, one main
+//! button (Upload, else Download, else Refresh), the files in sections (Conflicts, Changes, Server changes) with their
+//! folder and change letter and their own actions under the mouse; in the main view the side-by-side diff of the file
+//! chosen (the server's copy left, the project's right) or the history.
 //!
 //! Reading and comparing, and sending, are operations the app runs (`SourceControlEvent`) - so they show in Output
 //! with their progress, can be cancelled, and ask their questions there; the page gets their result back
@@ -120,8 +121,8 @@ pub struct SourceControlPage {
     environments: Vec<Environment>,
     env: Option<String>,
     env_open: bool,
-    /// The DNN part picker's list is open.
-    scope_open: bool,
+    /// The files as a folder tree instead of VS Code's flat list (More: View as Tree / List).
+    tree: bool,
     /// Reading the saved comparison.
     loading_cached: Option<Task<()>>,
     entries: Vec<Entry>,
@@ -167,7 +168,7 @@ impl SourceControlPage {
             environments: Vec::new(),
             env: None,
             env_open: false,
-            scope_open: false,
+            tree: false,
             loading_cached: None,
             entries: Vec::new(),
             status: Status::NotCompared,
@@ -293,9 +294,10 @@ impl SourceControlPage {
         self.status = Status::NotCompared;
     }
 
+    /// Another project - with the same server chosen, as servers aren't tied to a project; its comparison is that
+    /// project's.
     fn choose_project(&mut self, project: Option<String>, cx: &mut Context<Self>) {
         self.project = project;
-        self.env = None;
         self.clear_comparison();
         self.reload_environments(None, cx);
         cx.emit(SourceControlEvent::Watch(self.project_dir()));
@@ -369,7 +371,7 @@ impl SourceControlPage {
     }
 
     fn shown(&self, entry: &Entry) -> bool {
-        let rows = list::rows(std::slice::from_ref(entry), &self.filter, &HashSet::new());
+        let rows = list::rows(std::slice::from_ref(entry), &self.filter, &HashSet::new(), false);
         rows.iter().any(|r| matches!(r, Row::File { .. }))
     }
 
@@ -520,7 +522,7 @@ impl SourceControlPage {
     // ─── The list ────────────────────────────────────────────────────────────
 
     fn rows(&self) -> Vec<Row> {
-        list::rows(&self.entries, &self.filter, &self.collapsed)
+        list::rows(&self.entries, &self.filter, &self.collapsed, self.tree)
     }
 
     fn toggle_collapsed(&mut self, row: &Row, cx: &mut Context<Self>) {
@@ -661,6 +663,17 @@ impl SourceControlPage {
                 page.delete_on_server(entries, cx)
             }),
             MenuItem::Separator,
+            item(if self.tree { "View as List" } else { "View as Tree" }, true, |page, cx| {
+                page.tree = !page.tree;
+                page.cursor = None;
+                cx.notify();
+            }),
+            item(if self.filter.unchanged { "Hide unchanged files" } else { "Show unchanged files" }, true, |page, cx| {
+                page.filter.unchanged = !page.filter.unchanged;
+                page.cursor = None;
+                cx.notify();
+            }),
+            MenuItem::Separator,
             item("Show history", has_env, |page, cx| page.show_history(cx)),
             item("Open the server backups folder", has_env, |page, cx| {
                 if let Some(env) = page.environment() {
@@ -669,13 +682,13 @@ impl SourceControlPage {
                 }
             }),
             MenuItem::Separator,
-            item("Add environment…", self.project.is_some(), |page, cx| page.add_environment(cx)),
-            item("Edit environment…", has_env, |page, cx| {
+            item("Add server…", self.project.is_some(), |page, cx| page.add_environment(cx)),
+            item("Edit server…", has_env, |page, cx| {
                 if let Some(env) = page.environment().cloned() {
                     cx.emit(SourceControlEvent::EditEnvironment { env, is_new: false });
                 }
             }),
-            item("Delete environment…", has_env, |page, cx| {
+            item("Delete server…", has_env, |page, cx| {
                 if let Some(env) = page.environment().cloned() {
                     cx.emit(SourceControlEvent::DeleteEnvironment(env));
                 }
@@ -692,14 +705,15 @@ impl SourceControlPage {
         let env = Environment {
             id: crate::source_control_environment::new_id(&project),
             project: project.clone(),
-            name: "Production".into(),
+            name: String::new(),
+            // Not asked any more: every server is treated as live - web.config and the like protected.
             kind: dnnm_application::source_control::model::EnvironmentKind::Production,
-            protocol: dnnm_application::source_control::model::Protocol::Sftp,
+            protocol: dnnm_application::source_control::model::Protocol::Ftps,
             host: String::new(),
-            port: 22,
+            port: 21,
             user: String::new(),
             auth: dnnm_application::source_control::model::Auth::Password,
-            remote_root: format!("/var/www/{project}"),
+            remote_root: crate::source_control_environment::DEFAULT_REMOTE_DIRECTORY.into(),
             mappings: Vec::new(),
             ignore: Vec::new(),
             protected: Vec::new(),
@@ -760,6 +774,26 @@ impl SourceControlPage {
     }
 }
 
+/// The page's files in the workspace's primary side bar: a view of its own over the same page, drawn again whenever
+/// the page changes.
+pub struct SourceControlSide {
+    page: Entity<SourceControlPage>,
+    _observe: Subscription,
+}
+
+impl SourceControlSide {
+    pub fn new(page: Entity<SourceControlPage>, cx: &mut Context<Self>) -> Self {
+        let observe = cx.observe(&page, |_, _, cx| cx.notify());
+        Self { page, _observe: observe }
+    }
+}
+
+impl Render for SourceControlSide {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.page.update(cx, |page, cx| page.render_side(window, cx))
+    }
+}
+
 impl Focusable for SourceControlPage {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -814,6 +848,49 @@ impl Render for SourceControlPage {
         let c = theme.colors;
         let env = self.environment().cloned();
         let busy = matches!(self.status, Status::Working(_));
+        // The comparison (or the history) fills the main view; the files are in the primary side bar.
+        let right = self.render_right(env.as_ref(), busy, cx);
+        let page = div()
+            .id("source-control-page")
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(Self::key_down))
+            .size_full()
+            .flex()
+            .flex_col()
+            .pad(px(10.0), px(10.0))
+            .text_size(theme.text.body)
+            .text_color(c.text_primary)
+            .font_family(theme.font.clone())
+            .child(right);
+        // Last: the menu borrows `cx` for as long as it is drawn.
+        let menu = self.menu.as_ref().map(|menu| {
+            let weak = cx.entity().downgrade();
+            dnnm_ui::menu::render(
+                menu,
+                move |_, cx| {
+                    let _ = weak.update(cx, |page, cx| {
+                        page.menu = None;
+                        cx.notify();
+                    });
+                },
+                |_, _, _| {},
+                window,
+                cx,
+            )
+        });
+
+        page.children(menu)
+    }
+}
+
+impl SourceControlPage {
+    /// The primary side bar's part of the page (VS Code's Source Control view): the title and its actions, the project,
+    /// environment and part, the status, the search and filters, and the files. The comparison is the main view's.
+    pub fn render_side(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let theme = Theme::get(cx).clone();
+        let c = theme.colors;
+        let env = self.environment().cloned();
+        let busy = matches!(self.status, Status::Working(_));
 
         // ─── Header: project, environment, status ─────────────────────────────
         let project_items: Vec<(SharedString, bool)> = self
@@ -842,7 +919,7 @@ impl Render for SourceControlPage {
             .iter()
             .map(|e| (SharedString::from(e.label()), self.env.as_deref() == Some(e.id.as_str())))
             .collect();
-        let env_value = env.as_ref().map_or_else(|| "No environment yet".to_string(), |e| e.label());
+        let env_value = env.as_ref().map_or_else(|| "No server yet".to_string(), |e| e.label());
         let env_select = dnnm_ui::dialog::select(
             "sc-environment",
             env_value,
@@ -862,7 +939,7 @@ impl Render for SourceControlPage {
         );
         let (status_text, status_color) = match &self.status {
             Status::NotCompared if env.is_some() => ("Not compared yet - Refresh".to_string(), c.text_muted),
-            Status::NotCompared => ("Add an environment to compare with its server".to_string(), c.text_muted),
+            Status::NotCompared => ("Add a server to compare the project with".to_string(), c.text_muted),
             Status::Working(what) => (what.clone(), c.log_warn),
             Status::Compared { at } => {
                 let changes = self.entries.iter().filter(|e| e.change != Change::Unchanged).count();
@@ -870,76 +947,43 @@ impl Render for SourceControlPage {
             }
             Status::Failed(why) => (format!("Failed: {why}"), c.error_text),
         };
-        // The DNN parts the comparison found: deploy one module, skin or container on its own.
-        let scopes = list::dnn_scopes(&self.entries);
-        let scope_value = self
-            .filter
-            .scope
-            .as_ref()
-            .and_then(|f| scopes.iter().find(|s| &s.folder == f).map(|s| s.label.clone()))
-            .unwrap_or_else(|| "Whole project".into());
-        let mut scope_items: Vec<(SharedString, bool)> = vec![("Whole project".into(), self.filter.scope.is_none())];
-        scope_items.extend(scopes.iter().map(|s| (SharedString::from(s.label.clone()), self.filter.scope.as_ref() == Some(&s.folder))));
-        let scope_folders: Vec<String> = scopes.iter().map(|s| s.folder.clone()).collect();
-        let scope_select = dnnm_ui::dialog::select(
-            "sc-scope",
-            scope_value,
-            self.scope_open,
-            scope_items,
-            cx.listener(|this, open: &bool, _, cx| {
-                this.scope_open = *open;
-                cx.notify();
-            }),
-            cx.listener(move |this, i: &usize, _, cx| {
-                this.scope_open = false;
-                this.filter.scope = if *i == 0 { None } else { scope_folders.get(*i - 1).cloned() };
-                this.selected.clear();
-                this.cursor = None;
-                cx.notify();
-            }),
-            cx,
-        );
-        let header = div()
+        let add_env = ui::icon_button("sc-add-env", Icon::Add, c.text_primary, self.project.is_some(), cx)
+            .tip("Add a server: any project can be compared with it and deployed to it")
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.add_environment(cx)));
+        let status = div()
+            .id("sc-status")
             .flex()
-            .items_center()
-            .flex_wrap()
-            .gap(px(8.0))
-            .child(div().text_size(theme.text.heading).font_weight(FontWeight::SEMIBOLD).child("Source Control"))
-            .child(div().w(px(200.0)).child(project_select))
-            .child(div().w(px(320.0)).child(env_select))
-            .child(
-                div()
-                    .id("sc-scope-box")
-                    .w(px(240.0))
-                    .tip("Deploy only one part of the site: a module, a skin or a container")
-                    .child(scope_select),
-            )
-            .child(
-                ui::icon_button("sc-add-env", Icon::Add, c.text_primary, self.project.is_some(), cx)
-                    .tip("Add an environment: a server to deploy this project to")
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.add_environment(cx))),
-            )
-            .child(
-                div()
-                    .id("sc-status")
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .min_w_0()
-                    .text_color(status_color)
-                    .when(busy, |d| d.child(ui::spinner("sc-spinner", 12.0, status_color, cx)))
-                    .child(ui::one_line(status_text)),
-            );
+            .items_start()
+            .gap(px(6.0))
+            .min_w_0()
+            .text_size(theme.text.caption)
+            .text_color(status_color)
+            .when(busy, |d| d.child(ui::spinner("sc-spinner", 12.0, status_color, cx)))
+            // Wrapped, not cut off: the side bar can be narrow.
+            .child(div().flex_1().min_w_0().child(status_text));
 
-        // ─── Toolbar ──────────────────────────────────────────────────────────
+        // ─── The title and its actions ────────────────────────────────────────
         let has_env = env.is_some() && !busy;
         let uploads = self.targets().iter().filter(|e| e.change.uploads()).count();
         let downloads = self.targets().iter().filter(|e| e.change.downloads()).count();
         let scope = if self.selected.is_empty() { "shown" } else { "selected" };
-        let toolbar = div()
+        let title = div()
             .flex()
+            .flex_none()
             .items_center()
             .gap(px(2.0))
+            .h(px(35.0))
+            .pad(px(0.0), px(8.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .pad(px(0.0), px(4.0))
+                    .text_size(theme.text.caption)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(c.text_muted)
+                    .child(ui::one_line("SOURCE CONTROL")),
+            )
             .child(
                 ui::icon_button("sc-refresh", Icon::Refresh, c.text_primary, has_env, cx)
                     .tip("Refresh: compare the project with the server again")
@@ -959,55 +1003,52 @@ impl Render for SourceControlPage {
                 ui::icon_button("sc-more", Icon::More, c.text_primary, self.project.is_some() && !busy, cx)
                     .tip("More actions")
                     .on_click(cx.listener(|this, e: &ClickEvent, _, cx| this.more_menu(e.position(), cx))),
-            )
-            .child(div().flex_1())
-            .child(div().w(px(240.0)).child(search_field(&self.search, window, cx)));
-
-        // ─── Change filters ───────────────────────────────────────────────────
-        let counts = dnnm_application::source_control::classify::counts(&self.entries);
-        let mut chips = div().flex().flex_wrap().items_center().gap(px(4.0));
-        for (change, n) in &counts {
-            let on = self.filter.changes.contains(change);
-            let change = *change;
-            chips = chips.child(
-                ui::focusable_bare(div().id(SharedString::from(format!("sc-chip-{}", change.letter()))), cx)
-                    .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .pad(px(1.0), px(8.0))
-                    .rounded(theme.metrics.small_radius)
-                    .cursor_pointer()
-                    .text_size(theme.text.caption)
-                    .when(on, |d| d.bg(c.selection_bg))
-                    .hover(move |s| s.bg(c.hover_bg))
-                    .tip(format!("Show only: {} - {}", change.name(), change.description()))
-                    .child(div().font_weight(FontWeight::BOLD).text_color(change_color(change, cx)).child(change.letter()))
-                    .child(format!("{} {n}", change.name()))
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        if !this.filter.changes.remove(&change) {
-                            this.filter.changes.insert(change);
-                        }
-                        cx.notify();
-                    })),
             );
+
+        // ─── The main button, as VS Code's Commit: what is next ───────────────
+        enum Next {
+            AddServer,
+            Upload,
+            Download,
+            Refresh,
         }
-        let unchanged = self.filter.unchanged;
-        chips = chips.child(
-            ui::check_box("sc-unchanged", unchanged, cx)
-                .tip("Also list the files that are the same on both sides")
-                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                    this.filter.unchanged = !this.filter.unchanged;
-                    cx.notify();
-                })),
-        );
-        chips = chips.child(div().text_size(theme.text.caption).text_color(c.text_muted).child("Unchanged"));
+        let next = match () {
+            _ if env.is_none() => Next::AddServer,
+            _ if uploads > 0 => Next::Upload,
+            _ if downloads > 0 => Next::Download,
+            _ => Next::Refresh,
+        };
+        let (glyph, label, tip) = match next {
+            Next::AddServer => (Icon::Add, "Add server".to_string(), "Add a server to compare the project with".to_string()),
+            Next::Upload => (Icon::Upload, format!("Upload {uploads}"), format!("Upload the {scope} changes ({uploads}) to the server")),
+            Next::Download => {
+                (Icon::Download, format!("Download {downloads}"), format!("Download the {scope} server changes ({downloads}) to the project"))
+            }
+            Next::Refresh => (Icon::Refresh, "Refresh".to_string(), "Compare the project with the server".to_string()),
+        };
+        let main_enabled = !busy && self.project.is_some();
+        let main_button = ui::button("sc-main", "", ui::ButtonKind::Primary, main_enabled, cx)
+            .w_full()
+            .gap(px(6.0))
+            .tip(tip)
+            .child(ui::icon(glyph, c.on_accent, cx))
+            .child(label)
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| match next {
+                Next::AddServer => this.add_environment(cx),
+                Next::Upload => this.upload(cx),
+                Next::Download => this.download(cx),
+                Next::Refresh => this.refresh(cx),
+            }));
 
         // ─── The list ─────────────────────────────────────────────────────────
         let rows = self.rows();
         let entries = self.entries.clone();
         let selected = self.selected.clone();
         let cursor = self.cursor;
-        let row_height = theme.metrics.table_row_height;
+        let filter = self.filter.clone();
+        let tree = self.tree;
+        // VS Code's 22 px rows.
+        let row_height = px(22.0);
         let list = uniform_list(
             "sc-files",
             rows.len(),
@@ -1022,9 +1063,13 @@ impl Render for SourceControlPage {
                             _ => false,
                         };
                         // A folder's depth as a blank before the row's content (the codebase pads evenly, never one side).
-                        let indent = |depth: usize, extra: f32| div().flex_none().w(px(14.0 * depth as f32 + extra));
+                        let indent = |depth: usize, extra: f32| div().flex_none().w(px(8.0 * depth as f32 + extra));
                         let base = div()
                             .id(SharedString::from(format!("sc-row-{i}")))
+                            .group("sc-row")
+                            // The side bar's width and no more: the name and folder give way, the letter stays.
+                            .w_full()
+                            .overflow_hidden()
                             .flex()
                             .items_center()
                             .gap(px(6.0))
@@ -1034,10 +1079,6 @@ impl Render for SourceControlPage {
                             .when(is_selected, |d| d.bg(c.selection_bg))
                             .when(cursor == Some(i), |d| d.border_1().border_color(c.focus_border))
                             .hover(move |s| s.bg(c.hover_bg))
-                            .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
-                                let m = e.modifiers();
-                                this.press_row(i, m.secondary(), m.shift, cx);
-                            }))
                             .on_mouse_down(
                                 MouseButton::Right,
                                 cx.listener(move |this, e: &MouseDownEvent, _, cx| this.open_menu(i, e.position, cx)),
@@ -1050,49 +1091,186 @@ impl Render for SourceControlPage {
                                 cx,
                             )
                         };
+                        // A row's own actions: shown under the mouse, and on the selected rows (as VS Code's).
+                        let actions = || {
+                            div()
+                                .flex()
+                                .flex_none()
+                                .items_center()
+                                .when(!is_selected, |d| d.invisible().group_hover("sc-row", |s| s.visible()))
+                        };
+                        let action = |id: String, glyph: Icon, tip: String| {
+                            ui::icon_button(SharedString::from(id), glyph, c.text_primary, true, cx).size(px(20.0)).tip(tip)
+                        };
                         match &row {
-                            Row::Section { section, count, collapsed } => base
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_size(theme.text.caption)
-                                .tip(section.tip())
-                                .child(chevron(*collapsed))
-                                .child(section.title().to_uppercase())
-                                .child(div().flex_1())
-                                .child(div().text_color(c.text_muted).child(count.to_string())),
+                            Row::Section { section, count, collapsed } => {
+                                let files = list::files_in(&row, &entries, &filter);
+                                let section_entries: Vec<Entry> = files.iter().map(|&f| entries[f].clone()).collect();
+                                let ups: Vec<Entry> = section_entries.iter().filter(|e| e.change.uploads()).cloned().collect();
+                                let downs: Vec<Entry> = section_entries.iter().filter(|e| e.change.downloads()).cloned().collect();
+                                let (n_up, n_down) = (ups.len(), downs.len());
+                                base.tip(section.tip())
+                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        if let Some(row) = this.rows().get(i).cloned() {
+                                            this.cursor = Some(i);
+                                            this.toggle_collapsed(&row, cx);
+                                        }
+                                    }))
+                                    .child(chevron(*collapsed))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_size(theme.text.caption)
+                                            .child(ui::one_line(section.title())),
+                                    )
+                                    .child(
+                                        actions()
+                                            .when(n_up > 0, |d| {
+                                                d.child(action(format!("sc-up-all-{i}"), Icon::Upload, format!("Upload all {n_up}")).on_click(
+                                                    cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                                        cx.stop_propagation();
+                                                        let title = format!("Upload {} file(s)", ups.len());
+                                                        this.send(ups.clone(), Action::Upload, false, title, cx);
+                                                    }),
+                                                ))
+                                            })
+                                            .when(n_down > 0, |d| {
+                                                d.child(
+                                                    action(format!("sc-down-all-{i}"), Icon::Download, format!("Download all {n_down}")).on_click(
+                                                        cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                                            cx.stop_propagation();
+                                                            let title = format!("Download {} file(s)", downs.len());
+                                                            this.send(downs.clone(), Action::Download, false, title, cx);
+                                                        }),
+                                                    ),
+                                                )
+                                            }),
+                                    )
+                                    // VS Code's count badge.
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .min_w(px(18.0))
+                                            .h(px(16.0))
+                                            .pad(px(0.0), px(5.0))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded(px(8.0))
+                                            .bg(c.card_border)
+                                            .text_size(theme.text.caption)
+                                            .child(count.to_string()),
+                                    )
+                            }
                             Row::Folder { name, depth, count, collapsed, .. } => base
-                                .child(indent(*depth, 0.0))
+                                .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                                    let m = e.modifiers();
+                                    this.press_row(i, m.secondary(), m.shift, cx);
+                                }))
+                                .child(indent(*depth, 8.0))
                                 .child(chevron(*collapsed))
                                 .child(ui::icon(if *collapsed { Icon::Folder } else { Icon::FolderOpen }, c.text_muted, cx))
                                 .child(div().flex_1().min_w_0().child(ui::one_line(name.clone())))
                                 .child(div().text_size(theme.text.caption).text_color(c.text_muted).child(count.to_string())),
                             Row::File { entry, name, folder, depth, .. } => {
-                                let e = &entries[*entry];
-                                base.child(indent(*depth, 18.0))
-                                    .tip(format!("{} - {}", e.path, e.change.description()))
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .flex()
-                                            .items_baseline()
-                                            .gap(px(6.0))
-                                            .child(div().flex_none().when(e.change == Change::Deleted || e.change == Change::DeletedOnServer, |d| d.line_through()).child(name.clone()))
-                                            .child(
-                                                div()
-                                                    .min_w_0()
-                                                    .text_size(theme.text.caption)
-                                                    .text_color(c.text_muted)
-                                                    .child(ui::one_line(folder.clone())),
+                                let e = entries[*entry].clone();
+                                let color = change_color(e.change, cx);
+                                let gone = matches!(e.change, Change::Deleted | Change::DeletedOnServer);
+                                let revertible =
+                                    e.remote.is_some() && matches!(e.change, Change::Modified | Change::Conflict | Change::Deleted);
+                                let file_actions = actions()
+                                    .when(revertible, |d| {
+                                        let e = e.clone();
+                                        d.child(
+                                            action(format!("sc-revert-{i}"), Icon::Reset, "Revert to the server's copy".into()).on_click(
+                                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.revert_local(vec![e.clone()], cx);
+                                                }),
                                             ),
-                                    )
-                                    .child(
-                                        div()
-                                            .w(px(14.0))
-                                            .flex_none()
-                                            .font_weight(FontWeight::BOLD)
-                                            .text_color(change_color(e.change, cx))
-                                            .child(e.change.letter()),
-                                    )
+                                        )
+                                    })
+                                    .when(e.change == Change::Conflict, |d| {
+                                        let (mine, theirs) = (e.clone(), e.clone());
+                                        d.child(action(format!("sc-keep-mine-{i}"), Icon::Upload, "Keep mine - upload".into()).on_click(
+                                            cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                                cx.stop_propagation();
+                                                this.keep_local(vec![mine.clone()], cx);
+                                            }),
+                                        ))
+                                        .child(
+                                            action(format!("sc-keep-theirs-{i}"), Icon::Download, "Keep the server's - download".into())
+                                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.keep_server(vec![theirs.clone()], cx);
+                                                })),
+                                        )
+                                    })
+                                    .when(e.change.uploads(), |d| {
+                                        let e = e.clone();
+                                        d.child(action(format!("sc-up-{i}"), Icon::Upload, "Upload to the server".into()).on_click(
+                                            cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                                cx.stop_propagation();
+                                                let title = format!("Upload {}", e.path);
+                                                this.send(vec![e.clone()], Action::Upload, false, title, cx);
+                                            }),
+                                        ))
+                                    })
+                                    .when(e.change.downloads(), |d| {
+                                        let e = e.clone();
+                                        d.child(action(format!("sc-down-{i}"), Icon::Download, "Download from the server".into()).on_click(
+                                            cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                                cx.stop_propagation();
+                                                let title = format!("Download {}", e.path);
+                                                this.send(vec![e.clone()], Action::Download, false, title, cx);
+                                            }),
+                                        ))
+                                    });
+                                // In the list view a file starts at the row's edge, as its section's chevron; in the tree, under
+                                // its folder.
+                                base.on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                                    let m = e.modifiers();
+                                    this.press_row(i, m.secondary(), m.shift, cx);
+                                }))
+                                .tip(format!("{} - {}", e.path, e.change.description()))
+                                .when(tree, |d| d.child(indent(*depth, 18.0)))
+                                .child(ui::icon(Icon::File, c.text_muted, cx))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .flex()
+                                        .items_baseline()
+                                        .gap(px(6.0))
+                                        .overflow_hidden()
+                                        .child(
+                                            div()
+                                                .min_w_0()
+                                                .text_color(color)
+                                                .when(gone, |d| d.line_through())
+                                                .child(ui::one_line(name.clone())),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .text_size(theme.text.caption)
+                                                .text_color(c.text_muted)
+                                                .child(ui::one_line(folder.clone())),
+                                        ),
+                                )
+                                .child(file_actions)
+                                .child(
+                                    div()
+                                        .w(px(14.0))
+                                        .flex_none()
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(color)
+                                        .text_center()
+                                        .child(e.change.letter()),
+                                )
                             }
                         }
                     })
@@ -1102,7 +1280,7 @@ impl Render for SourceControlPage {
         .track_scroll(self.list_scroll.clone())
         .size_full();
         let empty_text = match (&env, &self.status) {
-            (None, _) => Some("No environment for this project yet. Add one (+): a server, its folder, and how to sign in."),
+            (None, _) => Some("No server yet. Add one: its address, how to sign in, and its remote directory."),
             (Some(_), Status::NotCompared) => Some("Refresh to compare the project with the server."),
             (Some(_), Status::Compared { .. }) if self.rows().is_empty() => Some("Nothing differs - or nothing matches the filter."),
             _ => None,
@@ -1114,75 +1292,57 @@ impl Render for SourceControlPage {
             .relative()
             .flex_1()
             .min_h_0()
-            .rounded(theme.metrics.card_radius)
-            .border_1()
-            .border_color(c.card_border)
-            .bg(c.card_bg)
-            .pad(px(4.0), px(0.0))
             .child(list)
             .when_some(empty_text, |d, text| {
                 d.child(
+                    // Wrapped in the side bar's width, centred - a text node of its own wouldn't wrap in a flex row.
                     div()
                         .absolute()
                         .inset_0()
                         .flex()
-                        .items_center()
+                        .items_start()
                         .justify_center()
                         .p(px(20.0))
                         .text_color(c.text_muted)
-                        .child(text),
+                        .child(div().w_full().min_w_0().text_center().child(text)),
                 )
             });
 
-        // ─── The diff (or the history) ────────────────────────────────────────
-        let right = self.render_right(env.as_ref(), busy, cx);
-
-        let page = div()
-            .id("source-control-page")
-            .track_focus(&self.focus)
+        // VS Code's view: the title with its actions; the project and server where its message box is, the main button
+        // under them; then the files to the bottom.
+        let fields = div()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .pad(px(0.0), px(12.0))
+            .child(div().w_full().child(project_select))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .child(div().flex_1().min_w_0().child(env_select))
+                    .child(add_env),
+            )
+            .child(main_button)
+            .child(status)
+            .child(div().w_full().child(search_field(&self.search, window, cx)));
+        div()
+            .id("source-control-side")
             .on_key_down(cx.listener(Self::key_down))
             .size_full()
             .flex()
             .flex_col()
-            .gap(px(10.0))
-            .pad(px(18.0), px(22.0))
+            .gap(px(8.0))
             .text_size(theme.text.body)
             .text_color(c.text_primary)
             .font_family(theme.font.clone())
-            .child(header)
-            .child(toolbar)
-            .when(!counts.is_empty() || !self.entries.is_empty(), |d| d.child(chips))
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_h_0()
-                    .gap(px(10.0))
-                    .child(div().flex().flex_col().w(px(380.0)).flex_none().min_h_0().child(list_panel))
-                    .child(div().flex().flex_col().flex_1().min_w_0().min_h_0().child(right)),
-            );
-        // Last: the menu borrows `cx` for as long as it is drawn.
-        let menu = self.menu.as_ref().map(|menu| {
-            let weak = cx.entity().downgrade();
-            dnnm_ui::menu::render(
-                menu,
-                move |_, cx| {
-                    let _ = weak.update(cx, |page, cx| {
-                        page.menu = None;
-                        cx.notify();
-                    });
-                },
-                |_, _, _| {},
-                window,
-                cx,
-            )
-        });
-
-        page.children(menu)
+            .child(title)
+            .child(fields)
+            .child(div().flex().flex_col().flex_1().min_h_0().child(list_panel))
+            .into_any_element()
     }
-}
 
-impl SourceControlPage {
     fn render_right(&mut self, env: Option<&Environment>, busy: bool, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = Theme::get(cx).clone();
         let c = theme.colors;

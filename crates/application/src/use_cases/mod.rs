@@ -13,6 +13,7 @@ pub mod edit_bindings;
 pub mod rename_project;
 pub mod backups;
 pub mod export_for_deployment;
+pub mod portal_aliases;
 pub mod export_project;
 pub mod restore_backup;
 pub mod clear_site_cache;
@@ -319,6 +320,27 @@ pub(crate) mod tests {
         }
         fn create_site(&self, site: &str, _: &std::path::Path, host: &str, port: u16) -> Result<(), IisError> {
             self.call(&format!("create {host}:{port}"), site)
+        }
+        /// A site made here, with the binding it was made with.
+        fn site_details(&self, site: &str) -> Option<crate::iis::IisSiteDetails> {
+            let calls = self.calls.lock().unwrap();
+            let made = calls.iter().rev().find_map(|c| c.strip_prefix("create ")?.strip_suffix(&format!(" {site}")))?;
+            let (host, port) = made.rsplit_once(':')?;
+            Some(crate::iis::IisSiteDetails {
+                id: 1,
+                name: site.into(),
+                state: "Started".into(),
+                physical_path: Default::default(),
+                config_path: String::new(),
+                server_auto_start: true,
+                preload_enabled: None,
+                bindings: vec![crate::iis::IisBindingDetails::parse("http", &format!("*:{port}:{host}"), false)],
+                pool: None,
+            })
+        }
+        fn replace_http_bindings(&self, site: &str, bindings: &[(String, u16)]) -> Result<(), IisError> {
+            let list: Vec<String> = bindings.iter().map(|(h, p)| format!("{h}:{p}")).collect();
+            self.call(&format!("bindings {}", list.join(",")), site)
         }
         fn remove_site(&self, site: &str) -> Result<(), IisError> {
             self.call("remove", site)

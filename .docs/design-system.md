@@ -74,8 +74,9 @@ are drawn, not a font (see [Icons](#icons)), so they look the same everywhere.
 | Radius: controls, check boxes, cards | 4, 3, 6 | same |
 | Table row height | 38 | same |
 
-The window, as VS Code's: the activity bar (the page entries, their icons alone), the primary side bar beside it and
-the secondary one across the page (both empty for now, Ctrl+B / Ctrl+Alt+B), the page, the panel under the parts Panel
+The window, as VS Code's: the activity bar (the page entries, their icons alone), the primary side bar beside it (on
+the Source Control page its view - `SourceControlSide`, the page's files; empty on the others) and
+the secondary one across the page (empty for now; Ctrl+B / Ctrl+Alt+B), the page, the panel under the parts Panel
 Alignment says, the status bar. Primary Side Bar Position puts the activity bar and the primary side bar on the left
 or the right.
 

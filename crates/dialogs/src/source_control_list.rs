@@ -1,9 +1,9 @@
 //! The Source Control page's list as rows, apart from GPUI: the files in sections - Conflicts, Changes (to upload),
-//! Server changes (to download) and, when asked for, Unchanged - each a folder tree (folders first, each with the
-//! number of files in it), filtered by text and change, folders and sections collapsible. Its own module so the
-//! grouping is tested without a window.
+//! Server changes (to download) and, when asked for, Unchanged - as VS Code lists them: flat by path (each file with
+//! its folder beside it), or as a folder tree (folders first, each with the number of files in it). Filtered by text,
+//! folders and sections collapsible. Its own module so the grouping is tested without a window.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use dnnm_application::source_control::model::{Change, Entry};
 
@@ -47,67 +47,21 @@ impl Section {
     }
 }
 
-/// What the list shows: files whose path holds `text` (any case), of the changes in `changes` (all when empty),
-/// and the unchanged ones only when `unchanged`.
+/// What the list shows: files whose path holds `text` (any case), and the unchanged ones only when `unchanged`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Filter {
-    /// Only this part of the project (a module's or a skin's folder, from [`dnn_scopes`]); None: all of it.
-    pub scope: Option<String>,
     pub text: String,
-    pub changes: BTreeSet<Change>,
     pub unchanged: bool,
 }
 
 impl Filter {
     fn keeps(&self, entry: &Entry) -> bool {
-        if let Some(scope) = &self.scope
-            && !entry.path.to_lowercase().starts_with(&format!("{}/", scope.to_lowercase()))
-        {
-            return false;
-        }
         if entry.change == Change::Unchanged && !self.unchanged {
-            return false;
-        }
-        if !self.changes.is_empty() && entry.change != Change::Unchanged && !self.changes.contains(&entry.change) {
             return false;
         }
         let text = self.text.trim().to_lowercase();
         text.is_empty() || entry.path.to_lowercase().contains(&text)
     }
-}
-
-/// A part of a DNN site that can be deployed on its own: its name in the picker and its folder.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Scope {
-    pub label: String,
-    pub folder: String,
-}
-
-/// The modules, skins and containers among `entries`: `DesktopModules/<module>`, and `Portals/<portal>/Skins/<skin>`
-/// or `…/Containers/<container>` (the shared ones in `_default`), sorted by their names.
-pub fn dnn_scopes(entries: &[Entry]) -> Vec<Scope> {
-    let mut found: BTreeMap<String, Scope> = BTreeMap::new();
-    for entry in entries {
-        let parts: Vec<&str> = entry.path.split('/').collect();
-        let scope = match parts.as_slice() {
-            [first, module, _, ..] if first.eq_ignore_ascii_case("DesktopModules") => {
-                Some((format!("Module: {module}"), format!("{first}/{module}")))
-            }
-            [first, portal, kind, name, _, ..]
-                if first.eq_ignore_ascii_case("Portals")
-                    && (kind.eq_ignore_ascii_case("Skins") || kind.eq_ignore_ascii_case("Containers")) =>
-            {
-                let what = if kind.eq_ignore_ascii_case("Skins") { "Skin" } else { "Container" };
-                let whose = if portal.eq_ignore_ascii_case("_default") { String::new() } else { format!(" (portal {portal})") };
-                Some((format!("{what}: {name}{whose}"), format!("{first}/{portal}/{kind}/{name}")))
-            }
-            _ => None,
-        };
-        if let Some((label, folder)) = scope {
-            found.entry(label.to_lowercase()).or_insert(Scope { label, folder });
-        }
-    }
-    found.into_values().collect()
 }
 
 /// One row of the list.
@@ -153,19 +107,36 @@ fn insert(node: &mut Node, parts: &[&str], entry: usize) {
     }
 }
 
-/// The list's rows for `entries` as `filter` and `collapsed` (keys from [`Row::key`]) say.
-pub fn rows(entries: &[Entry], filter: &Filter, collapsed: &HashSet<String>) -> Vec<Row> {
+/// The list's rows for `entries` as `filter` and `collapsed` (keys from [`Row::key`]) say: a folder tree when `tree`,
+/// else every file on its own row, sorted by path, with its folder beside its name (VS Code's list view).
+pub fn rows(entries: &[Entry], filter: &Filter, collapsed: &HashSet<String>, tree: bool) -> Vec<Row> {
     let mut sections: BTreeMap<Section, Node> = BTreeMap::new();
     for (i, entry) in entries.iter().enumerate().filter(|(_, e)| filter.keeps(e)) {
-        let parts: Vec<&str> = entry.path.split('/').collect();
-        insert(sections.entry(Section::of(entry.change)).or_default(), &parts, i);
+        let section = sections.entry(Section::of(entry.change)).or_default();
+        if tree {
+            let parts: Vec<&str> = entry.path.split('/').collect();
+            insert(section, &parts, i);
+        } else {
+            section.count += 1;
+            section.files.push(i);
+        }
     }
     let mut rows = Vec::new();
     for (section, node) in sections {
         let shut = collapsed.contains(&collapse_key(section, ""));
         rows.push(Row::Section { section, count: node.count, collapsed: shut });
-        if !shut {
+        if shut {
+            continue;
+        }
+        if tree {
             walk(entries, section, &node, "", 0, collapsed, &mut rows);
+        } else {
+            let mut files = node.files;
+            files.sort_by_cached_key(|&i| entries[i].path.to_lowercase());
+            for i in files {
+                let (folder, name) = entries[i].path.rsplit_once('/').unwrap_or(("", &entries[i].path));
+                rows.push(Row::File { section, entry: i, name: name.to_string(), folder: folder.to_string(), depth: 0 });
+            }
         }
     }
     rows
@@ -255,7 +226,7 @@ mod tests {
 
     #[test]
     fn files_are_in_sections_as_folder_trees_folders_first() {
-        let rows = rows(&entries(), &Filter::default(), &HashSet::new());
+        let rows = rows(&entries(), &Filter::default(), &HashSet::new(), true);
         assert_eq!(
             outline(&rows),
             [
@@ -280,7 +251,7 @@ mod tests {
     #[test]
     fn collapsing_hides_what_is_inside() {
         let collapsed = HashSet::from([collapse_key(Section::Changes, "Portals/0"), collapse_key(Section::Conflicts, "")]);
-        let rows = rows(&entries(), &Filter::default(), &collapsed);
+        let rows = rows(&entries(), &Filter::default(), &collapsed, true);
         assert_eq!(
             outline(&rows),
             ["# Conflicts (1)", "# Changes (3)", "Portals/ (2)", "  0/ (2)", "web.config", "# Server changes (1)", "Portals/ (1)", "  1/ (1)", "    a.css"]
@@ -289,35 +260,25 @@ mod tests {
     }
 
     #[test]
-    fn the_filter_takes_text_changes_and_unchanged() {
-        let text = Filter { text: "PORTALS/0".into(), ..Default::default() };
-        assert_eq!(rows(&entries(), &text, &HashSet::new()).iter().filter(|r| matches!(r, Row::File { .. })).count(), 2);
-        let added = Filter { changes: BTreeSet::from([Change::Added]), ..Default::default() };
-        let files: Vec<String> = rows(&entries(), &added, &HashSet::new())
-            .into_iter()
-            .filter_map(|r| if let Row::File { name, .. } = r { Some(name) } else { None })
-            .collect();
-        assert_eq!(files, ["logo.png"]);
-        let all = Filter { unchanged: true, ..Default::default() };
-        assert!(outline(&rows(&entries(), &all, &HashSet::new())).contains(&"# Unchanged (1)".to_string()));
+    fn the_list_view_is_flat_by_path_with_each_files_folder() {
+        let rows = rows(&entries(), &Filter::default(), &HashSet::new(), false);
+        assert_eq!(
+            outline(&rows),
+            ["# Conflicts (1)", "Shop.dll", "# Changes (3)", "logo.png", "skin.css", "web.config", "# Server changes (1)", "a.css"]
+        );
+        let folders: Vec<&str> =
+            rows.iter().filter_map(|r| if let Row::File { folder, .. } = r { Some(folder.as_str()) } else { None }).collect();
+        assert_eq!(folders, ["bin", "Portals/0/Images", "Portals/0", "", "Portals/1"]);
     }
 
     #[test]
-    fn the_dnn_parts_of_a_site_are_scopes() {
-        let e = vec![
-            entry("DesktopModules/Shop/View.ascx", Change::Modified),
-            entry("DesktopModules/Shop/App_LocalResources/View.ascx.resx", Change::Modified),
-            entry("Portals/_default/Skins/Xcillion/home.ascx", Change::Added),
-            entry("Portals/0/Containers/Boxed/Title.ascx", Change::Added),
-            entry("DesktopModules/readme.txt", Change::Added),
-            entry("web.config", Change::Modified),
-        ];
-        let scopes = dnn_scopes(&e);
-        let labels: Vec<&str> = scopes.iter().map(|s| s.label.as_str()).collect();
-        assert_eq!(labels, ["Container: Boxed (portal 0)", "Module: Shop", "Skin: Xcillion"]);
-        let shop = Filter { scope: Some(scopes[1].folder.clone()), ..Default::default() };
-        let files = rows(&e, &shop, &HashSet::new()).into_iter().filter(|r| matches!(r, Row::File { .. })).count();
-        assert_eq!(files, 2, "only the module's files");
+    fn the_filter_takes_text_and_unchanged() {
+        let text = Filter { text: "PORTALS/0".into(), ..Default::default() };
+        for tree in [true, false] {
+            assert_eq!(rows(&entries(), &text, &HashSet::new(), tree).iter().filter(|r| matches!(r, Row::File { .. })).count(), 2);
+        }
+        let all = Filter { unchanged: true, ..Default::default() };
+        assert!(outline(&rows(&entries(), &all, &HashSet::new(), false)).contains(&"# Unchanged (1)".to_string()));
     }
 
     /// Many thousands of files are grouped quickly enough to redraw at once.
@@ -327,9 +288,9 @@ mod tests {
             .map(|i| entry(&format!("Portals/{}/Images/{}/img{i}.png", i % 7, i % 50), if i % 3 == 0 { Change::Added } else { Change::Modified }))
             .collect();
         let started = std::time::Instant::now();
-        let shown = rows(&e, &Filter::default(), &HashSet::new());
-        let scopes = dnn_scopes(&e);
-        assert!(shown.len() > 20_000 && scopes.is_empty());
+        let shown = rows(&e, &Filter::default(), &HashSet::new(), true);
+        assert!(shown.len() > 20_000);
+        assert_eq!(rows(&e, &Filter::default(), &HashSet::new(), false).len(), 20_001, "the Changes section and its files");
         assert!(started.elapsed() < std::time::Duration::from_secs(3), "{:?}", started.elapsed());
     }
 
@@ -337,7 +298,7 @@ mod tests {
     fn a_folder_or_section_holds_its_files() {
         let e = entries();
         let filter = Filter::default();
-        let rows = rows(&e, &filter, &HashSet::new());
+        let rows = rows(&e, &filter, &HashSet::new(), true);
         let portals_0 = rows.iter().find(|r| matches!(r, Row::Folder { path, section: Section::Changes, .. } if path == "Portals/0")).unwrap();
         let paths: Vec<&str> = files_in(portals_0, &e, &filter).iter().map(|&i| e[i].path.as_str()).collect();
         assert_eq!(paths, ["Portals/0/skin.css", "Portals/0/Images/logo.png"]);

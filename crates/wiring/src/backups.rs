@@ -453,6 +453,23 @@ impl Databases for SqlDatabases {
     fn set_ssl(&self, database: &SqlLogin, on: bool, cancel: &CancelToken) -> Result<(), String> {
         DatabaseProvisioner.set_ssl(&connection(database), on, Some(cancel))
     }
+
+    fn portal_aliases(
+        &self,
+        database: &SqlLogin,
+        cancel: &CancelToken,
+    ) -> Result<dnnm_application::use_cases::backups::PortalAliases, String> {
+        DatabaseProvisioner.portal_aliases(&connection(database), Some(cancel))
+    }
+
+    fn apply_live_aliases(
+        &self,
+        database: &SqlLogin,
+        plan: &[dnnm_application::use_cases::portal_aliases::Delocalized],
+        cancel: &CancelToken,
+    ) -> Result<(), String> {
+        DatabaseProvisioner.apply_live_aliases(&connection(database), plan, Some(cancel))
+    }
 }
 
 /// A reporter and a prompt for the backup use cases' tests here (all Windows-only).

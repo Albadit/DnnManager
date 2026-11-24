@@ -264,21 +264,22 @@ impl SourceControlStore {
         Ok(connection)
     }
 
-    /// The project's environments, Development first and Production last.
+    /// Every server (environment), by name - a server isn't tied to one project: each comes bound to `project`, the
+    /// one it is used with now, so its records and history are that project's ([`Environment::state_key`]).
     pub fn environments(&self, project: &str) -> Result<Vec<Environment>, String> {
         let connection = self.open()?;
         let mut statement = connection
             .prepare(
                 "SELECT id, project, name, kind, host, port, user, key_file, remote_root, mappings, ignore, protected, \
-                 backup_remote, host_key, protocol FROM sc_environments WHERE project = ?1",
+                 backup_remote, host_key, protocol FROM sc_environments",
             )
             .map_err(|e| e.to_string())?;
         let rows = statement
-            .query_map([project], |r| {
+            .query_map([], |r| {
                 let key_file: Option<String> = r.get(7)?;
                 Ok(Environment {
                     id: r.get(0)?,
-                    project: r.get(1)?,
+                    project: project.to_string(),
                     name: r.get(2)?,
                     kind: EnvironmentKind::from_key(&r.get::<_, String>(3)?).unwrap_or(EnvironmentKind::Development),
                     protocol: Protocol::from_key(&r.get::<_, String>(14)?).unwrap_or(Protocol::Sftp),
@@ -296,7 +297,7 @@ impl SourceControlStore {
             })
             .map_err(|e| e.to_string())?;
         let mut list: Vec<Environment> = rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?;
-        list.sort_by(|a, b| a.kind.cmp(&b.kind).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+        list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.host.cmp(&b.host)));
         Ok(list)
     }
 
@@ -317,7 +318,7 @@ impl SourceControlStore {
         let host_key = if moved { None } else { env.host_key.clone() };
         if moved {
             for table in ["sc_records", "sc_listing", "sc_listed"] {
-                tx.execute(&format!("DELETE FROM {table} WHERE env = ?1"), [&env.id]).map_err(|e| e.to_string())?;
+                tx.execute(&format!("DELETE FROM {table} WHERE {OF_SERVER}"), [&env.id]).map_err(|e| e.to_string())?;
             }
         }
         let key_file = match &env.auth {
@@ -354,7 +355,7 @@ impl SourceControlStore {
     pub fn delete_environment(&self, id: &str) -> Result<(), String> {
         let connection = self.open()?;
         for table in ["sc_records", "sc_history", "sc_listing", "sc_listed"] {
-            connection.execute(&format!("DELETE FROM {table} WHERE env = ?1"), [id]).map_err(|e| e.to_string())?;
+            connection.execute(&format!("DELETE FROM {table} WHERE {OF_SERVER}"), [id]).map_err(|e| e.to_string())?;
         }
         connection.execute("DELETE FROM sc_environments WHERE id = ?1", [id]).map_err(|e| e.to_string())?;
         Ok(())
@@ -374,6 +375,10 @@ impl SourceControlStore {
         rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
     }
 }
+
+/// The rows of server `?1` - for every project it is used with (`<id>@<project>`), and from before servers were
+/// shared (`<id>`).
+const OF_SERVER: &str = "(env = ?1 OR substr(env, 1, length(?1) + 1) = ?1 || '@')";
 
 /// The history kept per environment: the newest lines.
 const HISTORY_KEPT: i64 = 2000;
@@ -590,9 +595,12 @@ mod tests {
         store.save_environment(&environment("shop-prod", "shop", EnvironmentKind::Production)).unwrap();
         store.save_environment(&environment("shop-dev", "shop", EnvironmentKind::Development)).unwrap();
         store.save_environment(&environment("blog-test", "blog", EnvironmentKind::Test)).unwrap();
-        let list = store.environments("SHOP").unwrap();
-        assert_eq!(list.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["shop-dev", "shop-prod"]);
-        assert_eq!(list[1], environment("shop-prod", "shop", EnvironmentKind::Production), "read back as saved");
+        // Every server, by name, for any project - bound to the one asked for.
+        let list = store.environments("blog").unwrap();
+        assert_eq!(list.iter().map(|e| e.id.as_str()).collect::<Vec<_>>(), ["shop-dev", "shop-prod", "blog-test"]);
+        assert!(list.iter().all(|e| e.project == "blog"));
+        assert_eq!(list[1], environment("shop-prod", "blog", EnvironmentKind::Production), "read back as saved");
+        assert_eq!(list[1].state_key(), "shop-prod@blog");
 
         let record = SyncRecord { local: FileMeta::new(1, 2).with_hash("h"), remote: FileMeta::new(1, 3), synced: 9 };
         store.set_record("shop-prod", "Portals/0/a.css", &record).unwrap();
@@ -609,6 +617,15 @@ mod tests {
 
         store.trust_host_key("shop-dev", "SHA256:new").unwrap();
         assert_eq!(store.environments("shop").unwrap()[0].host_key.as_deref(), Some("SHA256:new"));
+
+        // A server's state for each project goes with it - and only its own.
+        store.set_record("shop-prod@shop", "a.css", &record).unwrap();
+        store.set_record("shop-prod@blog", "a.css", &record).unwrap();
+        store.set_record("shop-prod-2@shop", "a.css", &record).unwrap();
+        store.delete_environment("shop-prod").unwrap();
+        assert!(store.records("shop-prod@shop").unwrap().is_empty() && store.records("shop-prod@blog").unwrap().is_empty());
+        assert!(store.history("shop-prod", 5).unwrap().is_empty());
+        assert_eq!(store.records("shop-prod-2@shop").unwrap().len(), 1, "another server's records stay");
     }
 
     #[test]

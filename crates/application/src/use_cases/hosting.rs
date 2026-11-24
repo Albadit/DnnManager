@@ -11,6 +11,7 @@ use std::sync::Arc;
 use dnnm_domain::{DatabaseConfig, DnnProject};
 
 use crate::iis::{IisManager, IisSiteRuntime};
+use crate::use_cases::portal_aliases::{self, Localized};
 use crate::operation::{CANCELLED, CancelToken, Operation, Reporter, STEP_LIMIT};
 
 /// A server, database and login as a site's web.config names them (`SiteSqlConnection`) - an empty user is Windows
@@ -137,13 +138,15 @@ pub trait LocalSql: Send + Sync {
     fn backup_local(&self, database: &str, file_name: &str, cancel: &CancelToken) -> Result<PathBuf, String>;
     /// RESTORE DATABASE of a .bak into `database`.
     fn restore_local(&self, database: &DatabaseConfig, file: &Path, cancel: &CancelToken) -> Result<(), String>;
+    /// Every portal of `database` gets a local address, primary - portal 0 `alias`, the others one under it - with the
+    /// live aliases kept beside it and the live primary one noted ([`portal_aliases::localize`]). What each got.
     fn remap_portal_aliases(
         &self,
         database: &str,
         hostname_suffix: &str,
         alias: &str,
         cancel: &CancelToken,
-    ) -> Result<(), String>;
+    ) -> Result<Vec<Localized>, String>;
     /// Turns DNN's SSL off; how many values changed.
     fn disable_ssl(&self, database: &str, cancel: &CancelToken) -> Result<i64, String>;
     /// The login `login`, owner of `database` only, with a new password (`SqlPasswords.New`) - that password.
@@ -249,6 +252,57 @@ pub struct HostingDeps {
     pub sites: Arc<dyn SiteDatabases>,
     pub files: Arc<dyn ProjectFiles>,
     pub machine: Arc<dyn Machine>,
+}
+
+/// A database brought here (a backup restored, a clone) answers at this PC's addresses: every portal gets one,
+/// primary, with its live aliases kept beside it ([`LocalSql::remap_portal_aliases`]). Each portal's address in the
+/// Output; what each got, for [`bind_portals`].
+pub(crate) fn localize_portals(
+    deps: &HostingDeps,
+    database: &str,
+    site_alias: &str,
+    op: &mut Operation,
+) -> Result<Vec<Localized>, String> {
+    let plan = deps.sql.remap_portal_aliases(database, &deps.settings.hostname_suffix, site_alias, &op.cancel)?;
+    for l in &plan {
+        let kept = l.live_primary.as_deref().map(|a| format!(" - {a} kept for the live site")).unwrap_or_default();
+        op.report.success(&format!("Portal {}: PortalAlias set to {}{kept}.", l.portal, l.alias));
+    }
+    Ok(plan)
+}
+
+/// The portals' local addresses besides portal 0's become http bindings of the IIS site `site`, so they open here -
+/// the hosts file follows the bindings. One that can't be added is a warning: the database is right either way.
+pub(crate) fn bind_portals(deps: &HostingDeps, site: &str, plan: &[Localized], op: &mut Operation) {
+    let wanted: Vec<(String, u16)> = plan
+        .iter()
+        .filter(|l| l.portal != 0)
+        .map(|l| {
+            let port = l.alias.split_once(':').and_then(|(_, p)| p.parse().ok()).unwrap_or(80);
+            (portal_aliases::host_of(&l.alias), port)
+        })
+        .collect();
+    if wanted.is_empty() {
+        return;
+    }
+    let Some(details) = deps.iis.site_details(site) else { return };
+    let mut bindings = crate::use_cases::rename_project::http_bindings(&details.bindings);
+    let before = bindings.len();
+    for (host, port) in wanted {
+        if !bindings.iter().any(|(h, p)| h.eq_ignore_ascii_case(&host) && *p == port) {
+            bindings.push((host, port));
+        }
+    }
+    if bindings.len() == before {
+        return;
+    }
+    match deps.iis.replace_http_bindings(site, &bindings) {
+        Ok(()) => op.report.success(&format!("IIS site '{site}' answers at every portal's address.")),
+        Err(e) => op.report.warn(&format!(
+            "The other portals' addresses couldn't be added to IIS site '{site}': {} - add them in Edit host names.",
+            e.0
+        )),
+    }
 }
 
 /// `error` worded by `wording` - unless it is a cancel, which stays one.
@@ -470,6 +524,8 @@ pub(crate) mod fakes {
         pub journal: Journal,
         pub fail: Arc<Failures>,
         pub databases: Mutex<BTreeSet<String>>,
+        /// The portals besides portal 0 a restored database has - `{site}` in their alias is the site's.
+        pub portals: Mutex<Vec<Localized>>,
         pub ssl_changed: i64,
         /// Where a container backup is copied out to.
         pub temp: PathBuf,
@@ -526,9 +582,12 @@ pub(crate) mod fakes {
             suffix: &str,
             alias: &str,
             _: &CancelToken,
-        ) -> Result<(), String> {
+        ) -> Result<Vec<Localized>, String> {
             note(&self.journal, format!("alias [{database}] *.{suffix} -> {alias}"));
-            self.fail.check("remap_portal_aliases")
+            self.fail.check("remap_portal_aliases")?;
+            let site = Localized { portal: 0, alias: alias.into(), rewrite: None, present: false, remove: vec![], live_primary: None };
+            let others: Vec<Localized> = self.portals.lock().unwrap().iter().map(|l| Localized { alias: l.alias.replace("{site}", alias), ..l.clone() }).collect();
+            Ok(std::iter::once(site).chain(others).collect())
         }
         fn disable_ssl(&self, database: &str, _: &CancelToken) -> Result<i64, String> {
             note(&self.journal, format!("ssl off [{database}]"));
@@ -721,6 +780,7 @@ pub(crate) mod fakes {
                     journal: journal.clone(),
                     fail: fail.clone(),
                     databases: Mutex::default(),
+                    portals: Mutex::default(),
                     ssl_changed: 0,
                     temp: dir.path().to_path_buf(),
                 }),

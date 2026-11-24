@@ -2,7 +2,7 @@
 //! (the mappings). A project path is relative and `/`-separated whatever the OS (`Portals/0/skin.css`); compared
 //! without regard to case, as Windows and IIS treat them.
 
-use super::model::{Environment, EnvironmentKind, Mapping};
+use super::model::{Environment, Mapping};
 
 /// What is never compared or sent, whatever the environment: made on this PC or by DNN at run time - editor and
 /// source-control folders, packages, logs, caches, the search index, the local database, temporary files.
@@ -76,10 +76,10 @@ impl IgnoreRules {
         Self::new(DEFAULT_IGNORE.iter().map(|s| s.to_string()).chain(env.ignore.iter().cloned()))
     }
 
-    /// The environment's protected paths: its own, and on Production [`DEFAULT_PROTECTED`] too.
+    /// The server's protected paths: [`DEFAULT_PROTECTED`] and its own - on every server, whatever kind it was saved
+    /// as (the kind isn't asked any more; any server may be the live one).
     pub fn protected(env: &Environment) -> Self {
-        let defaults: &[&str] = if env.kind == EnvironmentKind::Production { DEFAULT_PROTECTED } else { &[] };
-        Self::new(defaults.iter().map(|s| s.to_string()).chain(env.protected.iter().cloned()))
+        Self::new(DEFAULT_PROTECTED.iter().map(|s| s.to_string()).chain(env.protected.iter().cloned()))
     }
 
     /// Whether a whole folder (a project path) is matched - so a scan doesn't go into it at all.
@@ -200,6 +200,7 @@ pub fn project_path(mapping: &Mapping, relative: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source_control::model::EnvironmentKind;
 
     #[test]
     fn globs_match_within_a_name() {
@@ -259,9 +260,9 @@ mod tests {
         assert!(protected.matches("bin/Shop.dll"));
         assert!(!protected.matches("DesktopModules/Shop/View.ascx"));
         env.kind = EnvironmentKind::Test;
-        assert!(!IgnoreRules::protected(&env).matches("web.config"), "elsewhere only the environment's own");
-        env.protected = vec!["web.config".into()];
-        assert!(IgnoreRules::protected(&env).matches("web.config"));
+        assert!(IgnoreRules::protected(&env).matches("web.config"), "on every server, whatever its kind");
+        env.protected = vec!["robots.txt".into()];
+        assert!(IgnoreRules::protected(&env).matches("robots.txt") && IgnoreRules::protected(&env).matches("web.config"));
     }
 
     #[test]

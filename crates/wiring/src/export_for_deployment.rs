@@ -41,6 +41,12 @@ pub fn export_for_deployment(
 ) -> Result<(), String> {
     let temp_folder = dnnm_system::files::private_temp::path().map_err(|e| e.to_string())?;
     let bacpacs = SqlPackage(SqlSettings::new(services));
+    // This PC's addresses of the site - left out of the package's portal aliases.
+    let local_hosts = services
+        .iis
+        .site_details(&request.project_name)
+        .map(|site| site.bindings.into_iter().map(|b| b.host).filter(|h| !h.is_empty()).collect())
+        .unwrap_or_default();
     let deps = ExportForDeploymentDeps {
         files: &CopierFiles,
         web_config: &ZipWebConfig { temp_root: temp_folder.clone() },
@@ -48,6 +54,8 @@ pub fn export_for_deployment(
         databases: Arc::new(SqlDatabases),
         temp_folder,
         now: crate::backups::now(),
+        hostname_suffix: services.settings.get("projects.hostnameSuffix").unwrap_or("dnndev.me").trim().trim_matches('.').into(),
+        local_hosts,
     };
     use_case::export_for_deployment(&deps, &request, op)
 }

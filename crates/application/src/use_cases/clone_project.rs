@@ -13,9 +13,10 @@ use dnnm_domain::{DatabaseConfig, DnnProject, validate_project_name};
 
 use crate::operation::{CANCELLED, Operation};
 use crate::use_cases::hosting::{
-    HostingDeps, SiteSql, backup_folder, check_local_sql, database_file_name, disable_ssl, drop_database_on_undo,
-    drop_login_on_undo, grant_site_login, swap_in, worded,
+    HostingDeps, SiteSql, backup_folder, bind_portals, check_local_sql, database_file_name, disable_ssl,
+    drop_database_on_undo, drop_login_on_undo, grant_site_login, localize_portals, swap_in, worded,
 };
+use crate::use_cases::portal_aliases::Localized;
 use crate::use_cases::provisioner;
 
 /// What to clone, and into what (`CloneProjectRequest`).
@@ -148,6 +149,7 @@ pub fn clone_project(deps: &HostingDeps, req: &CloneRequest, op: &mut Operation)
     }
 
     let mut kept_copy = None;
+    let mut portals = Vec::new();
     match database {
         None => {
             op.report.info("Skipping database - website files only.");
@@ -164,7 +166,7 @@ pub fn clone_project(deps: &HostingDeps, req: &CloneRequest, op: &mut Operation)
             }
         }
         Some(plan) => {
-            kept_copy = seed(deps, req, &project, &plan, op)?;
+            (kept_copy, portals) = seed(deps, req, &project, &plan, op)?;
             op.cancel.check()?;
 
             op.report.step("Rewrite web.config to use local database");
@@ -183,6 +185,9 @@ pub fn clone_project(deps: &HostingDeps, req: &CloneRequest, op: &mut Operation)
         op.cancel.check()?;
         op.report.step("Create IIS site");
         site_created = provisioner::try_create_site(&deps.iis, name, directory, &hostname, deps.settings.site_port, op);
+        if site_created {
+            bind_portals(deps, name, &portals, op);
+        }
     } else if req.create_iis_site {
         op.report.info("Skipped IIS site - IIS not available.");
     }
@@ -269,14 +274,15 @@ fn prepare_database(
 
 /// Copies the source's database into the clone's: a BACPAC export and import from Azure, a backup and restore from
 /// anywhere else - under a name of its own when a database of the clone's name is there, swapped in only once it is
-/// complete, with its portal aliases and SSL set for the local site. The copy kept in the project's backups.
+/// complete, with its portal aliases and SSL set for the local site. The copy kept in the project's backups, and each
+/// portal's local address.
 fn seed(
     deps: &HostingDeps,
     req: &CloneRequest,
     project: &DnnProject,
     plan: &DatabasePlan,
     op: &mut Operation,
-) -> Result<Option<PathBuf>, String> {
+) -> Result<(Option<PathBuf>, Vec<Localized>), String> {
     let stamp = deps.machine.stamp();
     let name = plan.target.database_name.clone();
     let mut incoming = plan.target.clone();
@@ -349,11 +355,10 @@ fn seed(
     op.report.success(&format!("Database copied into [{}].", incoming.database_name));
     op.cancel.check()?;
 
-    // So the clone answers at its own address instead of the source's.
+    // So the clone answers at its own address instead of the source's - every portal.
     op.report.step("Update PortalAlias to match new hostname");
     let alias = provisioner::alias_for(&deps.settings.hostname_for(&req.target_project_name), deps.settings.site_port);
-    deps.sql.remap_portal_aliases(&incoming.database_name, &deps.settings.hostname_suffix, &alias, &op.cancel)?;
-    op.report.success(&format!("PortalAlias set to {alias}."));
+    let portals = localize_portals(deps, &incoming.database_name, &alias, op)?;
     disable_ssl(deps, &incoming.database_name, op);
 
     if plan.replaces {
@@ -361,7 +366,7 @@ fn seed(
     } else {
         op.report.success(&format!("Local database [{name}] ready."));
     }
-    Ok(kept)
+    Ok((kept, portals))
 }
 
 #[cfg(test)]

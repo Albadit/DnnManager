@@ -308,10 +308,17 @@ fn rename_host(
         op.report.info(&format!("No binding on {old_host} - nothing to change."));
         return Ok(());
     }
-    let next: Vec<(String, u16)> = http
-        .iter()
-        .map(|(h, p)| if h.eq_ignore_ascii_case(&old_host) { (new_host.clone(), *p) } else { (h.clone(), *p) })
-        .collect();
+    // The site's own host name, and the other portals' under it (`flip.<old>.dnndev.me`).
+    let moved = |h: &str| -> Option<String> {
+        let lower = h.to_ascii_lowercase();
+        if lower == old_host.to_ascii_lowercase() {
+            Some(new_host.clone())
+        } else {
+            lower.strip_suffix(&format!(".{}", old_host.to_ascii_lowercase())).map(|sub| format!("{sub}.{new_host}"))
+        }
+    };
+    let next: Vec<(String, u16)> =
+        http.iter().map(|(h, p)| (moved(h).unwrap_or_else(|| h.clone()), *p)).collect();
     {
         let (iis, site, before) = (deps.iis.clone(), new_name.to_string(), http.clone());
         op.undo.add("Put the bindings back", STEP_LIMIT, move |_| {
@@ -327,8 +334,7 @@ fn rename_host(
     };
     let aliases: Vec<(String, String)> = http
         .iter()
-        .filter(|(h, _)| h.eq_ignore_ascii_case(&old_host))
-        .map(|(_, p)| (alias_for(&old_host, *p), alias_for(&new_host, *p)))
+        .filter_map(|(h, p)| moved(h).map(|to| (alias_for(h, *p), alias_for(&to, *p))))
         .collect();
     {
         let (databases, db, dir) = (deps.databases.clone(), database.clone(), directory.to_path_buf());
@@ -671,6 +677,7 @@ pub(crate) mod tests {
             let log: Log = Arc::default();
             let bindings = vec![
                 binding("http", "shop.dnndev.me", 80),
+                binding("http", "flip.shop.dnndev.me", 80),
                 binding("http", "", 8080),
                 binding("https", "shop.dnndev.me", 443),
             ];
@@ -754,8 +761,8 @@ pub(crate) mod tests {
                 format!("rename shop -> store at {store}"),
                 format!("move {shop} -> {store}"),
                 format!(r"grant IIS APPPOOL\store {store}"),
-                "bindings store store.dnndev.me:80,:8080".into(),
-                "aliases on shop shop.dnndev.me=>store.dnndev.me +".into(),
+                "bindings store store.dnndev.me:80,flip.store.dnndev.me:80,:8080".into(),
+                "aliases on shop shop.dnndev.me=>store.dnndev.me,flip.shop.dnndev.me=>flip.store.dnndev.me +".into(),
                 "rename db shop -> store".into(),
                 "web.config -> store".into(),
                 r"login IIS APPPOOL\store on store".into(),
@@ -769,7 +776,7 @@ pub(crate) mod tests {
         );
         assert!(has(&lines, "ok IIS site and app pool are 'store' (stopped for the rename)."));
         assert!(has(&lines, "ok Bound to store.dnndev.me instead of shop.dnndev.me."));
-        assert!(has(&lines, "ok DNN's portal alias is store.dnndev.me (1 changed)."));
+        assert!(has(&lines, "ok DNN's portal alias is store.dnndev.me (2 changed)."));
         assert!(has(&lines, "ok Database [shop] is [store]; web.config points at it."));
         assert!(has(&lines, r"ok IIS APPPOOL\store may use [store]."));
         assert!(has(&lines, "ok How it was installed and its keep-warm choice go with the new name."));
@@ -792,8 +799,8 @@ pub(crate) mod tests {
             undo,
             [
                 "rename db store -> shop".to_string(),
-                "aliases on shop store.dnndev.me=>shop.dnndev.me +".into(),
-                "bindings store shop.dnndev.me:80,:8080".into(),
+                "aliases on shop store.dnndev.me=>shop.dnndev.me,flip.store.dnndev.me=>flip.shop.dnndev.me +".into(),
+                "bindings store shop.dnndev.me:80,flip.shop.dnndev.me:80,:8080".into(),
                 format!("move {} -> {}", s.at("store"), s.at("shop")),
                 format!("rename store -> shop at {}", s.at("shop")),
             ]

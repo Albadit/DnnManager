@@ -11,7 +11,9 @@ use dnnm_application::operation::{CANCELLED, CancelToken};
 use crate::docker::{is_valid_name, name_refusal};
 use crate::model::{DatabaseConfig, DockerOptions};
 use crate::programs::{ProcessResult, Run};
-use crate::sql_text::{dnn_tables, escape_like, identifier, literal};
+use dnnm_application::use_cases::portal_aliases::{self, AliasRow, LIVE_PRIMARY_SETTING, Localized};
+
+use crate::sql_text::{dnn_tables, identifier, literal};
 
 const BACKUP_DIR: &str = "/var/opt/mssql/backup";
 // How long sqlcmd waits to sign in: a container that runs but doesn't answer mustn't hold an operation for good.
@@ -344,20 +346,32 @@ END"
         result
     }
 
-    /// Rewrites portal 0's alias with the host-name suffix `hostname_suffix` to `new_alias` (with or without a port),
-    /// so a cloned site answers at its own address. DNN's objectQualifier is found from the tables.
+    /// Gives every portal a local address, primary, for a site answering at `site_alias` (with or without a port):
+    /// portal 0 that one, the others one under it; the live aliases stay as the portals' other aliases and the live
+    /// primary one is noted ([`portal_aliases::localize`]). What each portal got. DNN's objectQualifier is found from
+    /// the tables; the changes are one transaction.
     pub fn remap_portal_aliases(
         &self,
         database: &str,
         hostname_suffix: &str,
-        new_alias: &str,
+        site_alias: &str,
         cancel: &CancelToken,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<Localized>, String> {
         let Some(q) = self.qualifier(database, "PortalAlias", cancel)? else {
             return Err(format!("[{database}] has no DNN PortalAlias table."));
         };
-        let r = self.sqlcmd(&remap_sql(database, &q, hostname_suffix, new_alias), Sqlcmd::default(), Some(cancel))?;
-        if r.success() { Ok(()) } else { Err(r.stderr) }
+        let read = self.sqlcmd(
+            &read_aliases_sql(&q),
+            Sqlcmd { database: Some(database), plain: true, ..Default::default() },
+            Some(cancel),
+        )?;
+        if !read.success() {
+            return Err(error_text(&read));
+        }
+        let (rows, portals, has_primary) = parse_aliases(&read.stdout);
+        let plan = portal_aliases::localize(&rows, &portals, hostname_suffix, site_alias);
+        let r = self.sqlcmd(&localize_sql(database, &q, &plan, has_primary), Sqlcmd::default(), Some(cancel))?;
+        if r.success() { Ok(plan) } else { Err(error_text(&r)) }
     }
 
     /// The SQL login `login` with `password` - made, or its password set - and its user in `database`, owner of that
@@ -530,52 +544,101 @@ IF EXISTS (SELECT 1 FROM sys.databases WHERE name = N'{l}')
     )
 }
 
-fn remap_sql(database: &str, q: &str, hostname_suffix: &str, new_alias: &str) -> String {
+/// Prints the PortalAlias rows (`R=id|portal|primary|alias`), the portals (`P=id`) and whether the table has IsPrimary
+/// (`C=1`, DNN 7.1 and later).
+fn read_aliases_sql(q: &str) -> String {
     let pa = dnn_tables::name(q, "PortalAlias");
+    let portals = dnn_tables::name(q, "Portals");
     let pa_text = literal(&pa);
-    let db = identifier(database);
-    // In LIKE: the suffix's own % and _ are characters, not wildcards.
-    let sfx = literal(&escape_like(hostname_suffix));
-    let hn = literal(new_alias);
+    let row = |primary: &str| {
+        format!(
+            "SELECT N'R=' + CAST(PortalAliasID AS nvarchar(20)) + N'|' + CAST(PortalID AS nvarchar(20)) + N'|' + {primary} + N'|' + HTTPAlias FROM {pa}"
+        )
+    };
     format!(
-        "
-USE {db};
-SET NOCOUNT ON;
-
--- If the new alias is already present, just make sure portal 0 has only it.
-IF NOT EXISTS (SELECT 1 FROM {pa} WHERE PortalID = 0 AND HTTPAlias = N'{hn}')
+        "SET NOCOUNT ON;
+IF COL_LENGTH(N'{pa_text}', 'IsPrimary') IS NOT NULL
 BEGIN
-    -- Try to rewrite the first existing alias with the hostname suffix for portal 0 into the new one.
-    DECLARE @existingId int = (
-        SELECT TOP 1 PortalAliasID
-        FROM {pa}
-        WHERE PortalID = 0 AND (HTTPAlias LIKE N'%.{sfx}' OR HTTPAlias LIKE N'%.{sfx}:%')
-        ORDER BY PortalAliasID
-    );
-    IF @existingId IS NOT NULL
-        UPDATE {pa} SET HTTPAlias = N'{hn}' WHERE PortalAliasID = @existingId;
-    ELSE
-    BEGIN
-        -- No matching alias to rewrite - insert one, with a column list DNN 9.x schemas have.
-        IF COL_LENGTH(N'{pa_text}','BrowserType') IS NOT NULL AND COL_LENGTH(N'{pa_text}','IsPrimary') IS NOT NULL
-            INSERT INTO {pa} (PortalID, HTTPAlias, CultureCode, Skin, BrowserType, IsPrimary, CreatedByUserID, CreatedOnDate, LastModifiedByUserID, LastModifiedOnDate)
-            VALUES (0, N'{hn}', NULL, NULL, 0, 1, -1, SYSUTCDATETIME(), -1, SYSUTCDATETIME());
-        ELSE
-            INSERT INTO {pa} (PortalID, HTTPAlias, CreatedByUserID, CreatedOnDate, LastModifiedByUserID, LastModifiedOnDate)
-            VALUES (0, N'{hn}', -1, SYSUTCDATETIME(), -1, SYSUTCDATETIME());
-    END
+    SELECT N'C=1';
+    EXEC(N'{}');
 END
-
--- Remove any leftover aliases with the hostname suffix for portal 0 that aren't the new one.
-DELETE FROM {pa}
-WHERE PortalID = 0 AND (HTTPAlias LIKE N'%.{sfx}' OR HTTPAlias LIKE N'%.{sfx}:%') AND HTTPAlias <> N'{hn}';
-
--- Make sure the new alias is marked primary if the column exists.
-IF COL_LENGTH(N'{pa_text}','IsPrimary') IS NOT NULL
-    UPDATE {pa} SET IsPrimary = CASE WHEN HTTPAlias = N'{hn}' THEN 1 ELSE 0 END
-    WHERE PortalID = 0;
-"
+ELSE
+    {};
+SELECT N'P=' + CAST(PortalID AS nvarchar(20)) FROM {portals};",
+        literal(&row("CAST(CAST(IsPrimary AS int) AS nvarchar(1))")),
+        row("N'0'")
     )
+}
+
+/// The rows, the portals and whether there is IsPrimary, from [`read_aliases_sql`]'s output.
+fn parse_aliases(stdout: &str) -> (Vec<AliasRow>, Vec<i32>, bool) {
+    let (mut rows, mut portals, mut has_primary) = (Vec::new(), Vec::new(), false);
+    for line in stdout.lines().map(str::trim) {
+        if line == "C=1" {
+            has_primary = true;
+        } else if let Some(p) = line.strip_prefix("P=") {
+            portals.extend(p.trim().parse::<i32>());
+        } else if let Some(r) = line.strip_prefix("R=") {
+            let mut parts = r.splitn(4, '|');
+            let (Some(id), Some(portal), Some(primary), Some(alias)) =
+                (parts.next(), parts.next(), parts.next(), parts.next())
+            else {
+                continue;
+            };
+            if let (Ok(id), Ok(portal)) = (id.parse(), portal.parse()) {
+                rows.push(AliasRow { id, portal, alias: alias.trim().to_string(), primary: primary == "1" });
+            }
+        }
+    }
+    (rows, portals, has_primary)
+}
+
+/// The changes of [`portal_aliases::localize`]'s plan, in one transaction.
+fn localize_sql(database: &str, q: &str, plan: &[Localized], has_primary: bool) -> String {
+    let pa = dnn_tables::name(q, "PortalAlias");
+    let settings = dnn_tables::name(q, "PortalSettings");
+    let setting = literal(LIVE_PRIMARY_SETTING);
+    let mut sql = format!("USE {};\nSET NOCOUNT ON;\nSET XACT_ABORT ON;\nBEGIN TRANSACTION;\n", identifier(database));
+    let removed: Vec<String> = plan.iter().flat_map(|l| &l.remove).map(|id| id.to_string()).collect();
+    if !removed.is_empty() {
+        sql += &format!("DELETE FROM {pa} WHERE PortalAliasID IN ({});\n", removed.join(", "));
+    }
+    for l in plan {
+        let (alias, portal) = (literal(&l.alias), l.portal);
+        if let Some(id) = l.rewrite {
+            sql += &format!(
+                "UPDATE {pa} SET HTTPAlias = N'{alias}', LastModifiedByUserID = -1, LastModifiedOnDate = GETDATE() WHERE PortalAliasID = {id};\n"
+            );
+        } else if !l.present {
+            sql += &if has_primary {
+                format!(
+                    "INSERT INTO {pa} (PortalID, HTTPAlias, BrowserType, IsPrimary, CreatedByUserID, CreatedOnDate, LastModifiedByUserID, LastModifiedOnDate) \
+                     VALUES ({portal}, N'{alias}', N'Normal', 1, -1, GETDATE(), -1, GETDATE());\n"
+                )
+            } else {
+                format!(
+                    "INSERT INTO {pa} (PortalID, HTTPAlias, CreatedByUserID, CreatedOnDate, LastModifiedByUserID, LastModifiedOnDate) \
+                     VALUES ({portal}, N'{alias}', -1, GETDATE(), -1, GETDATE());\n"
+                )
+            };
+        }
+        if has_primary {
+            sql += &format!(
+                "UPDATE {pa} SET IsPrimary = CASE WHEN HTTPAlias = N'{alias}' THEN 1 ELSE 0 END WHERE PortalID = {portal};\n"
+            );
+        }
+        if let Some(live) = &l.live_primary {
+            let live = literal(live);
+            sql += &format!(
+                "IF EXISTS (SELECT 1 FROM {settings} WHERE PortalID = {portal} AND SettingName = N'{setting}')\n    \
+                 UPDATE {settings} SET SettingValue = N'{live}', LastModifiedByUserID = -1, LastModifiedOnDate = GETDATE() WHERE PortalID = {portal} AND SettingName = N'{setting}';\n\
+                 ELSE\n    \
+                 INSERT INTO {settings} (PortalID, SettingName, SettingValue, CreatedByUserID, CreatedOnDate, LastModifiedByUserID, LastModifiedOnDate) \
+                 VALUES ({portal}, N'{setting}', N'{live}', -1, GETDATE(), -1, GETDATE());\n"
+            );
+        }
+    }
+    sql + "COMMIT TRANSACTION;\n"
 }
 
 fn disable_ssl_sql(database: &str, q: &str) -> String {
@@ -679,10 +742,20 @@ mod tests {
                 "MOVE N'log/../x' TO N'/var/opt/mssql/data/shop_log____x_log.ldf'"
             ]
         );
-        let remap = remap_sql("shop", "dnn_", "dnn_dev.me", "o'neil.dnndev.me");
-        assert!(remap.contains("dbo.[dnn_PortalAlias]"));
-        assert!(remap.contains("LIKE N'%.dnn[_]dev.me'"));
-        assert!(remap.contains("N'o''neil.dnndev.me'"));
+        let read = read_aliases_sql("dnn_");
+        assert!(read.contains("FROM dbo.[dnn_PortalAlias]") && read.contains("FROM dbo.[dnn_Portals]"));
+        let (rows, portals, has_primary) =
+            parse_aliases("C=1\r\nR=7|0|1|shop.nl\r\nR=8|1|0|a.shop.nl/x|y\r\nR=bad\r\nP=0\r\nP=1\r\n");
+        assert!(has_primary);
+        assert_eq!(portals, [0, 1]);
+        assert_eq!(rows[1], AliasRow { id: 8, portal: 1, alias: "a.shop.nl/x|y".into(), primary: false });
+        let plan = portal_aliases::localize(&rows, &portals, "dnndev.me", "o'neil.dnndev.me");
+        let write = localize_sql("shop", "dnn_", &plan, true);
+        assert!(write.starts_with("USE [shop];") && write.trim_end().ends_with("COMMIT TRANSACTION;"));
+        assert!(write.contains("VALUES (0, N'o''neil.dnndev.me', N'Normal', 1"));
+        assert!(write.contains("VALUES (1, N'portal1.o''neil.dnndev.me'"), "a path alias names no portal");
+        assert!(write.contains("WHERE PortalID = 0 AND SettingName = N'DnnManager_LivePrimaryAlias'"));
+        assert!(write.contains("SettingValue = N'shop.nl'"));
         assert!(disable_ssl_sql("shop", "").contains("UPDATE dbo.[Tabs] SET IsSecure = 0"));
         assert!(file_list_sql("/b/o'x.bak").contains("N''/b/o''''x.bak''"));
     }

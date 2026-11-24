@@ -36,7 +36,7 @@ menu) say whether there is a newer release.
 | Part | What it does |
 |---|---|
 | Activity bar | The icons on the left: **Projects** (every DNN website in IIS), **New project** and **Source Control**; the gear opens Settings, themes, Customize Layout, Troubleshoot and Check for Updates. Customize Layout hides it or puts it on the right. |
-| Side bars | A **primary** side bar beside the activity bar (**Ctrl+B**) and a **secondary** one on the other side (**Ctrl+Alt+B**) - empty for now, kept for what comes later. Drag their edges to resize them. |
+| Side bars | A **primary** side bar beside the activity bar (**Ctrl+B**) and a **secondary** one on the other side (**Ctrl+Alt+B**). On the Source Control page the primary side bar holds its files (it opens when you go there); elsewhere the side bars are empty for now, kept for what comes later. Drag their edges to resize them. |
 | Title bar | The search in the middle finds a project; type `>` for any command (**Ctrl+Shift+P**). **?** is help. |
 | Bottom panel | **Output** (what an operation does, step by step), **Logs** (the sites' and DNN Manager's logs), **Terminal**. **Ctrl+J** opens and closes it; drag its top edge to resize it (it stops at its smallest size), or the corner where it meets the primary side bar to resize both. **Ctrl+F** (or 🔍) finds text in the tab shown: **Aa** match case, **ab** whole word, **.\*** regular expression; **Enter** / **Shift+Enter** go to the next / previous match, **Esc** closes it. The text in Output and Logs wraps in the panel's width and can be selected: drag over it, double-click a word, triple-click a line; **Ctrl+C** (⌘C) copies, **Ctrl+A** (⌘A) selects all, and the right-click menu has both. |
 | Status bar | IIS's state with Start / Stop / Restart (these affect every site), memory, processor and the disk of the projects folder. A figure that can't be read shows dashes (`--.--`), and processor use shows from its second reading on, two seconds after the start. |
@@ -91,7 +91,9 @@ operation runs at a time.
 
 The details' tabs - **General**, **IIS**, **DNN**, **Database**, **Advanced** - show what DNN Manager reads from IIS,
 the site's folder, `web.config` and its database, with a health check. Their buttons edit host names, the app pool,
-the database connection and the DNN host password.
+the database connection and the DNN host password. In **Edit host names**, a host name typed in the empty row at the
+bottom is saved at once with **Add** (or Enter): the IIS binding, DNN's portal alias and the hosts file are updated
+straight away; renamed and removed host names are saved with **Save**.
 
 ## New project
 
@@ -100,6 +102,20 @@ files and its `.bacpac` / `.bak`. Fill in the name, the host name and port, the 
 and the database; **Still needed** lists what is missing. What you type is kept until the project is created.
 Every password box has an eye button that shows and hides what you typed.
 
+**Portal aliases.** An imported site keeps its live addresses and gets local ones beside them, so it opens on this
+PC and goes back to the server as it is:
+
+- every portal gets a local address, made primary - portal 0 the site's own (`goededoelen.dnndev.me`), every other
+  portal one under it, named after its live domain (`projectflip.goededoelen.dnndev.me` for `projectflip.bondtest.nl`;
+  `portal3.goededoelen.dnndev.me` for a portal without one) - and the IIS site answers at all of them (the hosts file
+  follows);
+- the live aliases stay as the portal's other aliases, and the one that was primary is remembered in the database;
+- **Clone** and **Rename** move the local addresses to the new name; child-portal aliases with a path
+  (`site/child`) are left as they are;
+- **Export → For deployment** leaves every portal's local aliases out of the package and makes the remembered live
+  alias primary again; live domains you type there replace portal 0's. A portal made on this PC has no live alias -
+  the Output says so; add its domain in DNN once it runs on the server.
+
 While a project is being made (or any other operation runs), the page is dimmed and can't be used - a note above it
 says what runs, and it opens again when that is done. On macOS and Linux it stays locked: it needs IIS.
 
@@ -107,21 +123,31 @@ says what runs, and it opens again when that is done. On macOS and Linux it stay
 
 **Source Control** (**Ctrl+3**, ⌘3 on macOS) compares a project's files with a server's - over SFTP, FTPS or FTP - and
 sends them either way, as VS Code's Source Control lists changes. Nothing on a server is replaced or deleted without
-asking you first.
+asking you first. As in VS Code, the **primary side bar** holds the view - the title with **Refresh**, **Upload**,
+**Download** and **…**, the project and server, one main button (**Upload**, else **Download**, else **Refresh** -
+**Add server** while there is none), the status, the filter box, and the files - and the comparison of the file you choose fills the main view. Drag the side bar's edge to widen it; **Ctrl+B** hides
+it.
 
-1. Choose the project at the top, then **+** to add an **environment**: a server for it - its name and kind
-   (Development, Test, Acceptance, Production), the **protocol** (SFTP, FTPS - FTP over TLS - or plain FTP), the host,
-   port and user, a password (or for SFTP a private key file), and the site's folder on the server. Optional: **Mappings** to deploy only parts of the project, each to its own
-   server folder (`DesktopModules/Shop => /var/www/shop/DesktopModules/Shop`, `;` between them); more files to
-   ignore; files to protect; and **Back up the server's copy** before replacing or deleting it. The password goes in
-   your account's secure store, never in the settings.
+1. **+** adds a **server**, laid out as FileZilla's Site Manager: its **Name**; the **Protocol** (FTP or SFTP), the
+   **Host** and **Port**; for FTP the **Encryption** (**Require explicit FTP over TLS**, or **Only use plain FTP
+   (insecure)**); the **Logon Type** (**Normal**: a password - or over SFTP **Key file**), the **User** and the
+   **Password**; and the **Default remote directory**, `/site/wwwroot` to start with (Azure App Service's). Optional:
+   **Mappings** to deploy only parts of the project, each to its own server folder
+   (`DesktopModules/Shop => /site/wwwroot/DesktopModules/Shop`, `;` between them); more files to ignore; files to
+   protect; and **Back up the server's copy** before replacing or deleting it. The password goes in your account's
+   secure store, never in the settings. A server isn't tied to a project: choose any project and any server, and
+   each project keeps its own comparison, records and history with it.
 2. **Refresh** (↻) reads both sides and compares them. The first time, for SFTP DNN Manager shows the server's key
-   fingerprint and asks whether to trust it; later a different key is refused (edit and save the environment to
+   fingerprint and asks whether to trust it; later a different key is refused (edit and save the server to
    trust a new one). FTPS checks the server's certificate against the ones your computer trusts, every time - a
    self-signed certificate is refused. Plain FTP sends the password and the files unencrypted: DNN Manager warns
    once and connects only if you say so - use SFTP or FTPS when the server has either. Generated and local-only files are never compared: `.git/`, `node_modules/`, `App_Data/`, logs,
    caches, `*.tmp`, `*.log`, `*.bak`.
-3. The files are listed in **Conflicts**, **Changes** and **Server changes**, as folder trees:
+3. The files are listed in **Conflicts**, **Changes** and **Server changes**, each with its count, as VS Code lists
+   them: one row a file - its name in its change's colour, its folder beside it, its letter on the right; under the
+   mouse the row's own buttons (revert to the server's copy, upload, download, or for a conflict keep mine / keep the
+   server's), and on a section's row upload or download all of it. **…** has **View as Tree** (folders) and **Show
+   unchanged files**:
 
 | | Means | What to do |
 |---|---|---|
@@ -144,19 +170,18 @@ folder first, and opens the file in your editor (VS Code when it is installed). 
 markers, save, **Refresh**, then **Keep mine** to upload the merged file - an upload is refused while markers are
 left. Ctrl+click (⌘ on
 macOS) and Shift+click select several; the right-click menu has Compare, Upload, Download, Revert local, the conflict
-choices and Delete on server. **Upload** and **Download** in the toolbar take the selected files, or all those shown;
-the filter box, the change chips and the **part** picker narrow the list - **Whole project**, or one module
-(`DesktopModules/<name>`), skin or container (`Portals/<portal>/Skins|Containers/<name>`) to deploy on its own.
+choices and Delete on server. **Upload** and **Download** in the title and the main button take the selected files, or
+all those shown; the filter box narrows the list to the files whose path holds what you type.
 
 Before anything is sent, a **preview** lists every file and what happens to it - new on the server, replaced there,
 deleted there, new in the project, replaced in the project - with the sizes, the protected files marked, and what
 is left alone and why (a conflict without a choice, a file no mapping holds). **Deploy** sends them; Cancel or Esc
-sends nothing. When the page opens on an environment it shows the last comparison at once - the server as it was
+sends nothing. When the page opens on a server it shows the last comparison at once - the server as it was
 last read, the project as it is now - marked "saved"; **Refresh** reads the server again. **⋮** has Upload all, Download all, the history of what was sent,
-the backups folder and the environment's edit and delete.
+the backups folder and the server's edit and delete.
 
 What keeps a server safe: each file is checked again right before it is sent, and left alone if it changed on
-either side since the comparison; replacing or deleting server files is shown in the preview first, naming them; on Production
+either side since the comparison; replacing or deleting server files is shown in the preview first, naming them;
 `web.config`, `*.config`, `bin/`, `App_Data/` and `Portals/` are asked about again; with backups on, the server's
 copy is kept first in `backups\<project>\server\`. An upload is written under a temporary name and put in place
 only once it is whole, so one that breaks off leaves the old file; a lost connection is tried again, up to three

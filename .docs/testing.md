@@ -5,7 +5,7 @@ How DNN Manager is tested, what was checked in the running app, and what wasn't 
 ## Automated tests
 
 ```powershell
-cargo test --workspace        # 952 tests (12 ignored), a few seconds once built
+cargo test --workspace        # 961 tests (12 ignored), a few seconds once built
 cargo clippy --workspace --all-targets
 ```
 
@@ -15,11 +15,11 @@ are run by hand.
 
 | Crate | Tests | What they hold |
 |---|---|---|
-| `dnnm-application` | 215 | The use cases against stand-in traits: their steps in order, messages word for word, undo last-first on a failure or a cancel, Keep, the questions they ask; settings rows and defaults; row texts; Source Control against an in-memory project and server that loses its connection, refuses a path or changes behind the comparison; 20 000 files compared within a time limit |
+| `dnnm-application` | 222 | The use cases against stand-in traits: their steps in order, messages word for word, undo last-first on a failure or a cancel, Keep, the questions they ask; settings rows and defaults; row texts; Source Control against an in-memory project and server that loses its connection, refuses a path or changes behind the comparison; 20 000 files compared within a time limit |
 | `dnnm-dialogs` | 124 | The dialogs' and pages' rules as pure functions: settings validation and categories, shortcuts (each OS's text, macOS's ⌘ defaults), the upgrade path file, the setup page's checks, Source Control's list and environment form, Markdown, the guide and tour stops, release notes between versions |
 | `dnnm-dnn` | 105 (2 ignored) | DNN packages and releases, the installer's web.config edits, upgrade path and plan |
 | `dnnm-system` | 86 (1 ignored) | Hosts file, ACLs, secrets (AES-256-GCM with stand-in keys, reading old DPAPI values), sign-in task arguments, updates and the update helper's plan, single instance |
-| `dnnm-sql` | 77 (3 ignored) | Connection strings, LocalDB, SQL texts, docker-compose, the provisioner's checks |
+| `dnnm-sql` | 78 (3 ignored) | Connection strings, LocalDB, SQL texts, docker-compose, the provisioner's checks; with `DNNM_SQL_ALIAS_TEST` set, portal aliases on a real SQL Server (below) |
 | `dnnm-wiring` | 54 (1 ignored) | The real adapters in temporary folders: zip round trips, web.config rewrites, backups and their clean-up, setup drafts |
 | `dnnm-infrastructure` | 66 | appcmd's XML and errors, web.config, `dnnmanager.db` (its schema, changed rows only), Source Control's folder scan, writes and tables, Windows calls, the status bar's memory / processor / disk (read for real on the OS the tests run on) |
 | `dnnm-logs` | 44 (1 ignored) | Log catalogs, the daily file, the run log, Find |
@@ -57,6 +57,18 @@ cargo test -p dnnm-remote --test live_read_only -- --nocapture
 `real_server.rs` streams, replaces and removes a file and checks a wrong host key is refused; `source_control_end_to_end.rs`
 runs compare → upload → change on each side and both → diff → upload, download, keep the server's side → delete on
 the server, through the real SFTP client, project folder and tables.
+
+Portal aliases on a real SQL Server - `crates/sql/tests/portal_aliases.rs` brings a six-portal live site here (each
+portal's local address, the live ones kept and the primary noted), clones it to another address and exports it for
+the live server again (local aliases out, the live primary ones back). It works in a database of its own in a
+throwaway container - never DNN Manager's:
+
+```powershell
+docker run -d --name dnnm-alias-test -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD='Test_12345!' -p 127.0.0.1:14339:1433 mcr.microsoft.com/mssql/server:2022-latest
+$env:DNNM_SQL_ALIAS_TEST = 'dnnm-alias-test:14339:Test_12345!'
+cargo test -p dnnm-sql --test portal_aliases -- --nocapture
+docker rm -f dnnm-alias-test
+```
 
 ## The stand-in IIS
 

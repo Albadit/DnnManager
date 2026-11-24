@@ -67,7 +67,7 @@ pub fn delete_environment(services: &Services, env: &Environment) -> Result<(), 
 }
 
 pub fn history(services: &Services, env: &Environment) -> Result<Vec<HistoryLine>, String> {
-    store(services).history(&env.id, 200)
+    store(services).history(&env.state_key(), 200)
 }
 
 /// Compares the project with the environment's server - an operation.

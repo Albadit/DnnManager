@@ -1,7 +1,9 @@
 //! Edit host names (`Controls/BindingsDialog.xaml(.cs)`): the host names and ports a site answers on over http, one
 //! row each. Every row remembers the binding it started as, so DNN's portal alias of a changed host name can be renamed
-//! rather than a new one added; https and other bindings are only listed. Emits
-//! `DialogEvent::Done(EditBindingsRequest)`; the app runs `dnnm_wiring::edit_bindings::edit_bindings` with it.
+//! rather than a new one added; https and other bindings are only listed. A host name typed in the row under them is
+//! saved at once with **Add** (or Enter there) - the binding, DNN's alias and the hosts file - with whatever else was
+//! changed; the other changes are saved with Save. Emits `DialogEvent::Done(EditBindingsRequest)`; the app runs
+//! `dnnm_wiring::edit_bindings::edit_bindings` with it.
 //!
 //! The app gives it the site's bindings split by `dnnm_application::use_cases::edit_bindings::split_bindings`. As the
 //! C#, only this site's own bindings are checked for doubles - IIS refuses a binding another site has.
@@ -21,7 +23,7 @@ use dnnm_ui::{self as ui, Tip};
 /// The dialog's first line.
 pub fn intro(site: &str) -> String {
     format!(
-        "The host names and ports '{site}' answers on over http. DNN's portal aliases follow: a changed host name's alias is renamed, a new one's is added."
+        "The host names and ports '{site}' answers on over http. DNN's portal aliases follow: a changed host name's alias is renamed, a new one's is added. A host name you add is saved at once."
     )
 }
 
@@ -106,6 +108,16 @@ pub fn changed(rows: &[BindingRow], original: &[(String, u16)]) -> bool {
             .any(|(e, (host, port))| e.old_host.is_none() || !e.host.eq_ignore_ascii_case(host) || e.port != *port)
 }
 
+/// The rows with the host name typed in the add row: what Add saves; None while that host name is empty.
+pub fn with_new(rows: &[BindingRow], host: &str, port: &str) -> Option<Vec<BindingRow>> {
+    if host.trim().is_empty() {
+        return None;
+    }
+    let mut all = rows.to_vec();
+    all.push(BindingRow { old_host: None, old_port: None, host: host.into(), port: port.into() });
+    Some(all)
+}
+
 /// A new host name most likely goes on the port the site already uses.
 pub fn port_for_new_row(rows: &[BindingRow]) -> u16 {
     rows.iter().find_map(BindingRow::port_number).unwrap_or(80)
@@ -127,7 +139,11 @@ pub struct BindingsDialog {
     others: Vec<String>,
     rows: Vec<Row>,
     next_id: usize,
+    /// The add row: a host name and its port, saved at once with Add.
+    new_host: Entity<TextInput>,
+    new_port: Entity<TextInput>,
     focus: FocusHandle,
+    _new_subscriptions: [Subscription; 2],
 }
 
 impl EventEmitter<DialogEvent<EditBindingsRequest>> for BindingsDialog {}
@@ -143,6 +159,10 @@ impl BindingsDialog {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let new_host = cx.new(|cx| TextInput::new("new.dnndev.me", cx));
+        let new_port = cx.new(|cx| TextInput::new("", cx));
+        let notify = |_: &mut Self, _: Entity<TextInput>, _: &TextChanged, cx: &mut Context<Self>| cx.notify();
+        let subscriptions = [cx.subscribe(&new_host, notify), cx.subscribe(&new_port, notify)];
         let mut dialog = Self {
             site: site.to_string(),
             directory,
@@ -150,11 +170,16 @@ impl BindingsDialog {
             others,
             rows: Vec::new(),
             next_id: 0,
+            new_host,
+            new_port,
             focus: cx.focus_handle(),
+            _new_subscriptions: subscriptions,
         };
         for (host, port) in http {
             dialog.add_row(Some(host.clone()), Some(port), &host, port, cx);
         }
+        let port = port_for_new_row(&dialog.typed(cx)).to_string();
+        dialog.new_port.update(cx, |input, cx| input.set_text(port, cx));
         let first = dialog.rows.first().map(|r| r.host.read(cx).focus_handle(cx)).unwrap_or(dialog.focus.clone());
         window.focus(&first);
         dialog
@@ -199,10 +224,28 @@ impl BindingsDialog {
         if problem(&rows).is_some() || !changed(&rows, &self.original) {
             return;
         }
+        self.emit(&rows, cx);
+    }
+
+    /// The add row's host name, with the other rows: None while it is empty.
+    fn adding(&self, cx: &App) -> Option<Vec<BindingRow>> {
+        with_new(&self.typed(cx), self.new_host.read(cx).text(), self.new_port.read(cx).text())
+    }
+
+    /// Add: the typed host name saved at once - with whatever else was changed.
+    fn add(&mut self, cx: &mut Context<Self>) {
+        let Some(rows) = self.adding(cx) else { return };
+        if problem(&rows).is_some() {
+            return;
+        }
+        self.emit(&rows, cx);
+    }
+
+    fn emit(&self, rows: &[BindingRow], cx: &mut Context<Self>) {
         cx.emit(DialogEvent::Done(EditBindingsRequest {
             site_name: self.site.clone(),
             directory: self.directory.clone(),
-            bindings: edits(&rows),
+            bindings: edits(rows),
         }));
     }
 }
@@ -217,8 +260,11 @@ impl Render for BindingsDialog {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::get(cx).clone();
         let rows = self.typed(cx);
-        let found = problem(&rows);
-        let ok = found.is_none() && changed(&rows, &self.original);
+        let adding = self.adding(cx);
+        // The add row's problem first while a host name is typed there - that is what Add would save.
+        let found = adding.as_deref().and_then(problem).or_else(|| problem(&rows));
+        let ok = problem(&rows).is_none() && changed(&rows, &self.original);
+        let can_add = adding.as_deref().is_some_and(|all| problem(all).is_none());
 
         let row_views: Vec<_> = self
             .rows
@@ -258,7 +304,7 @@ impl Render for BindingsDialog {
 
         let stack = |gap: f32| div().w_full().flex().flex_col().gap(px(gap));
         // The labels 4 above the rows (what an empty host name means in the tip beside its label), the rows 6 apart;
-        // Add host name 10 under them.
+        // The add row 10 under them.
         let table = stack(4.0)
             .child(
                 div()
@@ -276,16 +322,30 @@ impl Render for BindingsDialog {
                     .child(dialog::label("Port", cx)),
             )
             .when(!row_views.is_empty(), |d| d.child(stack(6.0).children(row_views)));
-        let add = div().flex().child(ui::link("add-binding", "Add host name", cx).on_click(cx.listener(
-            |this, _: &ClickEvent, window, cx| {
-                let port = port_for_new_row(&this.typed(cx));
-                this.add_row(None, None, "", port, cx);
-                if let Some(row) = this.rows.last() {
-                    window.focus(&row.host.read(cx).focus_handle(cx));
+        // A host name typed here is saved at once: Add, or Enter in it - not Save.
+        let add = div()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                if e.keystroke.key == "enter" {
+                    this.add(cx);
+                    cx.stop_propagation();
                 }
-                cx.notify();
-            },
-        )));
+            }))
+            .child(div().w(px(260.0)).child(dialog::text_field(&self.new_host, window, cx)))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(div().w(px(70.0)).child(dialog::text_field(&self.new_port, window, cx)))
+                    .child(
+                        ui::button("add-binding", "Add", ui::ButtonKind::Secondary, can_add, cx)
+                            .tip("Add this host name and save it now (Enter)")
+                            .when(can_add, |b| b.on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.add(cx)))),
+                    ),
+            );
         let bindings = stack(10.0).child(table).child(add);
 
         let body =
@@ -390,6 +450,19 @@ mod tests {
         let mut port = same.clone();
         port[1].port = "8081".into();
         assert!(changed(&port, &original));
+    }
+
+    #[test]
+    fn a_host_name_typed_in_the_add_row_is_saved_with_the_others() {
+        let rows = [row(Some(("shop.dnndev.me", 80)), "shop.dnndev.me", "80")];
+        assert_eq!(with_new(&rows, "  ", "80"), None, "nothing typed: nothing to add");
+        let all = with_new(&rows, "Shop.Example.nl", "80").unwrap();
+        assert!(problem(&all).is_none() && changed(&all, &[("shop.dnndev.me".into(), 80)]));
+        let added = &edits(&all)[1];
+        assert_eq!((added.old_host.as_deref(), added.host.as_str(), added.port), (None, "shop.example.nl", 80));
+        // A host name already there, or not a host name, can't be added.
+        assert!(problem(&with_new(&rows, "shop.dnndev.me", "80").unwrap()).is_some());
+        assert!(problem(&with_new(&rows, "shop dnn", "80").unwrap()).is_some());
     }
 
     #[test]

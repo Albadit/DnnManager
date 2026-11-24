@@ -9,8 +9,8 @@ use dnnm_domain::{DnnProject, validate_project_name};
 
 use crate::operation::{CANCELLED, Operation};
 use crate::use_cases::hosting::{
-    HostingDeps, check_local_sql, disable_ssl, drop_database_on_undo, drop_login_on_undo, grant_site_login,
-    is_backup_file, restore_backup, site_using, swap_in, worded,
+    HostingDeps, bind_portals, check_local_sql, disable_ssl, drop_database_on_undo, drop_login_on_undo,
+    grant_site_login, is_backup_file, localize_portals, restore_backup, site_using, swap_in, worded,
 };
 use crate::use_cases::provisioner;
 
@@ -304,14 +304,14 @@ fn setup_database(
             op.report.success(&format!("Database [{}] restored from {file_name}.", incoming.database_name));
 
             // A backup from another environment carries that site's portal aliases; without one for this address DNN
-            // can't match the request. Not fatal - it can be added by hand.
-            match deps.sql.remap_portal_aliases(
-                &incoming.database_name,
-                &deps.settings.hostname_suffix,
-                site_alias,
-                &op.cancel,
-            ) {
-                Ok(()) => op.report.success(&format!("PortalAlias set to {site_alias}.")),
+            // can't match the request. Every portal gets one here, the live ones kept for Export for deployment.
+            // Not fatal - they can be added by hand.
+            match localize_portals(deps, &incoming.database_name, site_alias, op) {
+                Ok(plan) => {
+                    if req.setup_iis {
+                        bind_portals(deps, &req.project_name, &plan, op);
+                    }
+                }
                 Err(e) => op.report.fail(&format!(
                     "Could not update PortalAlias: {e}. Add '{site_alias}' as a site alias or the site will not load at \
                      that address."
@@ -578,6 +578,34 @@ mod tests {
             &"web.config names [shopdb], the database of the IIS site 'other' - this project gets a database of its own, [shop]."
                 .to_string()
         ));
+    }
+
+    #[test]
+    fn every_portal_of_a_restored_site_opens_here_at_its_own_address() {
+        let world = World::new();
+        world.site("shop", None);
+        let localized = |portal: i32, alias: &str, live: &str| crate::use_cases::portal_aliases::Localized {
+            portal,
+            alias: alias.into(),
+            rewrite: None,
+            present: false,
+            remove: vec![],
+            live_primary: Some(live.into()),
+        };
+        *world.sql.portals.lock().unwrap() =
+            vec![localized(1, "flip.{site}", "flip.example.nl"), localized(2, "sngv.{site}", "sngv.example.nl")];
+        let file = backup(&world, "live.bak");
+        let req = HostExistingRequest {
+            setup_iis: true,
+            setup_database: true,
+            backup_file: Some(file),
+            ..HostExistingRequest::new("shop")
+        };
+        let (outcome, lines) = host(&world, &req, &Answer::yes());
+        assert_eq!(outcome, Outcome::Finished, "{lines:#?}");
+        assert!(lines.contains(&"ok Portal 1: PortalAlias set to flip.shop.dnndev.me - flip.example.nl kept for the live site.".to_string()), "{lines:#?}");
+        assert!(world.iis.calls.lock().unwrap().contains(&"bindings shop.dnndev.me:80,flip.shop.dnndev.me:80,sngv.shop.dnndev.me:80 shop".to_string()));
+        assert!(lines.contains(&"ok IIS site 'shop' answers at every portal's address.".to_string()));
     }
 
     #[test]
