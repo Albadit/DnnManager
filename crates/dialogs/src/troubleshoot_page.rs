@@ -791,7 +791,6 @@ impl Render for TroubleshootPage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(windows)]
     use std::collections::BTreeMap;
     use std::sync::Mutex;
 
