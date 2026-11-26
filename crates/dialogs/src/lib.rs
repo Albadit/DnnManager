@@ -15,6 +15,7 @@ pub mod edit_bindings;
 pub mod edit_app_pool;
 pub mod input;
 pub mod setup_page;
+pub mod source_control_diff;
 pub mod source_control_environment;
 pub mod source_control_list;
 pub mod source_control_page;

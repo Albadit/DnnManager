@@ -2,6 +2,7 @@
 //! toggle switch, the table check box, icons and tooltips. Each takes its sizes and colours from the theme.
 
 pub mod dialog;
+pub mod file_icons;
 pub mod focus;
 pub mod icons;
 pub mod keys;

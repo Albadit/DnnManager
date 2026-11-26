@@ -124,11 +124,11 @@ says what runs, and it opens again when that is done. On macOS and Linux it stay
 **Source Control** (**Ctrl+3**, ⌘3 on macOS) compares a project's files with a server's - over SFTP, FTPS or FTP - and
 sends them either way, as VS Code's Source Control lists changes. Nothing on a server is replaced or deleted without
 asking you first. As in VS Code, the **primary side bar** holds the view - the title with **Refresh**, **Upload**,
-**Download** and **…**, the project and server, one main button (**Upload**, else **Download**, else **Refresh** -
-**Add server** while there is none), the status, the filter box, and the files - and the comparison of the file you choose fills the main view. Drag the side bar's edge to widen it; **Ctrl+B** hides
+**Download** and **…**, the project and server, the **Commit** button, the filter box, and the files - and the
+comparison of the file you choose fills the main view. Drag the side bar's edge to widen it; **Ctrl+B** hides
 it.
 
-1. **+** adds a **server**, laid out as FileZilla's Site Manager: its **Name**; the **Protocol** (FTP or SFTP), the
+1. **…** → **Add server…** adds a **server**, laid out as FileZilla's Site Manager: its **Name**; the **Protocol** (FTP or SFTP), the
    **Host** and **Port**; for FTP the **Encryption** (**Require explicit FTP over TLS**, or **Only use plain FTP
    (insecure)**); the **Logon Type** (**Normal**: a password - or over SFTP **Key file**), the **User** and the
    **Password**; and the **Default remote directory**, `/site/wwwroot` to start with (Azure App Service's). Optional:
@@ -137,29 +137,44 @@ it.
    protect; and **Back up the server's copy** before replacing or deleting it. The password goes in your account's
    secure store, never in the settings. A server isn't tied to a project: choose any project and any server, and
    each project keeps its own comparison, records and history with it.
-2. **Refresh** (↻) reads both sides and compares them. The first time, for SFTP DNN Manager shows the server's key
+2. **Refresh** (↻) reads both sides and compares them (a spinner stands in its place while it runs; Output shows
+   the progress). The first time, for SFTP DNN Manager shows the server's key
    fingerprint and asks whether to trust it; later a different key is refused (edit and save the server to
    trust a new one). FTPS checks the server's certificate against the ones your computer trusts, every time - a
    self-signed certificate is refused. Plain FTP sends the password and the files unencrypted: DNN Manager warns
    once and connects only if you say so - use SFTP or FTPS when the server has either. Generated and local-only files are never compared: `.git/`, `node_modules/`, `App_Data/`, logs,
    caches, `*.tmp`, `*.log`, `*.bak`.
-3. The files are listed in **Conflicts**, **Changes** and **Server changes**, each with its count, as VS Code lists
-   them: one row a file - its name in its change's colour, its folder beside it, its letter on the right; under the
-   mouse the row's own buttons (revert to the server's copy, upload, download, or for a conflict keep mine / keep the
-   server's), and on a section's row upload or download all of it. **…** has **View as Tree** (folders) and **Show
-   unchanged files**:
+3. The files are listed in **Conflicts**, **Staged Changes**, **Changes** and **Server changes**, each with its
+   count, as VS Code lists them: one row a file - its kind's icon (C#, JavaScript, CSS, markup, pictures, archives,
+   …), its name in its change's colour, its folder beside it, its letter on the right; under the mouse the row's own
+   buttons (revert to the server's copy, **+** stage, **−** unstage, download, or for a conflict keep mine / keep the
+   server's) - the name and folder use the row's whole width until then -, and on a section's row stage all, unstage
+   all or download all of it.
+4. **Commit** sends the staged changes to the server in one go: uploads them, and deletes on the server a file
+   deleted here (after asking). With nothing staged the button is off. A staged file
+   stays staged until it is sent or no longer differs. While you scroll, the section
+   you are in stays at the top of the list. **…** has **View as Tree** (folders) and **Show unchanged files**:
 
 | | Means | What to do |
 |---|---|---|
-| **M** Modified, **A** Added | Changed or new here since the last sync | **Upload** |
+| **M** Modified, **A** Added | Changed or new here since the last sync | Stage (**+**), then **Commit** |
 | **I** Changed on the server, **R** Only on the server | Changed there, or only there | **Download** - a file only on the server is never deleted because it is missing here |
 | **C** Conflict | Changed on both sides | Compare, then **Keep mine** (upload) or **Keep the server's** (download) |
-| **D** Deleted | Deleted here after a sync; the server still has it | **Delete on server…** only if you mean to |
-| **S** Deleted on the server | Deleted there after a sync | **Upload** to put it back, or leave it |
+| **D** Deleted | Deleted here after a sync; the server still has it | Stage and **Commit** (or **Delete on server…**) only if you mean to |
+| **S** Deleted on the server | Deleted there after a sync | Stage and **Commit** to put it back, or leave it |
 
-Click a file to see the server's copy (left) next to the project's (right), the changed lines coloured and the code
-in its syntax colours (C#, JavaScript, TypeScript, JSON, CSS, HTML, XML, ASP.NET and Razor files, config, SQL);
-**Inline** shows the changes in one column instead. ↑ ↓ (or **F7** / **Shift+F7**) go from change to change. A
+Click a file to see the server's copy (left) next to the project's (right), as VS Code's diff editor shows it: two
+equal halves with their line numbers, the changed lines coloured and inside a changed line only the words that differ,
+a blank where one side has no line, and on the right edge a mark for every change in the file (click one to go
+there); the code is in its syntax colours (C#, JavaScript, TypeScript, JSON, CSS, HTML, XML, ASP.NET and Razor files,
+config, SQL). A file only one side has (new here, only on the server) opens as that file alone. **Inline** shows the
+changes in one column instead.
+
+Files open in **tabs** above the comparison, as in VS Code: one click opens a file as the *preview* (its name in
+italics), which the next file you click takes the place of; a double click - on the file or its tab - keeps it open
+beside the others. Click a tab to go back to it; **×** or a middle click closes it. Each tab keeps where it was
+scrolled to, and follows its file when the list changes. A file whose text is the same on both sides (only the times
+or the line endings differ) is shown too, marked **Same text**. ↑ ↓ (or **F7** / **Shift+F7**) go from change to change. A
 binary file shows its sizes and times instead. While the page is open, a file you save, add or delete in the project
 updates the list by itself - against the server as the last Refresh read it; **Refresh** to see the server's own
 changes.
@@ -169,15 +184,16 @@ between `<<<<<<< <environment>`, `=======` and `>>>>>>> project` (git's markers)
 folder first, and opens the file in your editor (VS Code when it is installed). Keep what belongs, remove the
 markers, save, **Refresh**, then **Keep mine** to upload the merged file - an upload is refused while markers are
 left. Ctrl+click (⌘ on
-macOS) and Shift+click select several; the right-click menu has Compare, Upload, Download, Revert local, the conflict
-choices and Delete on server. **Upload** and **Download** in the title and the main button take the selected files, or
-all those shown; the filter box narrows the list to the files whose path holds what you type.
+macOS) and Shift+click select several, **Ctrl+A** (⌘A) every file shown; the right-click menu has Compare, Stage, Unstage, Upload, Download, Revert local,
+the conflict choices and Delete on server. **Upload** and **Download** in the title take the selected files, or all
+those shown; the filter box narrows the list to the files whose path holds what you type.
 
 Before anything is sent, a **preview** lists every file and what happens to it - new on the server, replaced there,
 deleted there, new in the project, replaced in the project - with the sizes, the protected files marked, and what
 is left alone and why (a conflict without a choice, a file no mapping holds). **Deploy** sends them; Cancel or Esc
 sends nothing. When the page opens on a server it shows the last comparison at once - the server as it was
-last read, the project as it is now - marked "saved"; **Refresh** reads the server again. **⋮** has Upload all, Download all, the history of what was sent,
+last read, the project as it is now; **Refresh** reads the server again. **⋮** has Stage all, Unstage all, Upload
+all, Download all, the history of what was sent,
 the backups folder and the server's edit and delete.
 
 What keeps a server safe: each file is checked again right before it is sent, and left alone if it changed on

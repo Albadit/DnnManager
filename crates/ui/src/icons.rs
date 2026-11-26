@@ -96,6 +96,12 @@ pub enum Icon {
     Database,
     /// A file: a page with its corner folded (Source Control's rows).
     File,
+    /// A text file: the page with lines on it.
+    FileText,
+    /// A picture: a frame with a hill and the sun.
+    Image,
+    /// An archive (zip): a box with its lid.
+    Archive,
     Folder,
     FolderOpen,
     Globe,
@@ -425,6 +431,9 @@ impl Icon {
         Icon::Container,
         Icon::Database,
         Icon::File,
+        Icon::FileText,
+        Icon::Image,
+        Icon::Archive,
         Icon::Folder,
         Icon::FolderOpen,
         Icon::Globe,
@@ -471,6 +480,9 @@ impl Icon {
             Icon::Container => "container",
             Icon::Database => "database",
             Icon::File => "file",
+            Icon::FileText => "file-text",
+            Icon::Image => "image",
+            Icon::Archive => "archive",
             Icon::Folder => "folder",
             Icon::FolderOpen => "folder-open",
             Icon::Globe => "globe",
@@ -536,6 +548,15 @@ impl Icon {
                 String::new(),
             ),
             Icon::File => ("M3.5,1.5 H9.5 L12.5,4.5 V14.5 H3.5 Z M9.5,1.5 V4.5 H12.5".into(), String::new()),
+            Icon::FileText => (
+                "M3.5,1.5 H9.5 L12.5,4.5 V14.5 H3.5 Z M9.5,1.5 V4.5 H12.5 M5.5,7.5 H10.5 M5.5,9.5 H10.5 M5.5,11.5 H8.5".into(),
+                String::new(),
+            ),
+            Icon::Image => (
+                format!("{} M1.5,11.5 L5.5,7.5 L9.5,11.5 M8.5,10.5 L10.5,8.5 L14.5,12.5", rounded_rect(1.5, 2.5, 14.5, 13.5, 1.0)),
+                circle(10.75, 5.75, 1.25),
+            ),
+            Icon::Archive => ("M1.5,2.5 H14.5 V5.5 H1.5 Z M2.5,5.5 V13.5 H13.5 V5.5 M6.5,8.5 H9.5".into(), String::new()),
             Icon::Folder => (
                 "M1.5,4 A1,1 0 0 1 2.5,3 H6 L7.5,4.5 H13.5 A1,1 0 0 1 14.5,5.5 V12 A1,1 0 0 1 13.5,13 H2.5 A1,1 0 0 1 1.5,12 Z".into(),
                 String::new(),

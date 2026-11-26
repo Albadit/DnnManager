@@ -146,7 +146,7 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("docker.containerName", "dnn-sqlserver"),
     ("docker.volumeName", "dnn_sqlserver_data"),
     ("docker.edition", "Developer"),
-    ("docker.collation", "Latin1_General_CI_AS"),
+    ("docker.collation", "SQL_Latin1_General_CP1_CI_AS"),
     ("ssms.rememberPassword", "false"),
     ("appearance.theme", "system"),
     ("appearance.uiScale", "100"),
@@ -688,7 +688,7 @@ pub fn validate(settings: &Settings) -> Vec<SettingsProblem> {
     check(
         is_collation(&v("docker.collation")),
         "docker.collation",
-        "must be a collation name such as Latin1_General_CI_AS (letters, digits and _).".into(),
+        "must be a collation name such as SQL_Latin1_General_CP1_CI_AS (letters, digits and _).".into(),
     );
 
     for feature in iis_features(settings) {

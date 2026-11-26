@@ -1,30 +1,34 @@
 //! The Source Control page: a project's files against a server, as VS Code's Source Control lays it out - in the
-//! primary side bar the title with its actions (Refresh, Upload, Download, More), the project and server, one main
-//! button (Upload, else Download, else Refresh), the files in sections (Conflicts, Changes, Server changes) with their
-//! folder and change letter and their own actions under the mouse; in the main view the side-by-side diff of the file
-//! chosen (the server's copy left, the project's right) or the history.
+//! primary side bar the title with its actions (Refresh, Upload, Download, More), the project and server, the Commit
+//! button (uploads the staged changes - or, with none staged, every change shown), the files in sections (Conflicts,
+//! Staged Changes, Changes, Server changes) with their folder and change letter and their own actions under the mouse
+//! (Stage on a change, Unstage on a staged one); in the main view the files opened, in tabs as VS Code's editors -
+//! a file opened with one click is a preview (its name in italics) that the next one takes the place of, a double
+//! click (on the file or its tab) keeps it - each the side-by-side diff of the server's copy (left) and the project's
+//! (right), drawn by [`crate::source_control_diff`]; or the history.
 //!
 //! Reading and comparing, and sending, are operations the app runs (`SourceControlEvent`) - so they show in Output
 //! with their progress, can be cancelled, and ask their questions there; the page gets their result back
 //! ([`SourceControlPage::set_scan`]). A file's two copies for the diff are read off the UI thread by the page itself.
 //!
 //! Keyboard: Up / Down move through the list, Shift with them selects, Left / Right fold and unfold a folder, Enter
-//! compares the file (or folds a folder), Space selects; F7 / Shift+F7 go to the next / previous change in the diff.
+//! compares the file (or folds a folder), Space selects, Ctrl+A selects every file shown; F7 / Shift+F7 go to the next /
+//! previous change in the diff. The section the top row is in stays at the top of the list as it scrolls.
 
 use dnnm_ui::px;
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
     App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyDownEvent, MouseButton,
-    MouseDownEvent, ScrollStrategy, SharedString, Subscription, Task, UniformListScrollHandle, Window, div,
+    MouseDownEvent, MouseMoveEvent, ScrollStrategy, ScrollWheelEvent, SharedString, Subscription, Task, UniformListScrollHandle, Window, div,
     prelude::*, uniform_list,
 };
 
 use dnnm_application::operation::CancelToken;
-use dnnm_application::source_control::diff::{Inline, RowKind, SideBySide, side_by_side, text_of};
-use dnnm_application::source_control::highlight::{Token, highlight, language_of};
+use dnnm_application::source_control::diff::text_of;
 use dnnm_application::source_control::model::{Change, Entry, Environment, HistoryLine};
 use dnnm_application::source_control::sync::{Action, BothCopies, TransferItem};
 use dnnm_ui::menu::{ContextMenu, MenuItem};
@@ -32,6 +36,7 @@ use dnnm_ui::text_input::{TextChanged, TextInput};
 use dnnm_ui::theme::Theme;
 use dnnm_ui::{self as ui, Icon, Pad, Tip};
 
+use crate::source_control_diff::{self, OneFile, TextDiff};
 use crate::source_control_list::{self as list, Filter, Row};
 
 /// What the page reads and saves itself; the app gives it the real one (`dnnm_wiring::source_control`).
@@ -73,42 +78,29 @@ pub enum Status {
     Failed(String),
 }
 
-/// A text diff, both ways it is shown, with each side's lines coloured.
-struct TextDiff {
-    sides: SideBySide,
-    inline: Inline,
-    /// The coloured pieces of each line of the server's copy (index: line number - 1), and of the project's.
-    left: Vec<Vec<(std::ops::Range<usize>, Token)>>,
-    right: Vec<Vec<(std::ops::Range<usize>, Token)>>,
-}
-
-impl TextDiff {
-    fn new(path: &str, left: &str, right: &str) -> Self {
-        let sides = side_by_side(left, right);
-        let inline = sides.inline();
-        let language = language_of(path);
-        let (l, r): (Vec<&str>, Vec<&str>) = (left.lines().collect(), right.lines().collect());
-        Self { left: highlight(language, &l), right: highlight(language, &r), sides, inline }
-    }
-
-    fn changes(&self, inline: bool) -> &[usize] {
-        if inline { &self.inline.changes } else { &self.sides.changes }
-    }
-}
-
 enum DiffState {
     Loading,
     Text(Box<TextDiff>),
+    /// Only one side has the file: that copy alone, as VS Code opens a new file.
+    File(Box<OneFile>),
     /// Not text: what is known of each side.
     Binary,
     Failed(String),
 }
 
+/// A tab of the main view: a file's comparison.
 struct DiffView {
     entry: Entry,
     state: DiffState,
     /// The change shown last (F7).
     at: Option<usize>,
+    /// Opened with one click and not kept yet: the next file opened so takes its tab (VS Code's preview, in italics).
+    preview: bool,
+    /// Where its diff is scrolled to - each tab keeps its own.
+    scroll: UniformListScrollHandle,
+    /// Reading its two copies.
+    cancel: CancelToken,
+    task: Option<Task<()>>,
 }
 
 pub struct SourceControlPage {
@@ -134,13 +126,16 @@ pub struct SourceControlPage {
     /// The row the keyboard is on, and where a Shift selection started.
     cursor: Option<usize>,
     anchor: Option<usize>,
-    diff: Option<DiffView>,
-    diff_task: Option<Task<()>>,
-    diff_cancel: CancelToken,
+    /// The row under the mouse: its actions are shown.
+    hovered: Option<usize>,
+    /// The files open in the main view, and the one shown.
+    tabs: Vec<DiffView>,
+    active: usize,
+    /// The tab under the mouse: its close button shows.
+    hovered_tab: Option<usize>,
     history: Option<Vec<HistoryLine>>,
     menu: Option<ContextMenu>,
     list_scroll: UniformListScrollHandle,
-    diff_scroll: UniformListScrollHandle,
     /// The diff as one column instead of side by side (kept from file to file).
     inline: bool,
     /// A re-check of the project's side is running (the watcher saw a change).
@@ -178,13 +173,13 @@ impl SourceControlPage {
             selected: BTreeSet::new(),
             cursor: None,
             anchor: None,
-            diff: None,
-            diff_task: None,
-            diff_cancel: CancelToken::new(),
+            hovered: None,
+            tabs: Vec::new(),
+            active: 0,
+            hovered_tab: None,
             history: None,
             menu: None,
             list_scroll: UniformListScrollHandle::new(),
-            diff_scroll: UniformListScrollHandle::new(),
             inline: false,
             rechecking: None,
             _subscription: subscription,
@@ -257,11 +252,13 @@ impl SourceControlPage {
         self.entries = entries;
         let known: HashSet<String> = self.entries.iter().map(|e| e.path.clone()).collect();
         self.selected.retain(|p| known.contains(p));
+        self.keep_staged_changes();
         self.status = Status::Compared { at };
-        if let Some(diff) = &self.diff
-            && let Some(entry) = self.entries.iter().find(|e| e.path == diff.entry.path).cloned()
-        {
-            self.open_diff(entry, cx);
+        // Every tab read again: the server's copy may have changed too.
+        let open: Vec<Entry> =
+            self.tabs.iter().filter_map(|t| self.entries.iter().find(|e| e.path == t.entry.path).cloned()).collect();
+        for entry in open {
+            self.load_tab(entry, cx);
         }
         if self.history.is_some() {
             self.show_history(cx);
@@ -287,9 +284,9 @@ impl SourceControlPage {
     fn clear_comparison(&mut self) {
         self.entries.clear();
         self.selected.clear();
+        self.filter.staged.clear();
         self.cursor = None;
-        self.diff = None;
-        self.diff_cancel.cancel();
+        self.close_all_tabs();
         self.history = None;
         self.status = Status::NotCompared;
     }
@@ -326,12 +323,15 @@ impl SourceControlPage {
                     let known: HashSet<String> = entries.iter().map(|e| e.path.clone()).collect();
                     this.selected.retain(|p| known.contains(p));
                     this.entries = entries;
-                    // The diff shown follows its file.
-                    if let Some(diff) = &this.diff
-                        && let Some(entry) = this.entries.iter().find(|e| e.path == diff.entry.path).cloned()
-                        && entry != diff.entry
-                    {
-                        this.open_diff(entry, cx);
+                    this.keep_staged_changes();
+                    // The tabs follow their files.
+                    let changed: Vec<Entry> = this
+                        .tabs
+                        .iter()
+                        .filter_map(|t| this.entries.iter().find(|e| e.path == t.entry.path && **e != t.entry).cloned())
+                        .collect();
+                    for entry in changed {
+                        this.load_tab(entry, cx);
                     }
                     cx.notify();
                 }
@@ -384,6 +384,54 @@ impl SourceControlPage {
         cx.emit(SourceControlEvent::Transfer { project_dir, env, items, title });
     }
 
+    /// Staged paths stay staged only while they are a change in the project (an upload, a revert, a file saved back
+    /// to the server's text puts them out of the Changes).
+    fn keep_staged_changes(&mut self) {
+        let changes: HashSet<&str> =
+            self.entries.iter().filter(|e| list::stageable(e.change)).map(|e| e.path.as_str()).collect();
+        self.filter.staged.retain(|p| changes.contains(p.as_str()));
+    }
+
+    /// Stages (or unstages) these files - only changes in the project are staged.
+    fn stage(&mut self, entries: Vec<Entry>, staged: bool, cx: &mut Context<Self>) {
+        for e in entries.into_iter().filter(|e| list::stageable(e.change)) {
+            if staged {
+                self.filter.staged.insert(e.path);
+            } else {
+                self.filter.staged.remove(&e.path);
+            }
+        }
+        // The rows moved between sections: the row numbers kept no longer point at them.
+        self.cursor = None;
+        self.anchor = None;
+        self.hovered = None;
+        cx.notify();
+    }
+
+    /// What Commit sends: the staged changes, and only those - with none staged, Commit is off.
+    fn commit_entries(&self) -> Vec<&Entry> {
+        self.entries.iter().filter(|e| list::stageable(e.change) && self.filter.staged.contains(&e.path)).collect()
+    }
+
+    /// Commit: the changes to the server in one operation - uploaded, and a file deleted here deleted there (Output asks
+    /// first, as for Delete on server).
+    fn commit(&mut self, cx: &mut Context<Self>) {
+        let (Some(env), Some(project_dir)) = (self.environment().cloned(), self.project_dir()) else { return };
+        let entries = self.commit_entries();
+        if entries.is_empty() {
+            return;
+        }
+        let items: Vec<TransferItem> = entries
+            .iter()
+            .map(|e| {
+                let action = if e.change == Change::Deleted { Action::DeleteRemote } else { Action::Upload };
+                TransferItem::from_entry(e, action, false)
+            })
+            .collect();
+        let title = format!("Commit {} file(s)", items.len());
+        cx.emit(SourceControlEvent::Transfer { project_dir, env, items, title });
+    }
+
     fn upload(&mut self, cx: &mut Context<Self>) {
         let entries: Vec<Entry> = self.targets().into_iter().filter(|e| e.change.uploads()).cloned().collect();
         let title = format!("Upload {} file(s)", entries.len());
@@ -433,47 +481,106 @@ impl SourceControlPage {
 
     fn show_history(&mut self, cx: &mut Context<Self>) {
         let Some(env) = self.environment().cloned() else { return };
-        self.diff = None;
         self.history = Some(self.backend.history(&env).unwrap_or_default());
         cx.notify();
     }
 
     // ─── The diff ────────────────────────────────────────────────────────────
 
-    fn open_diff(&mut self, entry: Entry, cx: &mut Context<Self>) {
-        let (Some(env), Some(project_dir)) = (self.environment().cloned(), self.project_dir()) else { return };
+    fn tab(&self) -> Option<&DiffView> {
+        self.tabs.get(self.active)
+    }
+
+    /// Opens a file's comparison in a tab - its own when it has one. `keep`: as a kept tab; else as the preview, in
+    /// the preview's place (VS Code: one click previews, a double click keeps).
+    fn open_diff(&mut self, entry: Entry, keep: bool, cx: &mut Context<Self>) {
         self.history = None;
-        self.diff_cancel.cancel();
+        if let Some(i) = self.tabs.iter().position(|t| t.entry.path == entry.path) {
+            self.active = i;
+            if keep {
+                self.tabs[i].preview = false;
+            }
+            if self.tabs[i].entry != entry || matches!(self.tabs[i].state, DiffState::Failed(_)) {
+                self.load_tab(entry, cx);
+            }
+            return cx.notify();
+        }
+        let tab = DiffView {
+            entry: entry.clone(),
+            state: DiffState::Loading,
+            at: None,
+            preview: !keep,
+            scroll: UniformListScrollHandle::new(),
+            cancel: CancelToken::new(),
+            task: None,
+        };
+        if let Some(i) = self.tabs.iter().position(|t| t.preview) {
+            self.tabs[i].cancel.cancel();
+            self.tabs[i] = tab;
+            self.active = i;
+        } else {
+            self.active = if self.tabs.is_empty() { 0 } else { self.active + 1 };
+            self.tabs.insert(self.active, tab);
+        }
+        self.load_tab(entry, cx);
+        cx.notify();
+    }
+
+    /// The tab shown kept: no longer the preview.
+    fn keep_tab(&mut self, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.preview = false;
+            cx.notify();
+        }
+    }
+
+    fn close_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.tabs.len() {
+            return;
+        }
+        self.tabs.remove(index).cancel.cancel();
+        // The one to its right takes its place, else the one to its left - as VS Code does.
+        if index < self.active || self.active >= self.tabs.len() {
+            self.active = self.active.saturating_sub(1);
+        }
+        self.hovered_tab = None;
+        cx.notify();
+    }
+
+    fn close_all_tabs(&mut self) {
+        for tab in self.tabs.drain(..) {
+            tab.cancel.cancel();
+        }
+        self.active = 0;
+        self.hovered_tab = None;
+    }
+
+    /// Reads the file's two copies again into its tab, off the UI thread.
+    fn load_tab(&mut self, entry: Entry, cx: &mut Context<Self>) {
+        let (Some(env), Some(project_dir)) = (self.environment().cloned(), self.project_dir()) else { return };
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.entry.path == entry.path) else { return };
+        tab.cancel.cancel();
         let cancel = CancelToken::new();
-        self.diff_cancel = cancel.clone();
-        self.diff = Some(DiffView { entry: entry.clone(), state: DiffState::Loading, at: None });
+        tab.cancel = cancel.clone();
+        tab.entry = entry.clone();
+        tab.state = DiffState::Loading;
+        tab.at = None;
         let backend = self.backend.clone();
         let path = entry.path.clone();
-        self.diff_task = Some(cx.spawn(async move |this, cx| {
+        tab.task = Some(cx.spawn(async move |this, cx| {
             let read = cx
                 .background_executor()
                 .spawn(async move { backend.read_both(&project_dir, &env, &path, &cancel) })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                let Some(diff) = this.diff.as_mut().filter(|d| d.entry.path == entry.path) else { return };
-                diff.state = match read {
-                    Err(e) => DiffState::Failed(e),
-                    Ok((remote, local)) => {
-                        let text = |b: &Option<Vec<u8>>| match b {
-                            None => Some(String::new()),
-                            Some(bytes) => text_of(bytes),
-                        };
-                        match (text(&remote), text(&local)) {
-                            (Some(left), Some(right)) => DiffState::Text(Box::new(TextDiff::new(&entry.path, &left, &right))),
-                            _ => DiffState::Binary,
-                        }
-                    }
-                };
+                let inline = this.inline;
+                let Some(tab) = this.tabs.iter_mut().find(|t| t.entry.path == entry.path) else { return };
+                tab.state = diff_state(&entry.path, read);
                 // Straight to the first change.
-                if let DiffState::Text(text) = &diff.state {
-                    diff.at = text.changes(this.inline).first().copied();
-                    if let Some(row) = diff.at {
-                        this.diff_scroll.scroll_to_item(row, ScrollStrategy::Center);
+                if let DiffState::Text(text) = &tab.state {
+                    tab.at = text.changes(inline).first().copied();
+                    if let Some(row) = tab.at {
+                        tab.scroll.scroll_to_item(row, ScrollStrategy::Center);
                     }
                 }
                 cx.notify();
@@ -484,7 +591,7 @@ impl SourceControlPage {
 
     fn step_change(&mut self, forward: bool, cx: &mut Context<Self>) {
         let inline = self.inline;
-        let Some(diff) = self.diff.as_mut() else { return };
+        let Some(diff) = self.tabs.get_mut(self.active) else { return };
         let DiffState::Text(text) = &diff.state else { return };
         let changes = text.changes(inline);
         diff.at = if forward {
@@ -493,7 +600,7 @@ impl SourceControlPage {
             changes.iter().rev().find(|&&c| diff.at.is_none_or(|r| c < r)).or(changes.last()).copied()
         };
         if let Some(row) = diff.at {
-            self.diff_scroll.scroll_to_item(row, ScrollStrategy::Center);
+            diff.scroll.scroll_to_item(row, ScrollStrategy::Center);
         }
         cx.notify();
     }
@@ -501,13 +608,14 @@ impl SourceControlPage {
     /// Side by side ↔ one column; the change shown stays the one shown.
     fn toggle_inline(&mut self, cx: &mut Context<Self>) {
         self.inline = !self.inline;
-        if let Some(diff) = self.diff.as_mut()
+        let inline = self.inline;
+        if let Some(diff) = self.tabs.get_mut(self.active)
             && let DiffState::Text(text) = &diff.state
         {
-            let (from, to) = (text.changes(!self.inline), text.changes(self.inline));
+            let (from, to) = (text.changes(!inline), text.changes(inline));
             diff.at = diff.at.and_then(|row| from.iter().position(|&c| c == row)).and_then(|i| to.get(i).copied());
             if let Some(row) = diff.at {
-                self.diff_scroll.scroll_to_item(row, ScrollStrategy::Center);
+                diff.scroll.scroll_to_item(row, ScrollStrategy::Center);
             }
         }
         cx.notify();
@@ -565,7 +673,7 @@ impl SourceControlPage {
             && !extend
         {
             let entry = self.entries[entry].clone();
-            self.open_diff(entry, cx);
+            self.open_diff(entry, false, cx);
         }
         cx.notify();
     }
@@ -598,13 +706,19 @@ impl SourceControlPage {
         let conflicts = count(|e| e.change == Change::Conflict);
         let revertible = count(|e| e.remote.is_some() && matches!(e.change, Change::Modified | Change::Conflict | Change::Deleted));
         let deletions = count(|e| e.change == Change::Deleted);
+        let staged_paths = self.filter.staged.clone();
+        let stageable = chosen.iter().filter(|e| list::stageable(e.change) && !staged_paths.contains(&e.path)).count();
+        let unstageable = chosen.iter().filter(|e| list::stageable(e.change) && staged_paths.contains(&e.path)).count();
         let mut items = vec![
             item("Compare".into(), single.is_some(), |page, chosen, cx| {
                 if let Some(e) = chosen.into_iter().next() {
-                    page.open_diff(e, cx);
+                    page.open_diff(e, true, cx);
                 }
             })
             .bold(),
+            MenuItem::Separator,
+            item(format!("Stage Changes ({stageable})"), stageable > 0, |page, chosen, cx| page.stage(chosen, true, cx)),
+            item(format!("Unstage Changes ({unstageable})"), unstageable > 0, |page, chosen, cx| page.stage(chosen, false, cx)),
             MenuItem::Separator,
             item(format!("Upload ({uploads})"), uploads > 0, |page, chosen, cx| {
                 let entries = chosen.into_iter().filter(|e| e.change.uploads()).collect::<Vec<_>>();
@@ -655,7 +769,18 @@ impl SourceControlPage {
         let uploads = self.entries.iter().filter(|e| e.change.uploads()).count();
         let downloads = self.entries.iter().filter(|e| e.change.downloads()).count();
         let deletions = self.entries.iter().filter(|e| e.change == Change::Deleted).count();
+        let changes = self.entries.iter().filter(|e| list::stageable(e.change)).count();
+        let staged = self.filter.staged.len();
         let items = vec![
+            item(&format!("Stage all changes ({changes})"), changes > staged, |page, cx| {
+                let all = page.entries.iter().filter(|e| list::stageable(e.change)).cloned().collect();
+                page.stage(all, true, cx)
+            }),
+            item(&format!("Unstage all changes ({staged})"), staged > 0, |page, cx| {
+                let all = page.entries.clone();
+                page.stage(all, false, cx)
+            }),
+            MenuItem::Separator,
             item(&format!("Upload all changes ({uploads})"), uploads > 0, |page, cx| page.upload_all(cx)),
             item(&format!("Download all server changes ({downloads})"), downloads > 0, |page, cx| page.download_all(cx)),
             item(&format!("Delete on server the files deleted here… ({deletions})"), deletions > 0, |page, cx| {
@@ -737,6 +862,18 @@ impl SourceControlPage {
         if rows.is_empty() {
             return;
         }
+        // Ctrl+A (Cmd+A): every file the list shows - and those in its folded folders, as selecting a folder takes its
+        // files. A folded section's files stay out: they aren't shown.
+        if key == "a" && m.secondary() && !m.shift && !m.alt {
+            self.selected = rows
+                .iter()
+                .filter(|r| matches!(r, Row::File { .. } | Row::Folder { collapsed: true, .. }))
+                .flat_map(|r| list::files_in(r, &self.entries, &self.filter))
+                .map(|i| self.entries[i].path.clone())
+                .collect();
+            cx.stop_propagation();
+            return cx.notify();
+        }
         let last = rows.len() - 1;
         let at = self.cursor.unwrap_or(0).min(last);
         match key {
@@ -797,6 +934,72 @@ impl Render for SourceControlSide {
 impl Focusable for SourceControlPage {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
+    }
+}
+
+/// A row of the list: VS Code's 22 px.
+fn row_height() -> gpui::Pixels {
+    px(22.0)
+}
+
+/// VS Code's sticky section headers: the copy of the row of the section the top of the list is in, held at the top
+/// while its own row has scrolled away, and pushed up by the next section's row as that arrives. Drawn over the rows
+/// (a uniform list draws its decorations after them) and blocking the mouse, so it is the row clicked and hovered.
+struct StickySection {
+    page: gpui::WeakEntity<SourceControlPage>,
+    rows: Rc<Vec<Row>>,
+    /// Where the sections' rows are, in order.
+    sections: Rc<Vec<usize>>,
+}
+
+impl gpui::UniformListDecoration for StickySection {
+    fn compute(
+        &self,
+        visible: std::ops::Range<usize>,
+        _bounds: gpui::Bounds<gpui::Pixels>,
+        scroll_offset: gpui::Point<gpui::Pixels>,
+        item_height: gpui::Pixels,
+        _item_count: usize,
+        _window: &mut Window,
+        cx: &mut App,
+    ) -> gpui::AnyElement {
+        // The decoration is placed at the list's content origin (moved by the scroll): `top` is the view's top in it.
+        let top = -scroll_offset.y;
+        let at = self.sections.partition_point(|&s| s <= visible.start);
+        let Some(&section) = at.checked_sub(1).and_then(|k| self.sections.get(k)) else {
+            return div().into_any_element();
+        };
+        // Its own row still starts in view: nothing to hold.
+        if top <= item_height * section as f32 {
+            return div().into_any_element();
+        }
+        let y = match self.sections.get(at) {
+            Some(&next) => top.min(item_height * next as f32 - item_height),
+            None => top,
+        };
+        let Ok(row) = self.page.update(cx, |page, cx| page.render_row(section, &self.rows[section], true, cx)) else {
+            return div().into_any_element();
+        };
+        let c = Theme::get(cx).colors;
+        // A root is laid out at the origin it is given whatever its own insets: the header goes in one at the content
+        // origin, placed by its `top`.
+        div()
+            .size_full()
+            .child(
+                div()
+                    .id("sc-sticky")
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top(y)
+                    .h(item_height)
+                    .occlude()
+                    .bg(c.window_bg)
+                    .child(row)
+                    // Its edge over the rows going under it.
+                    .child(div().absolute().left_0().right_0().bottom_0().h(px(1.0)).bg(c.card_border)),
+            )
+            .into_any_element()
     }
 }
 
@@ -937,31 +1140,6 @@ impl SourceControlPage {
             }),
             cx,
         );
-        let (status_text, status_color) = match &self.status {
-            Status::NotCompared if env.is_some() => ("Not compared yet - Refresh".to_string(), c.text_muted),
-            Status::NotCompared => ("Add a server to compare the project with".to_string(), c.text_muted),
-            Status::Working(what) => (what.clone(), c.log_warn),
-            Status::Compared { at } => {
-                let changes = self.entries.iter().filter(|e| e.change != Change::Unchanged).count();
-                (format!("Compared {at} - {changes} change(s)"), c.success_text)
-            }
-            Status::Failed(why) => (format!("Failed: {why}"), c.error_text),
-        };
-        let add_env = ui::icon_button("sc-add-env", Icon::Add, c.text_primary, self.project.is_some(), cx)
-            .tip("Add a server: any project can be compared with it and deployed to it")
-            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.add_environment(cx)));
-        let status = div()
-            .id("sc-status")
-            .flex()
-            .items_start()
-            .gap(px(6.0))
-            .min_w_0()
-            .text_size(theme.text.caption)
-            .text_color(status_color)
-            .when(busy, |d| d.child(ui::spinner("sc-spinner", 12.0, status_color, cx)))
-            // Wrapped, not cut off: the side bar can be narrow.
-            .child(div().flex_1().min_w_0().child(status_text));
-
         // ─── The title and its actions ────────────────────────────────────────
         let has_env = env.is_some() && !busy;
         let uploads = self.targets().iter().filter(|e| e.change.uploads()).count();
@@ -984,11 +1162,26 @@ impl SourceControlPage {
                     .text_color(c.text_muted)
                     .child(ui::one_line("SOURCE CONTROL")),
             )
-            .child(
+            .child(if busy {
+                // Where Refresh is, while a comparison or a transfer runs (its progress is in Output).
+                div()
+                    .id("sc-busy")
+                    .size(px(26.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .tip(match &self.status {
+                        Status::Working(what) => what.clone(),
+                        _ => "Working…".to_string(),
+                    })
+                    .child(ui::spinner("sc-spinner", 14.0, c.text_muted, cx))
+                    .into_any_element()
+            } else {
                 ui::icon_button("sc-refresh", Icon::Refresh, c.text_primary, has_env, cx)
                     .tip("Refresh: compare the project with the server again")
-                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.refresh(cx))),
-            )
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.refresh(cx)))
+                    .into_any_element()
+            })
             .child(
                 ui::icon_button("sc-upload", Icon::Upload, c.text_primary, has_env && uploads > 0, cx)
                     .tip(format!("Upload the {scope} changes ({uploads}) to the server"))
@@ -1005,283 +1198,40 @@ impl SourceControlPage {
                     .on_click(cx.listener(|this, e: &ClickEvent, _, cx| this.more_menu(e.position(), cx))),
             );
 
-        // ─── The main button, as VS Code's Commit: what is next ───────────────
-        enum Next {
-            AddServer,
-            Upload,
-            Download,
-            Refresh,
-        }
-        let next = match () {
-            _ if env.is_none() => Next::AddServer,
-            _ if uploads > 0 => Next::Upload,
-            _ if downloads > 0 => Next::Download,
-            _ => Next::Refresh,
+        // ─── The main button: VS Code's Commit, and only that ─────────────────
+        let to_commit = self.commit_entries().len();
+        let tip = match () {
+            _ if env.is_none() => "Add a server first: … → Add server…".to_string(),
+            _ if to_commit == 0 => "Nothing staged: stage changes (+) to commit them".to_string(),
+            _ => format!("Commit: upload the {to_commit} staged change(s) to the server"),
         };
-        let (glyph, label, tip) = match next {
-            Next::AddServer => (Icon::Add, "Add server".to_string(), "Add a server to compare the project with".to_string()),
-            Next::Upload => (Icon::Upload, format!("Upload {uploads}"), format!("Upload the {scope} changes ({uploads}) to the server")),
-            Next::Download => {
-                (Icon::Download, format!("Download {downloads}"), format!("Download the {scope} server changes ({downloads}) to the project"))
-            }
-            Next::Refresh => (Icon::Refresh, "Refresh".to_string(), "Compare the project with the server".to_string()),
-        };
-        let main_enabled = !busy && self.project.is_some();
-        let main_button = ui::button("sc-main", "", ui::ButtonKind::Primary, main_enabled, cx)
+        let main_button = ui::button("sc-main", "Commit", ui::ButtonKind::Primary, env.is_some() && !busy && to_commit > 0, cx)
             .w_full()
-            .gap(px(6.0))
             .tip(tip)
-            .child(ui::icon(glyph, c.on_accent, cx))
-            .child(label)
-            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| match next {
-                Next::AddServer => this.add_environment(cx),
-                Next::Upload => this.upload(cx),
-                Next::Download => this.download(cx),
-                Next::Refresh => this.refresh(cx),
-            }));
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.commit(cx)));
 
         // ─── The list ─────────────────────────────────────────────────────────
-        let rows = self.rows();
-        let entries = self.entries.clone();
-        let selected = self.selected.clone();
-        let cursor = self.cursor;
-        let filter = self.filter.clone();
-        let tree = self.tree;
-        // VS Code's 22 px rows.
-        let row_height = px(22.0);
+        let rows = Rc::new(self.rows());
+        let sections: Rc<Vec<usize>> =
+            Rc::new(rows.iter().enumerate().filter(|(_, r)| matches!(r, Row::Section { .. })).map(|(i, _)| i).collect());
         let list = uniform_list(
             "sc-files",
             rows.len(),
-            cx.processor(move |_: &mut Self, range: std::ops::Range<usize>, _window, cx| {
-                let theme = Theme::get(cx).clone();
-                let c = theme.colors;
-                range
-                    .map(|i| {
-                        let row = rows[i].clone();
-                        let is_selected = match &row {
-                            Row::File { entry, .. } => selected.contains(&entries[*entry].path),
-                            _ => false,
-                        };
-                        // A folder's depth as a blank before the row's content (the codebase pads evenly, never one side).
-                        let indent = |depth: usize, extra: f32| div().flex_none().w(px(8.0 * depth as f32 + extra));
-                        let base = div()
-                            .id(SharedString::from(format!("sc-row-{i}")))
-                            .group("sc-row")
-                            // The side bar's width and no more: the name and folder give way, the letter stays.
-                            .w_full()
-                            .overflow_hidden()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.0))
-                            .h(row_height)
-                            .pad(px(0.0), px(8.0))
-                            .cursor_pointer()
-                            .when(is_selected, |d| d.bg(c.selection_bg))
-                            .when(cursor == Some(i), |d| d.border_1().border_color(c.focus_border))
-                            .hover(move |s| s.bg(c.hover_bg))
-                            .on_mouse_down(
-                                MouseButton::Right,
-                                cx.listener(move |this, e: &MouseDownEvent, _, cx| this.open_menu(i, e.position, cx)),
-                            );
-                        let chevron = |collapsed: bool| {
-                            ui::icon_sized(
-                                if collapsed { Icon::ChevronRight } else { Icon::ChevronDown },
-                                ui::IconSize::Small,
-                                c.text_muted,
-                                cx,
-                            )
-                        };
-                        // A row's own actions: shown under the mouse, and on the selected rows (as VS Code's).
-                        let actions = || {
-                            div()
-                                .flex()
-                                .flex_none()
-                                .items_center()
-                                .when(!is_selected, |d| d.invisible().group_hover("sc-row", |s| s.visible()))
-                        };
-                        let action = |id: String, glyph: Icon, tip: String| {
-                            ui::icon_button(SharedString::from(id), glyph, c.text_primary, true, cx).size(px(20.0)).tip(tip)
-                        };
-                        match &row {
-                            Row::Section { section, count, collapsed } => {
-                                let files = list::files_in(&row, &entries, &filter);
-                                let section_entries: Vec<Entry> = files.iter().map(|&f| entries[f].clone()).collect();
-                                let ups: Vec<Entry> = section_entries.iter().filter(|e| e.change.uploads()).cloned().collect();
-                                let downs: Vec<Entry> = section_entries.iter().filter(|e| e.change.downloads()).cloned().collect();
-                                let (n_up, n_down) = (ups.len(), downs.len());
-                                base.tip(section.tip())
-                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                        if let Some(row) = this.rows().get(i).cloned() {
-                                            this.cursor = Some(i);
-                                            this.toggle_collapsed(&row, cx);
-                                        }
-                                    }))
-                                    .child(chevron(*collapsed))
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_size(theme.text.caption)
-                                            .child(ui::one_line(section.title())),
-                                    )
-                                    .child(
-                                        actions()
-                                            .when(n_up > 0, |d| {
-                                                d.child(action(format!("sc-up-all-{i}"), Icon::Upload, format!("Upload all {n_up}")).on_click(
-                                                    cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                                        cx.stop_propagation();
-                                                        let title = format!("Upload {} file(s)", ups.len());
-                                                        this.send(ups.clone(), Action::Upload, false, title, cx);
-                                                    }),
-                                                ))
-                                            })
-                                            .when(n_down > 0, |d| {
-                                                d.child(
-                                                    action(format!("sc-down-all-{i}"), Icon::Download, format!("Download all {n_down}")).on_click(
-                                                        cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                                            cx.stop_propagation();
-                                                            let title = format!("Download {} file(s)", downs.len());
-                                                            this.send(downs.clone(), Action::Download, false, title, cx);
-                                                        }),
-                                                    ),
-                                                )
-                                            }),
-                                    )
-                                    // VS Code's count badge.
-                                    .child(
-                                        div()
-                                            .flex_none()
-                                            .min_w(px(18.0))
-                                            .h(px(16.0))
-                                            .pad(px(0.0), px(5.0))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .rounded(px(8.0))
-                                            .bg(c.card_border)
-                                            .text_size(theme.text.caption)
-                                            .child(count.to_string()),
-                                    )
-                            }
-                            Row::Folder { name, depth, count, collapsed, .. } => base
-                                .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
-                                    let m = e.modifiers();
-                                    this.press_row(i, m.secondary(), m.shift, cx);
-                                }))
-                                .child(indent(*depth, 8.0))
-                                .child(chevron(*collapsed))
-                                .child(ui::icon(if *collapsed { Icon::Folder } else { Icon::FolderOpen }, c.text_muted, cx))
-                                .child(div().flex_1().min_w_0().child(ui::one_line(name.clone())))
-                                .child(div().text_size(theme.text.caption).text_color(c.text_muted).child(count.to_string())),
-                            Row::File { entry, name, folder, depth, .. } => {
-                                let e = entries[*entry].clone();
-                                let color = change_color(e.change, cx);
-                                let gone = matches!(e.change, Change::Deleted | Change::DeletedOnServer);
-                                let revertible =
-                                    e.remote.is_some() && matches!(e.change, Change::Modified | Change::Conflict | Change::Deleted);
-                                let file_actions = actions()
-                                    .when(revertible, |d| {
-                                        let e = e.clone();
-                                        d.child(
-                                            action(format!("sc-revert-{i}"), Icon::Reset, "Revert to the server's copy".into()).on_click(
-                                                cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                                    cx.stop_propagation();
-                                                    this.revert_local(vec![e.clone()], cx);
-                                                }),
-                                            ),
-                                        )
-                                    })
-                                    .when(e.change == Change::Conflict, |d| {
-                                        let (mine, theirs) = (e.clone(), e.clone());
-                                        d.child(action(format!("sc-keep-mine-{i}"), Icon::Upload, "Keep mine - upload".into()).on_click(
-                                            cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                                cx.stop_propagation();
-                                                this.keep_local(vec![mine.clone()], cx);
-                                            }),
-                                        ))
-                                        .child(
-                                            action(format!("sc-keep-theirs-{i}"), Icon::Download, "Keep the server's - download".into())
-                                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                                    cx.stop_propagation();
-                                                    this.keep_server(vec![theirs.clone()], cx);
-                                                })),
-                                        )
-                                    })
-                                    .when(e.change.uploads(), |d| {
-                                        let e = e.clone();
-                                        d.child(action(format!("sc-up-{i}"), Icon::Upload, "Upload to the server".into()).on_click(
-                                            cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                                cx.stop_propagation();
-                                                let title = format!("Upload {}", e.path);
-                                                this.send(vec![e.clone()], Action::Upload, false, title, cx);
-                                            }),
-                                        ))
-                                    })
-                                    .when(e.change.downloads(), |d| {
-                                        let e = e.clone();
-                                        d.child(action(format!("sc-down-{i}"), Icon::Download, "Download from the server".into()).on_click(
-                                            cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                                cx.stop_propagation();
-                                                let title = format!("Download {}", e.path);
-                                                this.send(vec![e.clone()], Action::Download, false, title, cx);
-                                            }),
-                                        ))
-                                    });
-                                // In the list view a file starts at the row's edge, as its section's chevron; in the tree, under
-                                // its folder.
-                                base.on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
-                                    let m = e.modifiers();
-                                    this.press_row(i, m.secondary(), m.shift, cx);
-                                }))
-                                .tip(format!("{} - {}", e.path, e.change.description()))
-                                .when(tree, |d| d.child(indent(*depth, 18.0)))
-                                .child(ui::icon(Icon::File, c.text_muted, cx))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .flex()
-                                        .items_baseline()
-                                        .gap(px(6.0))
-                                        .overflow_hidden()
-                                        .child(
-                                            div()
-                                                .min_w_0()
-                                                .text_color(color)
-                                                .when(gone, |d| d.line_through())
-                                                .child(ui::one_line(name.clone())),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .text_size(theme.text.caption)
-                                                .text_color(c.text_muted)
-                                                .child(ui::one_line(folder.clone())),
-                                        ),
-                                )
-                                .child(file_actions)
-                                .child(
-                                    div()
-                                        .w(px(14.0))
-                                        .flex_none()
-                                        .font_weight(FontWeight::BOLD)
-                                        .text_color(color)
-                                        .text_center()
-                                        .child(e.change.letter()),
-                                )
-                            }
-                        }
-                    })
-                    .collect()
+            cx.processor({
+                let rows = rows.clone();
+                move |this: &mut Self, range: std::ops::Range<usize>, _window, cx| {
+                    range.map(|i| this.render_row(i, &rows[i], false, cx)).collect::<Vec<_>>()
+                }
             }),
         )
+        // VS Code's sticky headers: the section the top row is in stays at the top, pushed up by the next one.
+        .with_decoration(StickySection { page: cx.entity().downgrade(), rows, sections })
         .track_scroll(self.list_scroll.clone())
         .size_full();
         let empty_text = match (&env, &self.status) {
-            (None, _) => Some("No server yet. Add one: its address, how to sign in, and its remote directory."),
+            (None, _) => Some("No server yet. Add one with … → Add server…: its address, how to sign in, and its remote directory."),
             (Some(_), Status::NotCompared) => Some("Refresh to compare the project with the server."),
+            (Some(_), Status::Failed(_)) if self.entries.is_empty() => Some("The comparison failed - Output has why. Refresh to try again."),
             (Some(_), Status::Compared { .. }) if self.rows().is_empty() => Some("Nothing differs - or nothing matches the filter."),
             _ => None,
         };
@@ -1289,10 +1239,19 @@ impl SourceControlPage {
             .id("sc-list")
             .track_focus(&self.list_focus)
             .key_context("SourceControlList")
+            // The rows move under the mouse: their actions wait for the next move to find the row now under it.
+            .on_scroll_wheel(cx.listener(|this, _: &ScrollWheelEvent, _, cx| {
+                if this.hovered.take().is_some() {
+                    cx.notify();
+                }
+            }))
             .relative()
             .flex_1()
             .min_h_0()
             .child(list)
+            // The uniform list keeps its size and offset in its inner scroll handle, as a scrolled div does: the app's
+            // scroll bar reads and drags that one.
+            .child(ui::scrollbar(&self.list_scroll.0.borrow().base_handle, cx))
             .when_some(empty_text, |d, text| {
                 d.child(
                     // Wrapped in the side bar's width, centred - a text node of its own wouldn't wrap in a flex row.
@@ -1316,16 +1275,8 @@ impl SourceControlPage {
             .gap(px(6.0))
             .pad(px(0.0), px(12.0))
             .child(div().w_full().child(project_select))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .child(div().flex_1().min_w_0().child(env_select))
-                    .child(add_env),
-            )
+            .child(div().w_full().child(env_select))
             .child(main_button)
-            .child(status)
             .child(div().w_full().child(search_field(&self.search, window, cx)));
         div()
             .id("source-control-side")
@@ -1343,10 +1294,349 @@ impl SourceControlPage {
             .into_any_element()
     }
 
+    /// One row of the list. A row's own actions are there only while the mouse is on it - so the name and folder
+    /// have the row's whole width the rest of the time, and give way to the actions under the mouse. `sticky` is the
+    /// copy of a section's row held at the top of the list ([`StickySection`]).
+    fn render_row(&mut self, i: usize, row: &Row, sticky: bool, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let theme = Theme::get(cx).clone();
+        let c = theme.colors;
+        let is_selected = match row {
+            Row::File { entry, .. } => self.selected.contains(&self.entries[*entry].path),
+            _ => false,
+        };
+        let show_actions = self.hovered == Some(i);
+        // A folder's depth as a blank before the row's content (the codebase pads evenly, never one side).
+        let indent = |depth: usize, extra: f32| div().flex_none().w(px(8.0 * depth as f32 + extra));
+        let base = div()
+            .id(SharedString::from(format!("sc-row-{i}")))
+            // The side bar's width and no more: the name and folder give way, the letter stays.
+            .w_full()
+            .overflow_hidden()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .h(row_height())
+            .pad(px(0.0), px(8.0))
+            .cursor_pointer()
+            .when(is_selected, |d| d.bg(c.selection_bg))
+            .when(self.cursor == Some(i) && !sticky, |d| d.border_1().border_color(c.focus_border))
+            .hover(move |s| s.bg(c.hover_bg))
+            // The row under the mouse, for its actions. A move (not only entering) sets it, so after the list scrolls
+            // under a still mouse the first move puts the actions on the row now there.
+            .on_mouse_move(cx.listener(move |this, _: &MouseMoveEvent, _, cx| {
+                if this.hovered != Some(i) {
+                    this.hovered = Some(i);
+                    cx.notify();
+                }
+            }))
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                if !*hovered && this.hovered == Some(i) {
+                    this.hovered = None;
+                    cx.notify();
+                }
+            }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, e: &MouseDownEvent, _, cx| this.open_menu(i, e.position, cx)),
+            );
+        let chevron = |collapsed: bool| {
+            ui::icon_sized(if collapsed { Icon::ChevronRight } else { Icon::ChevronDown }, ui::IconSize::Small, c.text_muted, cx)
+        };
+        let actions = || div().flex().flex_none().items_center();
+        let action = |id: String, glyph: Icon, tip: String| {
+            ui::icon_button(SharedString::from(id), glyph, c.text_primary, true, cx).size(px(20.0)).tip(tip)
+        };
+        match row {
+            Row::Section { section, count, collapsed } => {
+                let section_actions = show_actions.then(|| {
+                    let files = list::files_in(row, &self.entries, &self.filter);
+                    let ups: Vec<Entry> = files.iter().map(|&f| &self.entries[f]).filter(|e| e.change.uploads()).cloned().collect();
+                    let downs: Vec<Entry> =
+                        files.iter().map(|&f| &self.entries[f]).filter(|e| e.change.downloads()).cloned().collect();
+                    let (n_up, n_down) = (ups.len(), downs.len());
+                    let all: Vec<Entry> = files.iter().map(|&f| self.entries[f].clone()).collect();
+                    actions()
+                        .when(*section == list::Section::Changes, |d| {
+                            d.child(action(format!("sc-stage-all-{i}"), Icon::Add, "Stage All Changes".into()).on_click(
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    this.stage(all.clone(), true, cx);
+                                }),
+                            ))
+                        })
+                        .when(*section == list::Section::Staged, |d| {
+                            let all = files.iter().map(|&f| self.entries[f].clone()).collect::<Vec<_>>();
+                            d.child(action(format!("sc-unstage-all-{i}"), Icon::Dash, "Unstage All Changes".into()).on_click(
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    this.stage(all.clone(), false, cx);
+                                }),
+                            ))
+                        })
+                        // The staged ones go up with Commit; a conflict's are kept one by one.
+                        .when(n_up > 0 && !matches!(section, list::Section::Changes | list::Section::Staged), |d| {
+                            d.child(action(format!("sc-up-all-{i}"), Icon::Upload, format!("Upload all {n_up}")).on_click(
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    let title = format!("Upload {} file(s)", ups.len());
+                                    this.send(ups.clone(), Action::Upload, false, title, cx);
+                                }),
+                            ))
+                        })
+                        .when(n_down > 0, |d| {
+                            d.child(action(format!("sc-down-all-{i}"), Icon::Download, format!("Download all {n_down}")).on_click(
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    let title = format!("Download {} file(s)", downs.len());
+                                    this.send(downs.clone(), Action::Download, false, title, cx);
+                                }),
+                            ))
+                        })
+                });
+                base.tip(section.tip())
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        if let Some(row) = this.rows().get(i).cloned() {
+                            this.cursor = Some(i);
+                            this.toggle_collapsed(&row, cx);
+                            // Folded from the sticky copy: back to the section, or the list would show what follows
+                            // it far below.
+                            if sticky {
+                                this.list_scroll.scroll_to_item(i, ScrollStrategy::Top);
+                            }
+                        }
+                    }))
+                    .child(chevron(*collapsed))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_size(theme.text.caption)
+                            .child(ui::one_line(section.title())),
+                    )
+                    .children(section_actions)
+                    // VS Code's count badge.
+                    .child(
+                        div()
+                            .flex_none()
+                            .min_w(px(18.0))
+                            .h(px(16.0))
+                            .pad(px(0.0), px(5.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(8.0))
+                            .bg(c.card_border)
+                            .text_size(theme.text.caption)
+                            .child(count.to_string()),
+                    )
+            }
+            Row::Folder { name, depth, count, collapsed, .. } => base
+                .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                    let m = e.modifiers();
+                    this.press_row(i, m.secondary(), m.shift, cx);
+                }))
+                .child(indent(*depth, 8.0))
+                .child(chevron(*collapsed))
+                .child(ui::icon(if *collapsed { Icon::Folder } else { Icon::FolderOpen }, c.text_muted, cx))
+                .child(div().flex_1().min_w_0().child(ui::one_line(name.clone())))
+                .child(div().text_size(theme.text.caption).text_color(c.text_muted).child(count.to_string())),
+            Row::File { entry, name, folder, depth, .. } => {
+                let e = &self.entries[*entry];
+                let color = change_color(e.change, cx);
+                let gone = matches!(e.change, Change::Deleted | Change::DeletedOnServer);
+                let file_actions = show_actions.then(|| {
+                    let revertible = e.remote.is_some() && matches!(e.change, Change::Modified | Change::Conflict | Change::Deleted);
+                    actions()
+                        .when(revertible, |d| {
+                            let e = e.clone();
+                            d.child(action(format!("sc-revert-{i}"), Icon::Reset, "Revert to the server's copy".into()).on_click(
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    this.revert_local(vec![e.clone()], cx);
+                                }),
+                            ))
+                        })
+                        .when(e.change == Change::Conflict, |d| {
+                            let (mine, theirs) = (e.clone(), e.clone());
+                            d.child(action(format!("sc-keep-mine-{i}"), Icon::Upload, "Keep mine - upload".into()).on_click(
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    this.keep_local(vec![mine.clone()], cx);
+                                }),
+                            ))
+                            .child(
+                                action(format!("sc-keep-theirs-{i}"), Icon::Download, "Keep the server's - download".into())
+                                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                        cx.stop_propagation();
+                                        this.keep_server(vec![theirs.clone()], cx);
+                                    })),
+                            )
+                        })
+                        // VS Code's Stage Changes (+) and Unstage Changes (-): Commit sends what is staged.
+                        .when(list::stageable(e.change), |d| {
+                            let (one, staged) = (e.clone(), self.filter.staged.contains(&e.path));
+                            let (id, glyph, tip) = if staged {
+                                (format!("sc-unstage-{i}"), Icon::Dash, "Unstage Changes")
+                            } else {
+                                (format!("sc-stage-{i}"), Icon::Add, "Stage Changes")
+                            };
+                            d.child(action(id, glyph, tip.into()).on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.stage(vec![one.clone()], !staged, cx);
+                            })))
+                        })
+                        .when(e.change.downloads(), |d| {
+                            let e = e.clone();
+                            d.child(action(format!("sc-down-{i}"), Icon::Download, "Download from the server".into()).on_click(
+                                cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    let title = format!("Download {}", e.path);
+                                    this.send(vec![e.clone()], Action::Download, false, title, cx);
+                                }),
+                            ))
+                        })
+                });
+                // In the list view a file starts at the row's edge, as its section's chevron; in the tree, under its
+                // folder.
+                base.on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                    let m = e.modifiers();
+                    this.press_row(i, m.secondary(), m.shift, cx);
+                    if e.click_count() == 2 && !m.secondary() && !m.shift {
+                        this.keep_tab(cx);
+                    }
+                }))
+                .tip(format!("{} - {}", e.path, e.change.description()))
+                .when(self.tree, |d| d.child(indent(*depth, 18.0)))
+                .child(ui::file_icons::file_icon(name, cx))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_baseline()
+                        .gap(px(6.0))
+                        .overflow_hidden()
+                        .child(div().min_w_0().text_color(color).when(gone, |d| d.line_through()).child(ui::one_line(name.clone())))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_size(theme.text.caption)
+                                .text_color(c.text_muted)
+                                .child(ui::one_line(folder.clone())),
+                        ),
+                )
+                .children(file_actions)
+                .child(
+                    div()
+                        .w(px(14.0))
+                        .flex_none()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(color)
+                        .text_center()
+                        .child(e.change.letter()),
+                )
+            }
+        }
+    }
+
+    /// VS Code's tab bar: a tab a file - its icon, its name in its change's colour (in italics while it is the
+    /// preview), and its close button on the one shown and the one under the mouse. A click shows it, a double click
+    /// keeps it, a middle click closes it.
+    fn render_tabs(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let theme = Theme::get(cx).clone();
+        let c = theme.colors;
+        let tabs = self.tabs.iter().enumerate().map(|(i, tab)| {
+            let shown = i == self.active && self.history.is_none();
+            let name = tab.entry.path.rsplit('/').next().unwrap_or_default().to_string();
+            let close_shown = shown || self.hovered_tab == Some(i);
+            div()
+                .id(SharedString::from(format!("sc-tab-{i}")))
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap(px(6.0))
+                .h_full()
+                .pad(px(0.0), px(8.0))
+                .border_r_1()
+                .border_color(c.card_border)
+                .cursor_pointer()
+                .bg(if shown { c.card_bg } else { c.window_bg })
+                .relative()
+                // The tab shown: a line of the accent along its top, as VS Code's - a line of its own, as a border
+                // has one colour on every side.
+                .when(shown, |d| d.child(div().absolute().top_0().left_0().right_0().h(px(1.0)).bg(c.accent)))
+                .tip(format!("{} - {}", tab.entry.path, tab.entry.change.description()))
+                .on_mouse_move(cx.listener(move |this, _: &MouseMoveEvent, _, cx| {
+                    if this.hovered_tab != Some(i) {
+                        this.hovered_tab = Some(i);
+                        cx.notify();
+                    }
+                }))
+                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                    if !*hovered && this.hovered_tab == Some(i) {
+                        this.hovered_tab = None;
+                        cx.notify();
+                    }
+                }))
+                .on_mouse_down(MouseButton::Middle, cx.listener(move |this, _: &MouseDownEvent, _, cx| this.close_tab(i, cx)))
+                .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
+                    this.history = None;
+                    this.active = i;
+                    if e.click_count() == 2 {
+                        this.keep_tab(cx);
+                    }
+                    cx.notify();
+                }))
+                .child(ui::file_icons::file_icon(&name, cx))
+                .child(
+                    div()
+                        .text_color(if shown { change_color(tab.entry.change, cx) } else { change_color(tab.entry.change, cx).opacity(0.8) })
+                        .when(tab.preview, |d| d.italic())
+                        .child(name),
+                )
+                .child(
+                    div()
+                        .text_size(theme.text.caption)
+                        .text_color(c.text_muted)
+                        .child(match (&tab.entry.remote, &tab.entry.local) {
+                            (Some(_), Some(_)) => "Server ↔ Project",
+                            (Some(_), None) => "Server",
+                            _ => "Project",
+                        }),
+                )
+                // Its place kept while hidden, so the tabs don't move under the mouse.
+                .child(div().size(px(20.0)).flex_none().when(close_shown, |d| {
+                    d.child(
+                        ui::icon_button(SharedString::from(format!("sc-tab-close-{i}")), Icon::Close, c.text_primary, true, cx)
+                            .size(px(20.0))
+                            .tip("Close (middle click)")
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.close_tab(i, cx);
+                            })),
+                    )
+                }))
+        });
+        div()
+            .id("sc-tabs")
+            .flex()
+            .flex_none()
+            .h(px(35.0))
+            .overflow_x_scroll()
+            .bg(c.window_bg)
+            .border_b_1()
+            .border_color(c.card_border)
+            .children(tabs)
+            .into_any_element()
+    }
+
     fn render_right(&mut self, env: Option<&Environment>, busy: bool, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = Theme::get(cx).clone();
         let c = theme.colors;
-        let frame = || {
+        let mut tab_bar = (!self.tabs.is_empty()).then(|| self.render_tabs(cx));
+        let mut frame = || {
             div()
                 .flex()
                 .flex_col()
@@ -1356,6 +1646,7 @@ impl SourceControlPage {
                 .border_color(c.card_border)
                 .bg(c.card_bg)
                 .overflow_hidden()
+                .children(tab_bar.take())
         };
         if let Some(history) = &self.history {
             let lines = history.clone();
@@ -1409,7 +1700,7 @@ impl SourceControlPage {
                 .when(empty, |d| d.child(div().p(px(20.0)).text_color(c.text_muted).child("Nothing sent to or from this server yet.")))
                 .into_any_element();
         }
-        let Some(diff) = &self.diff else {
+        let Some(diff) = self.tab() else {
             let text = if env.is_some() {
                 "Choose a file to compare the server's copy (left) with the project's (right)."
             } else {
@@ -1492,10 +1783,44 @@ impl SourceControlPage {
         let summary = match &diff.state {
             DiffState::Text(text) => {
                 let (added, removed) = text.sides.added_removed();
-                format!("+{added} -{removed}")
+                // Both copies are still shown: only the times differ, or the line endings.
+                if text.same_text() { "Same text".to_string() } else { format!("+{added} -{removed}") }
             }
+            DiffState::File(file) => if file.server { "Only on the server" } else { "Only in the project" }.to_string(),
             _ => String::new(),
         };
+        // VS Code's breadcrumbs: the folders, then the file with its icon.
+        let parts: Vec<String> = entry.path.split('/').map(str::to_string).collect();
+        let last = parts.len().saturating_sub(1);
+        let crumbs = div()
+            .flex_1()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(px(2.0))
+            .overflow_hidden()
+            .children(parts.into_iter().enumerate().map(|(k, part)| {
+                if k == last {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.0))
+                        .min_w_0()
+                        .child(ui::file_icons::file_icon(&part, cx))
+                        .child(ui::one_line(part))
+                        .into_any_element()
+                } else {
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap(px(2.0))
+                        .text_color(c.text_muted)
+                        .child(part)
+                        .child(ui::icon_sized(Icon::ChevronRight, ui::IconSize::Small, c.text_muted, cx))
+                        .into_any_element()
+                }
+            }));
         let header = div()
             .flex()
             .items_center()
@@ -1503,8 +1828,7 @@ impl SourceControlPage {
             .pad(px(6.0), px(12.0))
             .border_b_1()
             .border_color(c.card_border)
-            .child(div().font_weight(FontWeight::BOLD).text_color(change_color(entry.change, cx)).child(entry.change.letter()))
-            .child(div().flex_1().min_w_0().child(ui::one_line(entry.path.clone())))
+            .child(crumbs)
             .child(div().text_size(theme.text.caption).text_color(c.text_muted).child(summary))
             .child(header_buttons);
         let sides = div()
@@ -1513,8 +1837,17 @@ impl SourceControlPage {
             .text_color(c.text_muted)
             .border_b_1()
             .border_color(c.card_border)
-            .child(div().flex_1().pad(px(3.0), px(12.0)).child(format!("Server - {}", meta_text(entry.remote.as_ref()))))
-            .child(div().flex_1().pad(px(3.0), px(12.0)).child(format!("Project - {}", meta_text(entry.local.as_ref()))));
+            .map(|d| match &diff.state {
+                // One copy: only its own.
+                DiffState::File(file) => d.child(div().flex_1().pad(px(3.0), px(12.0)).child(if file.server {
+                    format!("Server - {}", meta_text(entry.remote.as_ref()))
+                } else {
+                    format!("Project - {}", meta_text(entry.local.as_ref()))
+                })),
+                _ => d
+                    .child(div().flex_1().pad(px(3.0), px(12.0)).child(format!("Server - {}", meta_text(entry.remote.as_ref()))))
+                    .child(div().flex_1().pad(px(3.0), px(12.0)).child(format!("Project - {}", meta_text(entry.local.as_ref())))),
+            });
         let body: gpui::AnyElement = match &diff.state {
             DiffState::Loading => div()
                 .flex()
@@ -1531,108 +1864,11 @@ impl SourceControlPage {
                 .text_color(c.text_muted)
                 .child("A binary file: no line-by-line comparison. The sizes and times are above.")
                 .into_any_element(),
-            DiffState::Text(text) if text.sides.changes.is_empty() => div()
-                .p(px(20.0))
-                .text_color(c.text_muted)
-                .child("The text is the same on both sides (only the times differ, or the line endings).")
-                .into_any_element(),
-            DiffState::Text(text) => {
-                let at = diff.at;
-                let mono = theme.mono_font.clone();
-                let left = Arc::new(text.left.clone());
-                let right = Arc::new(text.right.clone());
-                if self.inline {
-                    let rows = text.inline.rows.clone();
-                    uniform_list("sc-diff-inline", rows.len(), move |range, _, cx| {
-                        let c = Theme::get(cx).colors;
-                        range
-                            .map(|i| {
-                                let row = &rows[i];
-                                let (bg, sign) = match row.kind {
-                                    RowKind::Removed => (Some(c.diff_removed_bg), "-"),
-                                    RowKind::Added => (Some(c.diff_added_bg), "+"),
-                                    _ => (None, " "),
-                                };
-                                let spans = match row.kind {
-                                    RowKind::Removed => row.left.and_then(|n| left.get(n - 1)),
-                                    _ => row.right.and_then(|n| right.get(n - 1)),
-                                };
-                                let number = |n: Option<usize>| {
-                                    div()
-                                        .w(px(40.0))
-                                        .flex_none()
-                                        .pad(px(0.0), px(4.0))
-                                        .flex()
-                                        .justify_end()
-                                        .text_color(c.text_muted)
-                                        .child(n.map(|n| n.to_string()).unwrap_or_default())
-                                };
-                                div()
-                                    .flex()
-                                    .when_some(bg, |d, bg| d.bg(bg))
-                                    .when(at == Some(i), |d| d.border_t_1().border_color(c.focus_border))
-                                    .child(number(row.left))
-                                    .child(number(row.right))
-                                    .child(div().w(px(14.0)).flex_none().text_color(c.text_muted).child(sign))
-                                    .child(div().whitespace_nowrap().child(code_line(&row.text, spans.map(Vec::as_slice), cx)))
-                            })
-                            .collect()
-                    })
-                    .track_scroll(self.diff_scroll.clone())
-                    .font_family(mono)
-                    .size_full()
-                    .into_any_element()
-                } else {
-                    let rows = text.sides.rows.clone();
-                    uniform_list("sc-diff", rows.len(), move |range, _, cx| {
-                        let c = Theme::get(cx).colors;
-                        range
-                            .map(|i| {
-                                let row = &rows[i];
-                                let (left_bg, right_bg) = match row.kind {
-                                    RowKind::Same => (None, None),
-                                    RowKind::Removed => (Some(c.diff_removed_bg), None),
-                                    RowKind::Added => (None, Some(c.diff_added_bg)),
-                                    RowKind::Changed => (Some(c.diff_removed_bg), Some(c.diff_added_bg)),
-                                };
-                                let half = |line: Option<&dnnm_application::source_control::diff::Line>,
-                                            bg: Option<gpui::Hsla>,
-                                            spans: &Vec<Vec<(std::ops::Range<usize>, Token)>>| {
-                                    div()
-                                        .flex()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .overflow_hidden()
-                                        .when_some(bg, |d, bg| d.bg(bg))
-                                        .child(
-                                            div()
-                                                .w(px(44.0))
-                                                .flex_none()
-                                                .pad(px(0.0), px(4.0))
-                                                .flex()
-                                                .justify_end()
-                                                .text_color(c.text_muted)
-                                                .child(line.map(|l| l.number.to_string()).unwrap_or_default()),
-                                        )
-                                        .child(div().whitespace_nowrap().children(line.map(|l| {
-                                            code_line(&l.text, spans.get(l.number - 1).map(Vec::as_slice), cx)
-                                        })))
-                                };
-                                div()
-                                    .flex()
-                                    .when(at == Some(i), |d| d.border_t_1().border_color(c.focus_border))
-                                    .child(half(row.left.as_ref(), left_bg, &left))
-                                    .child(div().w(px(1.0)).flex_none().bg(c.card_border))
-                                    .child(half(row.right.as_ref(), right_bg, &right))
-                            })
-                            .collect()
-                    })
-                    .track_scroll(self.diff_scroll.clone())
-                    .font_family(mono)
-                    .size_full()
-                    .into_any_element()
-                }
+            DiffState::Text(text) if self.inline => {
+                source_control_diff::inline_view(text, diff.at, &diff.scroll, theme.mono_font.clone(), cx)
             }
+            DiffState::Text(text) => source_control_diff::side_by_side_view(text, diff.at, &diff.scroll, theme.mono_font.clone(), cx),
+            DiffState::File(file) => source_control_diff::one_file_view(file, &diff.scroll, theme.mono_font.clone(), cx),
         };
         frame()
             .child(header)
@@ -1642,26 +1878,19 @@ impl SourceControlPage {
     }
 }
 
-/// A line of code with its syntax colours (pieces from [`highlight`]; none: plain).
-fn code_line(text: &str, spans: Option<&[(std::ops::Range<usize>, Token)]>, cx: &App) -> gpui::StyledText {
-    let c = Theme::get(cx).colors;
-    let highlights: Vec<(std::ops::Range<usize>, gpui::HighlightStyle)> = spans
-        .unwrap_or_default()
-        .iter()
-        .filter(|(r, _)| r.end <= text.len() && text.is_char_boundary(r.start) && text.is_char_boundary(r.end))
-        .map(|(r, token)| {
-            let color = match token {
-                Token::Keyword => c.syntax_keyword,
-                Token::String => c.syntax_string,
-                Token::Comment => c.syntax_comment,
-                Token::Number => c.syntax_number,
-                Token::Tag => c.syntax_tag,
-                Token::Attribute => c.syntax_attribute,
-            };
-            (r.clone(), gpui::HighlightStyle { color: Some(color), ..Default::default() })
-        })
-        .collect();
-    gpui::StyledText::new(SharedString::from(text.to_string())).with_highlights(highlights)
+/// What a file's read copies are shown as: both as text - the diff; one alone - that file; else a binary file.
+fn diff_state(path: &str, read: Result<BothCopies, String>) -> DiffState {
+    let (remote, local) = match read {
+        Ok(copies) => copies,
+        Err(e) => return DiffState::Failed(e),
+    };
+    match (remote.as_deref().map(text_of), local.as_deref().map(text_of)) {
+        (None, None) => DiffState::Failed("Neither side has the file any more - Refresh.".into()),
+        (Some(None), _) | (_, Some(None)) => DiffState::Binary,
+        (Some(Some(server)), None) => DiffState::File(Box::new(OneFile::new(path, &server, true))),
+        (None, Some(Some(project))) => DiffState::File(Box::new(OneFile::new(path, &project, false))),
+        (Some(Some(server)), Some(Some(project))) => DiffState::Text(Box::new(TextDiff::new(path, &server, &project))),
+    }
 }
 
 /// "12.3 KB, 23-11-2026 14:02" - or "not there".

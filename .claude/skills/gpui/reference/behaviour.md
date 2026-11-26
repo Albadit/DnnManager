@@ -122,3 +122,17 @@ Re-check when GPUI is upgraded; add new findings here with how they were verifie
   missed a menu that closed; compare with what the last check saw.
 - `window.use_keyed_state(id, cx, |_, cx| cx.focus_handle())` gives a free-function element (a menu) a focus handle
   that lives while it is drawn and is new each time it opens.
+- **`group_hover` / `hover` can't change layout**: their styles are applied only with a hitbox (div.rs:2497,
+  `compute_style_internal`), in prepaint and paint - so `.invisible()` + `group_hover(visible)` keeps the space. To
+  take the space only under the mouse (Source Control's row buttons), keep the hovered row in the view's state
+  (`on_mouse_move` sets it, `on_hover(false)` clears it) and leave the children out otherwise. Checked in the window.
+- **A `uniform_list` decoration** (`with_decoration`, uniform_list.rs:645) is laid out as a root and placed at the
+  list's *scrolled* content origin, after the items (drawn over them). A root ignores its own `absolute().top(..)`:
+  put a `size_full()` root around an absolute child, at `top = -scroll_offset.y` for the view's top. Source Control's
+  sticky section header; with `.occlude()` the rows under it get no hover or click. Checked in the window.
+- **A border has one colour for all its sides** (`Style.border_color`): an accent line along a tab's top with a
+  plain edge on its right is a child of its own (`absolute().top_0().left_0().right_0().h(px(1.0))`). Source
+  Control's tabs; checked in the window.
+- **`StyledText::with_highlights` wants its ranges in order and apart** (text.rs `compute_runs` walks them once):
+  syntax colours and the diff's word backgrounds together are cut at every start and end first, each cut taking
+  both styles (`source_control_diff::code_line`). `HighlightStyle.background_color` paints behind the text.

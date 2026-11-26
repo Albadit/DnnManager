@@ -1,5 +1,6 @@
-//! The Source Control page's list as rows, apart from GPUI: the files in sections - Conflicts, Changes (to upload),
-//! Server changes (to download) and, when asked for, Unchanged - as VS Code lists them: flat by path (each file with
+//! The Source Control page's list as rows, apart from GPUI: the files in sections - Conflicts, Staged Changes (what
+//! Commit uploads), Changes (to upload), Server changes (to download) and, when asked for, Unchanged - as VS Code lists
+//! them: flat by path (each file with
 //! its folder beside it), or as a folder tree (folders first, each with the number of files in it). Filtered by text,
 //! folders and sections collapsible. Its own module so the grouping is tested without a window.
 
@@ -11,6 +12,8 @@ use dnnm_application::source_control::model::{Change, Entry};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Section {
     Conflicts,
+    /// Changes here put aside for the next commit (VS Code's staging): Commit sends these.
+    Staged,
     /// What differs here: to upload (or, for a deletion here, to delete on the server).
     Changes,
     /// What differs on the server: to download.
@@ -31,6 +34,7 @@ impl Section {
     pub fn title(self) -> &'static str {
         match self {
             Section::Conflicts => "Conflicts",
+            Section::Staged => "Staged Changes",
             Section::Changes => "Changes",
             Section::Server => "Server changes",
             Section::Unchanged => "Unchanged",
@@ -40,21 +44,37 @@ impl Section {
     pub fn tip(self) -> &'static str {
         match self {
             Section::Conflicts => "Changed here and on the server since the last sync: compare, then keep one side",
-            Section::Changes => "Changed in the project: upload them to the server",
+            Section::Staged => "Staged for the next commit: Commit uploads them to the server",
+            Section::Changes => "Changed in the project: stage them, then Commit uploads them to the server",
             Section::Server => "Changed on the server, or only there: download them",
             Section::Unchanged => "The same in the project and on the server",
         }
     }
 }
 
-/// What the list shows: files whose path holds `text` (any case), and the unchanged ones only when `unchanged`.
+/// Whether a change can be staged: a change in the project (one of the Changes section's).
+pub fn stageable(change: Change) -> bool {
+    Section::of(change) == Section::Changes
+}
+
+/// What the list shows: files whose path holds `text` (any case), and the unchanged ones only when `unchanged`; the
+/// `staged` paths (of changes in the project) under Staged Changes.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Filter {
     pub text: String,
     pub unchanged: bool,
+    pub staged: HashSet<String>,
 }
 
 impl Filter {
+    /// The section a file is listed in.
+    pub fn section(&self, entry: &Entry) -> Section {
+        match Section::of(entry.change) {
+            Section::Changes if self.staged.contains(&entry.path) => Section::Staged,
+            section => section,
+        }
+    }
+
     fn keeps(&self, entry: &Entry) -> bool {
         if entry.change == Change::Unchanged && !self.unchanged {
             return false;
@@ -112,7 +132,7 @@ fn insert(node: &mut Node, parts: &[&str], entry: usize) {
 pub fn rows(entries: &[Entry], filter: &Filter, collapsed: &HashSet<String>, tree: bool) -> Vec<Row> {
     let mut sections: BTreeMap<Section, Node> = BTreeMap::new();
     for (i, entry) in entries.iter().enumerate().filter(|(_, e)| filter.keeps(e)) {
-        let section = sections.entry(Section::of(entry.change)).or_default();
+        let section = sections.entry(filter.section(entry)).or_default();
         if tree {
             let parts: Vec<&str> = entry.path.split('/').collect();
             insert(section, &parts, i);
@@ -184,12 +204,12 @@ pub fn files_in(row: &Row, entries: &[Entry], filter: &Filter) -> Vec<usize> {
             (0..entries.len())
                 .filter(|&i| {
                     let e = &entries[i];
-                    filter.keeps(e) && Section::of(e.change) == *section && e.path.to_lowercase().starts_with(&prefix)
+                    filter.keeps(e) && filter.section(e) == *section && e.path.to_lowercase().starts_with(&prefix)
                 })
                 .collect()
         }
         Row::Section { section, .. } => (0..entries.len())
-            .filter(|&i| filter.keeps(&entries[i]) && Section::of(entries[i].change) == *section)
+            .filter(|&i| filter.keeps(&entries[i]) && filter.section(&entries[i]) == *section)
             .collect(),
     }
 }
@@ -292,6 +312,24 @@ mod tests {
         assert!(shown.len() > 20_000);
         assert_eq!(rows(&e, &Filter::default(), &HashSet::new(), false).len(), 20_001, "the Changes section and its files");
         assert!(started.elapsed() < std::time::Duration::from_secs(3), "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn staged_changes_have_their_own_section_and_only_changes_here_are_staged() {
+        let e = entries();
+        let staged = Filter {
+            staged: HashSet::from(["web.config".to_string(), "Portals/1/a.css".to_string(), "gone.txt".to_string()]),
+            ..Default::default()
+        };
+        let rows = rows(&e, &staged, &HashSet::new(), false);
+        assert_eq!(
+            outline(&rows),
+            ["# Conflicts (1)", "Shop.dll", "# Staged Changes (1)", "web.config", "# Changes (2)", "logo.png", "skin.css", "# Server changes (1)", "a.css"],
+            "a server change isn't staged, nor a path no longer listed"
+        );
+        let paths: Vec<&str> = files_in(&rows[2], &e, &staged).iter().map(|&i| e[i].path.as_str()).collect();
+        assert_eq!(paths, ["web.config"]);
+        assert!(stageable(Change::Deleted) && stageable(Change::Added) && !stageable(Change::Incoming) && !stageable(Change::Conflict));
     }
 
     #[test]

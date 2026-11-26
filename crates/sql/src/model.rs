@@ -213,7 +213,7 @@ impl Default for DockerOptions {
             sql_user: "sa".into(),
             sa_password: String::new(),
             default_port: 1433,
-            collation: "Latin1_General_CI_AS".into(),
+            collation: "SQL_Latin1_General_CP1_CI_AS".into(),
             mssql_pid: "Developer".into(),
         }
     }

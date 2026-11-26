@@ -83,6 +83,14 @@ pub struct Colors {
     /// diffEditor.insertedLineBackground / removedLineBackground, the same in both themes).
     pub diff_added_bg: Hsla,
     pub diff_removed_bg: Hsla,
+    /// The words that differ inside a changed line, over its line's colour (insertedTextBackground /
+    /// removedTextBackground); the blank where a side has no line (diagonalFill); a change's mark on the overview
+    /// ruler (diffEditorOverview).
+    pub diff_added_text_bg: Hsla,
+    pub diff_removed_text_bg: Hsla,
+    pub diff_filler: Hsla,
+    pub diff_ruler_added: Hsla,
+    pub diff_ruler_removed: Hsla,
     /// Source Control's syntax colours (VS Code's Light / Dark Modern): keywords, strings, comments, numbers, markup
     /// tags, attributes and properties.
     pub syntax_keyword: Hsla,
@@ -160,6 +168,11 @@ impl Colors {
             out_pill_neutral_fg: c(0x3B3B3B),
             diff_added_bg: ca(0x339BB955),
             diff_removed_bg: ca(0x33FF0000),
+            diff_added_text_bg: ca(0x409CCC2C),
+            diff_removed_text_bg: ca(0x33FF0000),
+            diff_filler: ca(0x1A222222),
+            diff_ruler_added: ca(0xCC6FA21D),
+            diff_ruler_removed: ca(0xCCE51400),
             syntax_keyword: c(0x0000FF),
             syntax_string: c(0xA31515),
             syntax_comment: c(0x008000),
@@ -234,6 +247,11 @@ impl Colors {
             out_pill_neutral_fg: c(0xCCCCCC),
             diff_added_bg: ca(0x339BB955),
             diff_removed_bg: ca(0x33FF0000),
+            diff_added_text_bg: ca(0x339CCC2C),
+            diff_removed_text_bg: ca(0x33FF0000),
+            diff_filler: ca(0x1ACCCCCC),
+            diff_ruler_added: ca(0xCC9CCC2C),
+            diff_ruler_removed: ca(0xCCF14C4C),
             syntax_keyword: c(0x569CD6),
             syntax_string: c(0xCE9178),
             syntax_comment: c(0x6A9955),

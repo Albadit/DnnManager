@@ -235,9 +235,84 @@ pub fn side_by_side(left: &str, right: &str) -> SideBySide {
     out
 }
 
+/// The parts of a changed line that differ (byte ranges): the server's line's and the project's, as VS Code marks
+/// them inside a changed line. Compared word piece by word piece - a run of letters, a run of digits, or any other
+/// one character - so `Latin1_General_CI_AS` against `SQL_Latin1_General_CP1_CI_AS` marks `SQL_` and `CP1_`. A very
+/// long line isn't split (all of it differs).
+pub fn word_changes(left: &str, right: &str) -> (Vec<std::ops::Range<usize>>, Vec<std::ops::Range<usize>>) {
+    const LONGEST: usize = 4_000;
+    if left.len() > LONGEST || right.len() > LONGEST {
+        return (std::iter::once(0..left.len()).collect(), std::iter::once(0..right.len()).collect());
+    }
+    let (old, new) = (pieces(left), pieces(right));
+    let (a, b): (Vec<&str>, Vec<&str>) = (old.iter().map(|p| p.1).collect(), new.iter().map(|p| p.1).collect());
+    let mut removed = Vec::new();
+    let mut added = Vec::new();
+    // The bytes from piece `i` for `len` pieces.
+    let span = |p: &[(usize, &str)], i: usize, len: usize, whole: usize| {
+        let start = p.get(i).map_or(whole, |x| x.0);
+        let end = p.get(i + len).map_or(whole, |x| x.0);
+        start..end
+    };
+    for op in similar::capture_diff_slices(similar::Algorithm::Myers, &a, &b) {
+        match op {
+            DiffOp::Equal { .. } => {}
+            DiffOp::Delete { old_index, old_len, .. } => push(&mut removed, span(&old, old_index, old_len, left.len())),
+            DiffOp::Insert { new_index, new_len, .. } => push(&mut added, span(&new, new_index, new_len, right.len())),
+            DiffOp::Replace { old_index, old_len, new_index, new_len } => {
+                push(&mut removed, span(&old, old_index, old_len, left.len()));
+                push(&mut added, span(&new, new_index, new_len, right.len()));
+            }
+        }
+    }
+    (removed, added)
+}
+
+/// A range added after the last, joined to it when they touch.
+fn push(ranges: &mut Vec<std::ops::Range<usize>>, range: std::ops::Range<usize>) {
+    if range.is_empty() {
+        return;
+    }
+    match ranges.last_mut() {
+        Some(last) if last.end == range.start => last.end = range.end,
+        _ => ranges.push(range),
+    }
+}
+
+/// A line in pieces with where each starts: runs of letters, runs of digits, and every other character on its own.
+fn pieces(line: &str) -> Vec<(usize, &str)> {
+    let class = |c: char| if c.is_alphabetic() { 1 } else if c.is_numeric() { 2 } else { 0 };
+    let mut out: Vec<(usize, &str)> = Vec::new();
+    let mut start = 0;
+    let mut chars = line.char_indices().peekable();
+    while let Some((_, c)) = chars.next() {
+        let k = class(c);
+        let joins = |next: Option<&(usize, char)>| next.is_some_and(|&(_, n)| k != 0 && class(n) == k);
+        if !joins(chars.peek()) {
+            let end = chars.peek().map_or(line.len(), |&(j, _)| j);
+            out.push((start, &line[start..end]));
+            start = end;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_changed_line_marks_only_the_words_that_differ() {
+        let (l, r) = word_changes(r#"collation: "Latin1_General_CI_AS".into(),"#, r#"collation: "SQL_Latin1_General_CP1_CI_AS".into(),"#);
+        assert!(l.is_empty());
+        let right = r#"collation: "SQL_Latin1_General_CP1_CI_AS".into(),"#;
+        let marked: Vec<&str> = r.iter().map(|x| &right[x.clone()]).collect();
+        assert_eq!(marked, ["SQL_", "CP1_"]);
+        let (l, r) = word_changes("let a = 1;", "let b = 1;");
+        assert_eq!((l.len(), r.len(), l[0].clone(), r[0].clone()), (1, 1, 4..5, 4..5));
+        let (l, r) = word_changes("héllo wörld", "héllo world");
+        assert_eq!((l.len(), r.len()), (1, 1), "letters with accents stay whole words");
+    }
 
     fn kinds(d: &SideBySide) -> Vec<RowKind> {
         d.rows.iter().map(|r| r.kind).collect()
