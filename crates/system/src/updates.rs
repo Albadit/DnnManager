@@ -74,6 +74,9 @@ pub fn is_newer(latest: &Version, current: &Version) -> bool {
 pub enum UpdateKind {
     Installer,
     Portable,
+    /// The .msi the release workflow builds (cargo-packager): `msiexec` installs it over the installed one - its major
+    /// upgrade replaces the old version in the same folder.
+    Msi,
 }
 
 /// A file of a release, with the SHA-256 GitHub computed for it (None when it gives none).
@@ -112,6 +115,7 @@ impl AppRelease {
         let prefixes: [&str; 2] = match kind {
             UpdateKind::Installer => ["DnnManager_Setup-", "DnnManagerSetup-"],
             UpdateKind::Portable => ["DnnManager_Portable-", "DnnManager-"],
+            UpdateKind::Msi => return self.package_for("windows", std::env::consts::ARCH),
         };
         let suffix = format!("-{}.exe", arch.to_lowercase());
         prefixes.iter().find_map(|prefix| {
@@ -120,6 +124,35 @@ impl AppRelease {
                 name.starts_with(&prefix.to_lowercase()) && name.ends_with(&suffix)
             })
         })
+    }
+}
+
+/// The release's package name for a system (`std::env::consts::OS`) and architecture (`std::env::consts::ARCH`), as
+/// the release workflow names them: `DnnManager-windows-x86_64.msi`, `DnnManager-macos-arm64.dmg`,
+/// `DnnManager-linux-amd64.deb` (the .debs are also under x86_64 / aarch64). None for a system without a package.
+pub fn package_names(os: &str, arch: &str) -> Vec<String> {
+    let (system, ext, arches): (&str, &str, &[&str]) = match (os, arch) {
+        ("windows", "x86_64") => ("windows", "msi", &["x86_64"]),
+        ("windows", "aarch64") => ("windows", "msi", &["arm64"]),
+        ("macos", "x86_64") => ("macos", "dmg", &["x86_64"]),
+        ("macos", "aarch64") => ("macos", "dmg", &["arm64"]),
+        ("linux", "x86_64") => ("linux", "deb", &["amd64", "x86_64"]),
+        ("linux", "aarch64") => ("linux", "deb", &["arm64", "aarch64"]),
+        _ => return Vec::new(),
+    };
+    arches.iter().map(|a| format!("DnnManager-{system}-{a}.{ext}")).collect()
+}
+
+impl AppRelease {
+    /// The package that installs this release on this system (`package_names` for this OS and architecture).
+    pub fn package_here(&self) -> Option<&AppReleaseAsset> {
+        self.package_for(std::env::consts::OS, std::env::consts::ARCH)
+    }
+
+    pub fn package_for(&self, os: &str, arch: &str) -> Option<&AppReleaseAsset> {
+        package_names(os, arch)
+            .iter()
+            .find_map(|name| self.assets.iter().find(|a| a.name.eq_ignore_ascii_case(name)))
     }
 }
 
@@ -302,6 +335,10 @@ pub fn problem(path: &Path, release: &AppRelease, asset: &AppReleaseAsset) -> Op
     if actual.ok().as_ref() != Some(expected) {
         return Some("its SHA-256 isn't the one GitHub lists".into());
     }
+    // Only an exe has a version resource to read; an .msi, .dmg or .deb is checked by its size and SHA-256 alone.
+    if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case("exe")) {
+        return None;
+    }
     // Setup and the exe carry the release's version (ProductVersion "1.7.0", or "1.7.0+commit").
     #[cfg(windows)]
     let product = crate::win::version_string(path, "ProductVersion");
@@ -375,13 +412,37 @@ pub fn installed_locations() -> Vec<(PathBuf, bool)> {
         .collect()
 }
 
+/// Where the .msi put DNN Manager: `assets/wix/main.wxs` keeps `INSTALLDIR` in
+/// `HKCU\Software\{manufacturer}\{product_name}` (Packager.toml's publisher and product-name).
+#[cfg(windows)]
+const MSI_KEY: &str = r"Software\Albadit\DNN Manager";
+
+/// Whether `exe` is the DNN Manager the .msi installed - the one an .msi update replaces. A build run from anywhere
+/// else (a development build, a copy) isn't.
+#[cfg(windows)]
+pub fn installed_by_msi(exe: &Path) -> bool {
+    let Some(folder) = exe.parent() else { return false };
+    registry_string(HKEY_CURRENT_USER, MSI_KEY, "InstallDir")
+        .is_some_and(|installed| normalize(Path::new(&installed)).eq_ignore_ascii_case(&normalize(folder)))
+}
+
+#[cfg(not(windows))]
+pub fn installed_by_msi(_exe: &Path) -> bool {
+    false
+}
+
 #[cfg(windows)]
 fn install_location(hive: HKEY) -> Option<String> {
+    registry_string(hive, UNINSTALL_KEY, "InstallLocation")
+}
+
+#[cfg(windows)]
+fn registry_string(hive: HKEY, key: &str, name: &str) -> Option<String> {
     use std::ffi::c_void;
     use windows::Win32::System::Registry::{RRF_RT_REG_SZ, RRF_SUBKEY_WOW6464KEY, RegGetValueW};
     use windows::core::PCWSTR;
-    let key = crate::win::wide(UNINSTALL_KEY);
-    let name = crate::win::wide("InstallLocation");
+    let key = crate::win::wide(key);
+    let name = crate::win::wide(name);
     let mut buffer = vec![0u16; 1024];
     let mut size = (buffer.len() * 2) as u32;
     // SAFETY: the buffer's size in bytes is passed in.
@@ -442,6 +503,51 @@ mod tests {
         assert_eq!(release.asset_for(UpdateKind::Installer, "arm64"), None);
         assert_eq!(parse_release(r#"{"tag_name":"latest"}"#).unwrap_err(), "GitHub's answer has no version");
         assert!(parse_release("not json").is_err());
+    }
+
+    #[test]
+    fn picks_the_package_for_each_system() {
+        let asset = |name: &str| AppReleaseAsset { name: name.into(), size: 1, sha256: None, url: String::new() };
+        let release = AppRelease {
+            tag: "v2.0.1".into(),
+            version: try_parse_version("v2.0.1").unwrap(),
+            page_url: String::new(),
+            assets: [
+                "DnnManager-windows-x86_64.msi",
+                "DnnManager-windows-arm64.msi",
+                "DnnManager-macos-arm64.dmg",
+                "DnnManager-macos-x86_64.dmg",
+                "DnnManager-linux-x86_64.deb",
+                "DnnManager-linux-arm64.deb",
+                "SHA256SUMS.txt",
+            ]
+            .map(asset)
+            .to_vec(),
+        };
+        let name = |os, arch| release.package_for(os, arch).map(|a| a.name.as_str());
+        assert_eq!(name("windows", "x86_64"), Some("DnnManager-windows-x86_64.msi"));
+        assert_eq!(name("windows", "aarch64"), Some("DnnManager-windows-arm64.msi"));
+        assert_eq!(name("macos", "aarch64"), Some("DnnManager-macos-arm64.dmg"));
+        assert_eq!(name("macos", "x86_64"), Some("DnnManager-macos-x86_64.dmg"));
+        assert_eq!(name("linux", "x86_64"), Some("DnnManager-linux-x86_64.deb"), "the other name of amd64");
+        assert_eq!(name("linux", "aarch64"), Some("DnnManager-linux-arm64.deb"));
+        assert_eq!(name("windows", "x86"), None);
+        assert_eq!(name("freebsd", "x86_64"), None);
+    }
+
+    #[test]
+    fn a_package_without_a_version_resource_is_checked_by_size_and_sha256() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("DnnManager-windows-x86_64.msi");
+        std::fs::write(&file, b"abc").unwrap();
+        let release = parse_release(SAMPLE).unwrap();
+        let asset = AppReleaseAsset {
+            name: "DnnManager-windows-x86_64.msi".into(),
+            size: 3,
+            sha256: Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad".into()),
+            url: String::new(),
+        };
+        assert_eq!(problem(&file, &release, &asset), None);
     }
 
     #[test]

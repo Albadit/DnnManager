@@ -774,6 +774,7 @@ impl Workspace {
     /// `backups.keepDays` deleted, and GitHub asked for a newer release when `updates.checkAtStart` is on.
     fn checks_at_start(&mut self, cx: &mut Context<Self>) {
         let settings = self.store.read(cx).settings.clone();
+        self.report_update_result(cx);
         if settings.get("updates.checkAtStart").is_none_or(|v| v.eq_ignore_ascii_case("true")) {
             self.check_for_updates(None, false, cx);
         }
@@ -1727,6 +1728,33 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .gap(px(7.0))
+                    // Update, while GitHub has a newer release: blue, as VS Code's.
+                    .when_some(self.update_available.as_ref().map(|r| r.tag.clone()), |row, tag| {
+                        row.child(
+                            ui::focusable_bare(
+                                div()
+                                    .id("update")
+                                    .relative()
+                                    .flex()
+                                    .items_center()
+                                    .h(theme.metrics.layout_button_height)
+                                    .pad(px(0.0), px(8.0))
+                                    .rounded(px(5.0))
+                                    .bg(c.accent)
+                                    .hover(move |s| s.bg(c.accent_hover))
+                                    .cursor_pointer()
+                                    .text_color(c.on_accent)
+                                    .text_size(px(12.0))
+                                    .tip(format!("Install DNN Manager {tag} - it closes and opens again by itself"))
+                                    // Out of the caption's drag area: a press here is a click, not the start of a move.
+                                    .occlude(),
+                                cx,
+                            )
+                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.install_update(window, cx)))
+                            .child(dnnm_dialogs::tour::target(dnnm_dialogs::tour::TourPart::UpdateButton, &self.tour_targets))
+                            .child("Update"),
+                        )
+                    })
                     .child(
                         layout_button("help", dnnm_dialogs::help_menu::HELP_BUTTON_TOOLTIP.to_string())
                             .relative()

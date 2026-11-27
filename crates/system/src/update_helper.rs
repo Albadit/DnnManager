@@ -224,6 +224,7 @@ pub fn run_plan(plan: &UpdatePlan, starter: &dyn Starter, watch: Duration, closi
     let failure = match plan.kind {
         UpdateKind::Portable => replace_portable(plan, &mut package, &log),
         UpdateKind::Installer => run_setup(plan, starter, &log),
+        UpdateKind::Msi => run_msi(plan, starter, &log),
     };
     drop(package);
     if let Some(failure) = failure {
@@ -428,6 +429,54 @@ fn run_setup(plan: &UpdatePlan, starter: &dyn Starter, log: &HelperLog) -> Optio
         2 | 5 => Some("Setup was cancelled.".into()),
         7 => Some(format!("Setup couldn't prepare the installation - see {}.", setup_log.display())),
         _ => Some(format!("Setup failed (exit code {code}) - see {}.", setup_log.display())),
+    }
+}
+
+/// msiexec's switches: install over the old version with its progress bar and no questions, no reboot, a full log.
+pub fn msi_arguments(package: &Path, msi_log: &Path) -> Vec<String> {
+    vec![
+        "/i".into(),
+        package.display().to_string(),
+        "/passive".into(),
+        "/norestart".into(),
+        "/l*v".into(),
+        msi_log.display().to_string(),
+    ]
+}
+
+/// Installs the .msi over the installed DNN Manager (its major upgrade removes the old version) and waits for it.
+/// None when it worked.
+fn run_msi(plan: &UpdatePlan, starter: &dyn Starter, log: &HelperLog) -> Option<String> {
+    let msi_log = setup_log_of(plan);
+    let args = msi_arguments(&plan.package, &msi_log);
+    let msiexec = std::env::var_os("SystemRoot")
+        .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from)
+        .join(r"System32\msiexec.exe");
+    log.write(&format!("Running {} {}", msiexec.display(), args.join(" ")));
+    let directory = plan.package.parent().unwrap_or(Path::new("."));
+    let Ok(mut msi) = starter.start(&msiexec, &args, directory) else {
+        return Some("The Windows Installer (msiexec) couldn't be started.".into());
+    };
+    let mut waited = 0u64;
+    let code = loop {
+        if let Some(code) = msi.wait(SETUP_NOTICE) {
+            break code;
+        }
+        waited += SETUP_NOTICE.as_secs() / 60;
+        log.write(&format!("The installer is still running after {waited} minutes - waiting for it ({}).", msi_log.display()));
+    };
+    log.write(&format!("The installer ended with exit code {code}."));
+    msi_failure(code, &msi_log)
+}
+
+/// What msiexec's exit code means; None when it installed (3010 / 1641: installed, Windows wants a restart).
+pub fn msi_failure(code: i32, msi_log: &Path) -> Option<String> {
+    match code {
+        0 | 3010 | 1641 => None,
+        1602 => Some("The installation was cancelled.".into()),
+        1618 => Some("Another installation is running - try the update again once it has finished.".into()),
+        1925 | 1730 => Some("The installation needs administrator rights.".into()),
+        _ => Some(format!("The installation failed (exit code {code}) - see {}.", msi_log.display())),
     }
 }
 
@@ -654,6 +703,24 @@ mod tests {
         );
         assert!(started[0].1[6].starts_with("/LOG=") && started[0].1[6].ends_with("update.setup.log"));
         assert_eq!(UpdateResult::try_read(Some(&plan.result_file)).unwrap().message, "Setup was cancelled.");
+    }
+
+    #[test]
+    fn installs_the_msi_with_msiexec_and_starts_dnn_manager_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut plan = plan(dir.path(), b"msi");
+        plan.kind = UpdateKind::Msi;
+        let starter = fake(vec![Some(3010), None]);
+        assert_eq!(run_plan(&plan, &starter, Duration::ZERO, Duration::from_secs(1)), 0);
+        let started = starter.started.borrow();
+        assert!(started[0].0.ends_with(r"System32\msiexec.exe"));
+        assert_eq!(started[0].1[..4], ["/i".to_string(), plan.package.display().to_string(), "/passive".into(), "/norestart".into()]);
+        assert_eq!(started[0].1[4], "/l*v");
+        assert_eq!(started[1].0, plan.app_exe, "DNN Manager is started again");
+        assert_eq!(std::fs::read(&plan.app_exe).unwrap(), b"old", "the installer replaces it, not the helper");
+        assert!(UpdateResult::try_read(Some(&plan.result_file)).unwrap().installed);
+        assert_eq!(msi_failure(1602, Path::new("m.log")).unwrap(), "The installation was cancelled.");
+        assert!(msi_failure(1603, Path::new("m.log")).unwrap().starts_with("The installation failed (exit code 1603)"));
     }
 
     #[test]

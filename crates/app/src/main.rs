@@ -108,6 +108,15 @@ fn initial_bounds(state: &WindowState, cx: &App) -> WindowBounds {
 }
 
 fn main() {
+    // The update's helper: a copy of this exe started with `--apply-update <plan>` - it installs the update once
+    // DNN Manager has closed and starts it again, and never opens a window of its own.
+    #[cfg(windows)]
+    {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        if dnnm_system::update_helper::is_helper(&args) {
+            std::process::exit(dnnm_system::update_helper::run(&args));
+        }
+    }
     // IIS's configuration needs administrator rights: started without, start again with the UAC prompt
     // (`AdminElevation`). If the user says no, run anyway - the Projects page says why it can't read IIS.
     let fixture = std::env::var_os(FIXTURE).map(std::path::PathBuf::from);

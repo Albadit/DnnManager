@@ -20,8 +20,12 @@ Download the package for your system from the [releases](https://github.com/Alba
   ```
 - **Debian / Ubuntu**: `sudo apt install ./DnnManager-linux-amd64.deb` (or `-arm64.deb`).
 
-To update, install the newer package over the old one. **Settings → About** and **Check for Updates** (the gear
-menu) say whether there is a newer release.
+**Settings → About** and **Check for Updates** (the gear menu) say whether there is a newer release, and while there
+is one a blue **Update** button shows in the title bar, left of **?**. It downloads the package for your system and
+checks it against GitHub's SHA-256. On Windows DNN Manager then closes, the installer runs with its progress bar,
+and DNN Manager opens again by itself and says how the update went; if it fails, the old version stays. On macOS and
+Linux the downloaded .dmg or .deb opens for you to install. You can always install the newer package over the old one
+yourself.
 
 ## What you need on Windows
 
