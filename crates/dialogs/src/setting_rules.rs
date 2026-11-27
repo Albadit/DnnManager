@@ -21,7 +21,7 @@ pub struct SettingsProblem {
 }
 
 /// The categories of the Settings page, as the tags of its list (`General`, `Projects`, `Releases`, `Sql`, `Docker`,
-/// `Iis`, `Keyboard`, `Help`, `About`).
+/// `Iis`, `Servers`, `Keyboard`, `Help`, `About`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Category {
     General,
@@ -30,19 +30,21 @@ pub enum Category {
     Sql,
     Docker,
     Iis,
+    Servers,
     Keyboard,
     Help,
     About,
 }
 
 impl Category {
-    pub const ALL: [Category; 9] = [
+    pub const ALL: [Category; 10] = [
         Category::General,
         Category::Projects,
         Category::Releases,
         Category::Sql,
         Category::Docker,
         Category::Iis,
+        Category::Servers,
         Category::Keyboard,
         Category::Help,
         Category::About,
@@ -57,6 +59,7 @@ impl Category {
             Category::Sql => "Sql",
             Category::Docker => "Docker",
             Category::Iis => "Iis",
+            Category::Servers => "Servers",
             Category::Keyboard => "Keyboard",
             Category::Help => "Help",
             Category::About => "About",
@@ -75,6 +78,7 @@ impl Category {
             Category::Sql => "Database server",
             Category::Docker => "Docker container",
             Category::Iis => "IIS",
+            Category::Servers => "Servers",
             Category::Keyboard => "Keyboard shortcuts",
             Category::Help => "Help",
             Category::About => "About",
@@ -101,6 +105,9 @@ impl Category {
                 "docker container name volume edition mssql_pid collation desktop engine install start set up docker-compose compose yml test"
             }
             Category::Iis => "iis windows features test set up enable",
+            Category::Servers => {
+                "servers source control ftp ftps sftp ssh tls filezilla site manager sitemanager import export deploy upload host password key file"
+            }
             Category::Keyboard => {
                 "keyboard shortcuts shortcut keys key bindings keybindings hotkeys accelerators command palette"
             }

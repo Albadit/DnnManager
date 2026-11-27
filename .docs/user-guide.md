@@ -126,7 +126,7 @@ sends them either way, as VS Code's Source Control lists changes. Nothing on a s
 asking you first. As in VS Code, the **primary side bar** holds the view - the title with **Refresh**, **Upload**,
 **Download** and **…**, the project and server, the **Commit** button, the filter box, and the files - and the
 comparison of the file you choose fills the main view. Drag the side bar's edge to widen it; **Ctrl+B** hides
-it.
+it. The project and server you choose are remembered: the next start chooses them again, while they still exist.
 
 1. **…** → **Add server…** adds a **server**, laid out as FileZilla's Site Manager: its **Name**; the **Protocol** (FTP or SFTP), the
    **Host** and **Port**; for FTP the **Encryption** (**Require explicit FTP over TLS**, or **Only use plain FTP
@@ -136,7 +136,8 @@ it.
    (`DesktopModules/Shop => /site/wwwroot/DesktopModules/Shop`, `;` between them); more files to ignore; files to
    protect; and **Back up the server's copy** before replacing or deleting it. The password goes in your account's
    secure store, never in the settings. A server isn't tied to a project: choose any project and any server, and
-   each project keeps its own comparison, records and history with it.
+   each project keeps its own comparison, records and history with it. **Settings → Servers** lists them all, and
+   imports and exports FileZilla's Site Manager.
 2. **Refresh** (↻) reads both sides and compares them (a spinner stands in its place while it runs; Output shows
    the progress). The first time, for SFTP DNN Manager shows the server's key
    fingerprint and asks whether to trust it; later a different key is refused (edit and save the server to
@@ -164,17 +165,20 @@ it.
 | **S** Deleted on the server | Deleted there after a sync | Stage and **Commit** to put it back, or leave it |
 
 Click a file to see the server's copy (left) next to the project's (right), as VS Code's diff editor shows it: two
-equal halves with their line numbers, the changed lines coloured and inside a changed line only the words that differ,
-a blank where one side has no line, and on the right edge a mark for every change in the file (click one to go
-there); the code is in its syntax colours (C#, JavaScript, TypeScript, JSON, CSS, HTML, XML, ASP.NET and Razor files,
-config, SQL). A file only one side has (new here, only on the server) opens as that file alone. **Inline** shows the
-changes in one column instead.
+halves with their line numbers and a line between them, the changed lines coloured and inside a changed line only the
+words that differ, a blank where one side has no line, and on the right edge a mark for every change in the file
+(click one to go there); the code is in its syntax colours (C#, JavaScript, TypeScript, JSON, CSS, HTML, XML, ASP.NET
+and Razor files, config, SQL). Drag the line between the halves to make one wider. A long line scrolls sideways -
+Shift+wheel, a touchpad, or the scroll bar under a half - and both halves move together, as they do up and down. A
+file only one side has (new here, only on the server) opens as that file alone.
 
 Files open in **tabs** above the comparison, as in VS Code: one click opens a file as the *preview* (its name in
 italics), which the next file you click takes the place of; a double click - on the file or its tab - keeps it open
 beside the others. Click a tab to go back to it; **×** or a middle click closes it. Each tab keeps where it was
 scrolled to, and follows its file when the list changes. A file whose text is the same on both sides (only the times
-or the line endings differ) is shown too, marked **Same text**. ↑ ↓ (or **F7** / **Shift+F7**) go from change to change. A
+or the line endings differ) is shown too, marked **Same text**. On the right of the tabs, as VS Code has them, ↑ ↓ (or **F7** / **Shift+F7**) go from change to
+change, beside what can be done with the file shown (**Merge…**, **Keep mine**, **Keep the server's**, **Download**,
+**Delete on server…**) - changes go to the server with Stage and **Commit**. A
 binary file shows its sizes and times instead. While the page is open, a file you save, add or delete in the project
 updates the list by itself - against the server as the last Refresh read it; **Refresh** to see the server's own
 changes.
@@ -205,8 +209,19 @@ times. Sending shows in **Output** with each file, and **Cancel** stops it betwe
 
 ## Settings and Troubleshoot
 
-**Settings** (**Ctrl+,**) has General, Projects, DNN releases, Database server, Docker container, IIS, Keyboard
-shortcuts, Help and About. Changes apply when you press **Save**. **Ctrl+F** there goes to its search.
+**Settings** (**Ctrl+,**) has General, Projects, DNN releases, Database server, Docker container, IIS, Servers,
+Keyboard shortcuts, Help and About. Changes apply when you press **Save**. **Ctrl+F** there goes to its search.
+
+**Servers** lists Source Control's servers - name, protocol, user, host, port and folder - and acts at once, without
+**Save**: **Add server…** and **Edit…** open the server dialog, the bin deletes one (after asking; its records and
+history go too, nothing on the server is touched). **Import…** adds the sites of a FileZilla Site Manager file - in
+FileZilla choose **File → Export…**, or pick its `sitemanager.xml` - folders included; a site DNN Manager has already
+(the same protocol, host, port and user) is left as it is. FTP is taken as FTP over TLS, plain FTP only when the site
+says so; implicit TLS and the cloud protocols are left out, each named in the message. A password protected by
+FileZilla's master password can't be read: type it in the server. A trusted SFTP key is never imported - the first
+connection asks again. **Export…** writes every server to a file FileZilla imports, the mappings and rules in an
+element of their own (DNN Manager reads them back; FileZilla ignores them). It asks first: **Without passwords**, or
+**With passwords** - then anyone who has the file can read them, as FileZilla writes them in base64.
 
 **Keyboard shortcuts**: a command can have several shortcuts. Click one to record a new one in its place (Backspace
 removes it, Esc cancels), **+** to add another; the arrow puts the command's default back. The panel and side bar

@@ -17,6 +17,7 @@ mod background;
 mod commands;
 mod help;
 mod modals;
+mod servers;
 mod shortcuts;
 mod source_control;
 mod updates;

@@ -136,3 +136,13 @@ Re-check when GPUI is upgraded; add new findings here with how they were verifie
 - **`StyledText::with_highlights` wants its ranges in order and apart** (text.rs `compute_runs` walks them once):
   syntax colours and the diff's word backgrounds together are cut at every start and end first, each cut taking
   both styles (`source_control_diff::code_line`). `HighlightStyle.background_color` paints behind the text.
+- **Shift+wheel on Windows is a sideways delta** (platform/windows/events.rs:557: `x` set, `y` 0), and a list that
+  scrolls only up and down turns a sideways delta into an up-and-down scroll unless its style has
+  `restrict_scroll_to_axis` (div.rs:2427-2436) - no builder method in 0.2.2: `list.style().restrict_scroll_to_axis =
+  Some(true)`. Source Control's diff does that and moves both halves sideways itself (`on_scroll_wheel`). From the
+  source; not yet tried in the window.
+- **A resize grip with `on_drag` + `on_drag_move`**: `on_mouse_move` fires only over its element (div.rs:269,
+  `hitbox.is_hovered`), `on_drag_move` on every move of a drag of its type, anywhere, with that element's bounds
+  (div.rs:289-301) - so a split kept as a share of the width needs no stored start point. The cursor during the drag
+  is the dragged element's own (`drag_cursor_style`, div.rs:2082). The diff's line between its halves; from the
+  source, not yet tried in the window.

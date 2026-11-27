@@ -51,6 +51,10 @@ impl SourceControlBackend for Backend {
     }
 }
 
+/// The settings rows that keep the project and server chosen last, to choose them again at the next start.
+const PROJECT_KEY: &str = "sourceControl.project";
+const SERVER_KEY: &str = "sourceControl.server";
+
 /// How long the folder must be quiet before the list is checked again: one save is several events.
 const QUIET: std::time::Duration = std::time::Duration::from_millis(800);
 
@@ -103,7 +107,14 @@ impl Workspace {
             return page.clone();
         }
         let backend = Arc::new(Backend(self.store.read(cx).services()));
-        let page = cx.new(|cx| SourceControlPage::new(backend, cx));
+        let settings = &self.store.read(cx).settings;
+        let project = settings.get(PROJECT_KEY).map(str::to_string);
+        let server = settings.get(SERVER_KEY).map(str::to_string);
+        let page = cx.new(|cx| {
+            let mut page = SourceControlPage::new(backend, cx);
+            page.restore(project, server);
+            page
+        });
         let sub = cx.subscribe_in(&page, window, |ws, page, e: &SourceControlEvent, window, cx| {
             ws.source_control_event(page.clone(), e.clone(), window, cx)
         });
@@ -287,6 +298,15 @@ impl Workspace {
                 });
             }
             SourceControlEvent::Watch(folder) => self.watch_project(folder, page, cx),
+            SourceControlEvent::Chosen { project, env } => self.store.update(cx, |s, cx| {
+                s.update_settings(
+                    |st| {
+                        st.set(PROJECT_KEY, project.unwrap_or_default());
+                        st.set(SERVER_KEY, env.unwrap_or_default());
+                    },
+                    cx,
+                )
+            }),
             SourceControlEvent::OpenFolder(project) => {
                 let folder = wiring::server_backups(&project.to_string_lossy());
                 if let Err(e) = std::fs::create_dir_all(&folder).map_err(|e| e.to_string()).and_then(|_| {

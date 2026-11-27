@@ -3,6 +3,7 @@
 pub mod app_db;
 pub mod certificates;
 pub mod dnn_install;
+pub mod filezilla;
 pub mod host_resources;
 pub mod iis;
 pub mod iis_admin;

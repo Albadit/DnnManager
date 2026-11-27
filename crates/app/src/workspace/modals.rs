@@ -137,6 +137,7 @@ impl Workspace {
             let sub = cx.subscribe_in(&page, window, |ws, page, e: &SettingsEvent, window, cx| {
                 ws.settings_event(page.clone(), e.clone(), window, cx)
             });
+            ws.servers_changed(&page, cx);
             ws.settings = Some(Modal::Settings(page, vec![sub]));
             cx.notify();
         });
@@ -310,6 +311,11 @@ impl Workspace {
                 );
             }
             SettingsEvent::CheckForUpdates => self.check_for_updates(Some(page.downgrade()), false, cx),
+            SettingsEvent::AddServer => self.edit_server(page, None, window, cx),
+            SettingsEvent::EditServer(env) => self.edit_server(page, Some(env), window, cx),
+            SettingsEvent::DeleteServer(env) => self.delete_server(page, env, window, cx),
+            SettingsEvent::ImportServers => self.import_servers(page, window, cx),
+            SettingsEvent::ExportServers => self.export_servers(window, cx),
             SettingsEvent::Toast(notice, text) => self.store.update(cx, |s, cx| s.toast(toast_kind(notice), text, false, cx)),
             SettingsEvent::Error(text) => self.error_dialog(text, window, cx),
         }

@@ -8,6 +8,8 @@ publish.workspace = true
 
 [dependencies]
 dnnm-application.workspace = true
+# FileZilla's passwords in an exported Site Manager file.
+base64 = "0.23"
 log.workspace = true
 roxmltree.workspace = true
 rusqlite.workspace = true

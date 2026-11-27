@@ -24,6 +24,7 @@ use std::time::Duration;
 use gpui::{AnyElement, App, ClickEvent, Context, Div, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent, PathPromptOptions, SharedString, Stateful, Subscription, Window, div, prelude::*};
 
 use dnnm_application::settings::Settings;
+use dnnm_application::source_control::model::{Auth, Environment};
 use dnnm_sql::{DatabaseCheckOptions, DatabaseCheckReport, DatabaseConnection, DockerOptions, DockerStatus};
 use dnnm_system::prereq::IisFeature;
 use dnnm_system::secrets::{self, names};
@@ -202,6 +203,16 @@ pub enum SettingsEvent {
     /// About was opened: ask GitHub for a newer DNN Manager (unless asked within 10 minutes), then
     /// [`SettingsPage::set_update_status`].
     CheckForUpdates,
+    /// Servers → Add server…: the server dialog for a new one; once saved, [`SettingsPage::set_servers`].
+    AddServer,
+    /// Servers → Edit…: the server dialog for this one; once saved, [`SettingsPage::set_servers`].
+    EditServer(Environment),
+    /// Servers → Delete: ask first; once deleted, [`SettingsPage::set_servers`].
+    DeleteServer(Environment),
+    /// Servers → Import…: ask for a FileZilla Site Manager file, add its sites, then [`SettingsPage::set_servers`].
+    ImportServers,
+    /// Servers → Export…: ask whether the passwords go too, then for the file, and write it.
+    ExportServers,
     Toast(Notice, String),
     /// An error dialog (`Dialogs.Error`).
     Error(String),
@@ -257,6 +268,8 @@ pub struct SettingsPage {
     machine: Option<MachineFacts>,
     docker_about: Option<String>,
     about_asked: bool,
+    /// Source Control's servers, as the app read them ([`SettingsPage::set_servers`]) - or why they couldn't be.
+    servers: Result<Vec<Environment>, String>,
     // The cards.
     pub(crate) sql_card: SqlCardState,
     pub(crate) docker_card: DockerCardState,
@@ -370,6 +383,7 @@ impl SettingsPage {
             machine: None,
             docker_about: None,
             about_asked: false,
+            servers: Ok(Vec::new()),
             sql_card: SqlCardState::default(),
             docker_card: DockerCardState::default(),
             iis_card: IisCardState::default(),
@@ -384,6 +398,12 @@ impl SettingsPage {
     }
 
     // ─── Public: what the app calls ───────────────────────────────────────
+
+    /// Servers' list, read again by the app after it was opened or changed.
+    pub fn set_servers(&mut self, servers: Result<Vec<Environment>, String>, cx: &mut Context<Self>) {
+        self.servers = servers;
+        cx.notify();
+    }
 
     /// The form has edits that aren't saved - leaving the page would lose them.
     pub fn has_unsaved_changes(&self) -> bool {
@@ -618,6 +638,11 @@ impl SettingsPage {
             Category::Keyboard => {
                 let commands: Vec<String> = self.commands.iter().map(|c| format!("{} {}", c.title, c.area)).collect();
                 format!("{} {}", category.keywords(), commands.join(" "))
+            }
+            Category::Servers => {
+                let servers: Vec<String> =
+                    self.servers.iter().flatten().map(|s| format!("{} {}", s.name, s.host)).collect();
+                format!("{} {}", category.keywords(), servers.join(" "))
             }
             other => other.keywords().to_string(),
         }
@@ -1217,6 +1242,7 @@ impl Render for SettingsPage {
             Category::Sql => self.render_sql(window, cx),
             Category::Docker => self.render_docker(window, cx),
             Category::Iis => self.render_iis(cx),
+            Category::Servers => self.render_servers(cx),
             Category::Keyboard => self.render_keyboard(window, cx),
             Category::Help => self.render_help(cx),
             Category::About => self.render_about(cx),
@@ -1351,6 +1377,7 @@ fn glyph(category: Category) -> Icon {
         Category::Sql => Icon::Database,
         Category::Docker => Icon::Container,
         Category::Iis => Icon::Globe,
+        Category::Servers => Icon::SourceControl,
         Category::Keyboard => Icon::Keyboard,
         Category::Help => Icon::Question,
         Category::About => Icon::Info,
@@ -2044,6 +2071,121 @@ impl SettingsPage {
                 cx,
             ))
             .child(self.render_iis_card(cx))
+            .into_any_element()
+    }
+
+    fn render_servers(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::get(cx).clone();
+        let c = theme.colors;
+        let count = self.servers.as_ref().map_or(0, Vec::len);
+        let button = |id: &'static str, label: &'static str, tip: &'static str, enabled: bool, event: SettingsEvent, cx: &mut Context<Self>| {
+            ui::button(id, label, ButtonKind::Secondary, enabled, cx)
+                .tip(tip)
+                .when(enabled, |b| b.on_click(cx.listener(move |_, _: &ClickEvent, _, cx| cx.emit(event.clone()))))
+        };
+        let buttons = div()
+            .flex()
+            .flex_wrap()
+            .gap(px(8.0))
+            .child(button("servers-add", "Add server…", "A new server, as in FileZilla's Site Manager", true, SettingsEvent::AddServer, cx))
+            .child(button(
+                "servers-import",
+                "Import…",
+                "Add the sites of a FileZilla Site Manager file (FileZilla's File → Export…, or sitemanager.xml)",
+                true,
+                SettingsEvent::ImportServers,
+                cx,
+            ))
+            .child(button(
+                "servers-export",
+                "Export…",
+                "Every server to a file FileZilla - or DNN Manager on another computer - imports",
+                count > 0,
+                SettingsEvent::ExportServers,
+                cx,
+            ));
+
+        let list = match &self.servers {
+            Err(e) => div()
+                .flex()
+                .items_start()
+                .gap(px(icons::LABEL_GAP))
+                .text_color(c.error_text)
+                .child(ui::line_icon(Icon::Error, IconSize::Medium, c.error_text, cx))
+                .child(div().min_w_0().child(format!("The servers couldn't be read: {e}"))),
+            Ok(servers) if servers.is_empty() => hint(
+                "No servers yet. Add one, or import the sites you have in FileZilla: there, choose File → Export…, then Import… here.",
+                &theme,
+            ),
+            Ok(servers) => {
+                let mut rows = div().flex().flex_col();
+                for (index, server) in servers.iter().enumerate() {
+                    let mut details = format!(
+                        "{} · {}@{}:{} · {}",
+                        server.protocol.key().to_uppercase(),
+                        server.user,
+                        server.host,
+                        server.port,
+                        server.remote_root
+                    );
+                    if matches!(server.auth, Auth::KeyFile(_)) {
+                        details.push_str(" · key file");
+                    }
+                    let (edit, delete) = (server.clone(), server.clone());
+                    rows = rows.child(
+                        div()
+                            .id(SharedString::from(format!("server-{}", server.id)))
+                            .flex()
+                            .items_center()
+                            .gap(px(16.0))
+                            .pad(px(10.0), px(0.0))
+                            .border_b_1()
+                            .when(index == 0, |d| d.border_t_1())
+                            .border_color(c.grid_line)
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(div().font_weight(FontWeight::SEMIBOLD).truncate().child(server.name.clone()))
+                                    .child(
+                                        div()
+                                            .text_size(theme.text.hint)
+                                            .text_color(c.text_muted)
+                                            .truncate()
+                                            .child(details),
+                                    ),
+                            )
+                            .child(
+                                ui::button(SharedString::from(format!("server-edit-{}", server.id)), "Edit…", ButtonKind::Secondary, true, cx)
+                                    .tip(format!("Edit {}", server.name))
+                                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                                        cx.emit(SettingsEvent::EditServer(edit.clone()))
+                                    })),
+                            )
+                            .child(
+                                ui::icon_button(SharedString::from(format!("server-delete-{}", server.id)), Icon::Delete, c.text_muted, true, cx)
+                                    .tip(format!("Delete {}…", server.name))
+                                    .on_click(cx.listener(move |_, _: &ClickEvent, _, cx| {
+                                        cx.emit(SettingsEvent::DeleteServer(delete.clone()))
+                                    })),
+                            ),
+                    );
+                }
+                rows
+            }
+        };
+
+        column(20.0)
+            .child(ui::with_tip(
+                category_title("Servers", &theme),
+                "servers-tip",
+                "The servers Source Control compares your projects with and sends files to - over SFTP, FTPS or FTP. Every project can use every server. These buttons act at once, without Save; passwords stay in your system's secure store.",
+                cx,
+            ))
+            .child(buttons)
+            .child(list)
             .into_any_element()
     }
 

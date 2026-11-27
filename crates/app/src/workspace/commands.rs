@@ -398,6 +398,7 @@ fn commands() -> Vec<Command> {
         settings("settings.databaseServer", Category::Sql, "Database server", "sql server express localdb connection ssms"),
         settings("settings.docker", Category::Docker, "Docker container", "container volume edition collation compose"),
         settings("settings.iis", Category::Iis, "IIS", "windows features"),
+        settings("settings.servers", Category::Servers, "Servers", "source control ftp sftp filezilla import export"),
         settings("settings.keyboard", Category::Keyboard, "Keyboard shortcuts", "keys bindings hotkeys"),
         settings("settings.help", Category::Help, "Help", "getting started guide tour tutorial what's new"),
         settings("settings.about", Category::About, "About", "version license repository folders"),

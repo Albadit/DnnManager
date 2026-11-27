@@ -881,6 +881,11 @@ const SETTINGS: GuideStep = GuideStep {
                 "IIS",
                 "The parts of Windows the web server needs. **Test** checks them; **Set up IIS** turns on what is missing.",
             ),
+            item(
+                "GlyphSourceControl",
+                "Servers",
+                "The servers **Source Control** sends files to: add, edit or delete them, and import or export FileZilla's Site Manager. Saved at once.",
+            ),
             item("GlyphKeyboard", "Keyboard shortcuts", "Every keyboard shortcut - change any of them. Saved at once."),
             item("GlyphQuestion", "Help", "The getting started guide, the tour, and the full user guide."),
             item("GlyphInfo", "About", "The version, whether an update is ready, and the folders with your files."),
@@ -1311,6 +1316,7 @@ pub fn glyph(key: &str) -> Option<Icon> {
         "GlyphReset" => Icon::Reset,
         "GlyphCheck" => Icon::Check,
         "GlyphDash" => Icon::Dash,
+        "GlyphSourceControl" => Icon::SourceControl,
         _ => return None,
     })
 }

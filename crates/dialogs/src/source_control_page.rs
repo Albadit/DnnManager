@@ -16,14 +16,15 @@
 //! previous change in the diff. The section the top row is in stays at the top of the list as it scrolls.
 
 use dnnm_ui::px;
+use std::cell::Cell;
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::{
-    App, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, ScrollStrategy, ScrollWheelEvent, SharedString, Subscription, Task, UniformListScrollHandle, Window, div,
+    App, Bounds, ClickEvent, Context, DragMoveEvent, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyDownEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, Pixels, ScrollStrategy, ScrollWheelEvent, SharedString, Subscription, Task, UniformListScrollHandle, Window, div,
     prelude::*, uniform_list,
 };
 
@@ -36,7 +37,7 @@ use dnnm_ui::text_input::{TextChanged, TextInput};
 use dnnm_ui::theme::Theme;
 use dnnm_ui::{self as ui, Icon, Pad, Tip};
 
-use crate::source_control_diff::{self, OneFile, TextDiff};
+use crate::source_control_diff::{self, HScrollDrag, Layout, OneFile, SplitDrag, TextDiff};
 use crate::source_control_list::{self as list, Filter, Row};
 
 /// What the page reads and saves itself; the app gives it the real one (`dnnm_wiring::source_control`).
@@ -67,6 +68,8 @@ pub enum SourceControlEvent {
     Merge { project_dir: PathBuf, env: Environment, path: String },
     /// Watch this project's folder (None: nothing) - a change there re-checks the list ([`SourceControlPage::local_changed`]).
     Watch(Option<PathBuf>),
+    /// The project and server chosen by hand - to be chosen again next time ([`SourceControlPage::restore`]).
+    Chosen { project: Option<String>, env: Option<String> },
 }
 
 /// Where the page is with its environment.
@@ -96,8 +99,9 @@ struct DiffView {
     at: Option<usize>,
     /// Opened with one click and not kept yet: the next file opened so takes its tab (VS Code's preview, in italics).
     preview: bool,
-    /// Where its diff is scrolled to - each tab keeps its own.
+    /// Where its diff is scrolled to - each tab keeps its own, down and sideways (both halves together).
     scroll: UniformListScrollHandle,
+    scroll_x: Pixels,
     /// Reading its two copies.
     cancel: CancelToken,
     task: Option<Task<()>>,
@@ -109,6 +113,8 @@ pub struct SourceControlPage {
     list_focus: FocusHandle,
     projects: Vec<(String, PathBuf)>,
     project: Option<String>,
+    /// The project chosen last time: chosen when the projects arrive, if it is still one of them.
+    wanted_project: Option<String>,
     project_open: bool,
     environments: Vec<Environment>,
     env: Option<String>,
@@ -136,8 +142,12 @@ pub struct SourceControlPage {
     history: Option<Vec<HistoryLine>>,
     menu: Option<ContextMenu>,
     list_scroll: UniformListScrollHandle,
-    /// The diff as one column instead of side by side (kept from file to file).
-    inline: bool,
+    /// The left half's share of the diff's width - the line between the halves dragged (kept from file to file).
+    split: f32,
+    /// The diff's area as last drawn: a drag or a sideways wheel is measured against it.
+    diff_area: Rc<Cell<Bounds<Pixels>>>,
+    /// A character's width in the diff's font, measured when drawn.
+    char_width: Pixels,
     /// A re-check of the project's side is running (the watcher saw a change).
     rechecking: Option<Task<()>>,
     _subscription: Subscription,
@@ -159,6 +169,7 @@ impl SourceControlPage {
             list_focus: cx.focus_handle().tab_stop(true),
             projects: Vec::new(),
             project: None,
+            wanted_project: None,
             project_open: false,
             environments: Vec::new(),
             env: None,
@@ -180,7 +191,9 @@ impl SourceControlPage {
             history: None,
             menu: None,
             list_scroll: UniformListScrollHandle::new(),
-            inline: false,
+            split: 0.5,
+            diff_area: Rc::new(Cell::new(Bounds::default())),
+            char_width: Pixels::ZERO,
             rechecking: None,
             _subscription: subscription,
         }
@@ -188,29 +201,51 @@ impl SourceControlPage {
 
     // ─── From the app ────────────────────────────────────────────────────────
 
-    /// The projects to choose from: name and folder. The first is chosen when none is.
+    /// The project and server chosen last time (as [`SourceControlEvent::Chosen`] gave them) - before the projects
+    /// are given: each is chosen again when it is still there.
+    pub fn restore(&mut self, project: Option<String>, env: Option<String>) {
+        self.wanted_project = project.filter(|p| !p.is_empty());
+        self.env = env.filter(|e| !e.is_empty());
+    }
+
+    /// The projects to choose from: name and folder. The one chosen last time, else the first, is chosen when none
+    /// is.
     pub fn set_projects(&mut self, projects: Vec<(String, PathBuf)>, cx: &mut Context<Self>) {
         if self.projects == projects {
             return;
         }
         self.projects = projects;
-        let still = self.project.as_ref().is_some_and(|p| self.projects.iter().any(|(n, _)| n.eq_ignore_ascii_case(p)));
+        let has = |p: &String| self.projects.iter().find(|(n, _)| n.eq_ignore_ascii_case(p)).map(|(n, _)| n.clone());
+        let still = self.project.as_ref().and_then(has).is_some();
         if !still {
-            let first = self.projects.first().map(|(n, _)| n.clone());
-            self.choose_project(first, cx);
+            let wanted = self.wanted_project.as_ref().and_then(has);
+            if wanted.is_some() {
+                self.wanted_project = None;
+            }
+            let choice = wanted.or_else(|| self.projects.first().map(|(n, _)| n.clone()));
+            self.choose_project(choice, cx);
         }
         cx.notify();
+    }
+
+    /// Tells the app the project and server chosen, to choose them again next time.
+    fn remember_choice(&self, cx: &mut Context<Self>) {
+        cx.emit(SourceControlEvent::Chosen { project: self.project.clone(), env: self.env.clone() });
     }
 
     /// The environments read again (after one was saved or deleted); `choose` is chosen when given.
     pub fn reload_environments(&mut self, choose: Option<String>, cx: &mut Context<Self>) {
         let Some(project) = self.project.clone() else { return };
         self.environments = self.backend.environments(&project).unwrap_or_default();
+        let chosen = choose.is_some();
         let keep = choose.or(self.env.clone()).filter(|id| self.environments.iter().any(|e| &e.id == id));
         if keep != self.env {
             self.clear_comparison();
         }
         self.env = keep.or_else(|| self.environments.first().map(|e| e.id.clone()));
+        if chosen {
+            self.remember_choice(cx);
+        }
         self.load_cached(cx);
         cx.notify();
     }
@@ -511,6 +546,7 @@ impl SourceControlPage {
             at: None,
             preview: !keep,
             scroll: UniformListScrollHandle::new(),
+            scroll_x: Pixels::ZERO,
             cancel: CancelToken::new(),
             task: None,
         };
@@ -573,12 +609,11 @@ impl SourceControlPage {
                 .spawn(async move { backend.read_both(&project_dir, &env, &path, &cancel) })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                let inline = this.inline;
                 let Some(tab) = this.tabs.iter_mut().find(|t| t.entry.path == entry.path) else { return };
                 tab.state = diff_state(&entry.path, read);
                 // Straight to the first change.
                 if let DiffState::Text(text) = &tab.state {
-                    tab.at = text.changes(inline).first().copied();
+                    tab.at = text.changes().first().copied();
                     if let Some(row) = tab.at {
                         tab.scroll.scroll_to_item(row, ScrollStrategy::Center);
                     }
@@ -590,10 +625,9 @@ impl SourceControlPage {
     }
 
     fn step_change(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let inline = self.inline;
         let Some(diff) = self.tabs.get_mut(self.active) else { return };
         let DiffState::Text(text) = &diff.state else { return };
-        let changes = text.changes(inline);
+        let changes = text.changes();
         diff.at = if forward {
             changes.iter().find(|&&c| diff.at.is_none_or(|r| c > r)).or(changes.first()).copied()
         } else {
@@ -605,20 +639,78 @@ impl SourceControlPage {
         cx.notify();
     }
 
-    /// Side by side ↔ one column; the change shown stays the one shown.
-    fn toggle_inline(&mut self, cx: &mut Context<Self>) {
-        self.inline = !self.inline;
-        let inline = self.inline;
-        if let Some(diff) = self.tabs.get_mut(self.active)
-            && let DiffState::Text(text) = &diff.state
-        {
-            let (from, to) = (text.changes(!inline), text.changes(inline));
-            diff.at = diff.at.and_then(|row| from.iter().position(|&c| c == row)).and_then(|i| to.get(i).copied());
-            if let Some(row) = diff.at {
-                diff.scroll.scroll_to_item(row, ScrollStrategy::Center);
+    /// How far the shown diff can scroll sideways: the half whose widest line is the furthest past its width.
+    fn max_scroll_x(&self) -> Pixels {
+        let width = self.diff_area.get().size.width;
+        match self.tab().map(|t| &t.state) {
+            Some(DiffState::Text(text)) => {
+                let (left, right) = source_control_diff::halves(width, self.split);
+                source_control_diff::overflow(text.widest.0, self.char_width, left)
+                    .max(source_control_diff::overflow(text.widest.1, self.char_width, right))
+            }
+            Some(DiffState::File(file)) => source_control_diff::overflow(file.widest, self.char_width, width),
+            _ => Pixels::ZERO,
+        }
+    }
+
+    fn set_scroll_x(&mut self, to: Pixels, cx: &mut Context<Self>) {
+        let max = self.max_scroll_x();
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            let to = to.clamp(Pixels::ZERO, max);
+            if to != tab.scroll_x {
+                tab.scroll_x = to;
+                cx.notify();
             }
         }
-        cx.notify();
+    }
+
+    /// A sideways wheel (Shift+wheel, a touchpad) over the diff: both halves move together.
+    fn wheel_sideways(&mut self, event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let delta = event.delta.pixel_delta(window.line_height());
+        if delta.x == Pixels::ZERO {
+            return;
+        }
+        let now = self.tab().map_or(Pixels::ZERO, |t| t.scroll_x);
+        self.set_scroll_x(now - delta.x, cx);
+    }
+
+    /// The line between the halves dragged: the left's share of the width follows the mouse.
+    fn drag_split(&mut self, event: &DragMoveEvent<SplitDrag>, cx: &mut Context<Self>) {
+        let bounds = event.bounds;
+        if bounds.size.width <= Pixels::ZERO {
+            return;
+        }
+        let split = source_control_diff::clamp_split((event.event.position.x - bounds.left()) / bounds.size.width);
+        if split != self.split {
+            self.split = split;
+            let now = self.tab().map_or(Pixels::ZERO, |t| t.scroll_x);
+            self.set_scroll_x(now, cx);
+            cx.notify();
+        }
+    }
+
+    /// A half's sideways scroll bar dragged: its thumb's middle follows the mouse.
+    fn drag_sideways(&mut self, event: &DragMoveEvent<HScrollDrag>, cx: &mut Context<Self>) {
+        let left = event.drag(cx).left;
+        let bounds = event.bounds;
+        let (widest, x, half) = match self.tab().map(|t| &t.state) {
+            Some(DiffState::Text(text)) => {
+                let (lw, rw) = source_control_diff::halves(bounds.size.width, self.split);
+                if left { (text.widest.0, Pixels::ZERO, lw) } else { (text.widest.1, lw, rw) }
+            }
+            Some(DiffState::File(file)) => (file.widest, Pixels::ZERO, bounds.size.width),
+            _ => return,
+        };
+        let max = source_control_diff::overflow(widest, self.char_width, half);
+        let Some((_, thumb)) = source_control_diff::thumb(widest, self.char_width, half, Pixels::ZERO) else { return };
+        let track = half - px(source_control_diff::NUMBER_WIDTH);
+        let track_left = bounds.left() + x + px(source_control_diff::NUMBER_WIDTH);
+        let room = track - thumb;
+        if room <= Pixels::ZERO {
+            return;
+        }
+        let at = ((event.event.position.x - track_left - thumb / 2.0) / room).clamp(0.0, 1.0);
+        self.set_scroll_x(max * at, cx);
     }
 
     fn merge(&mut self, entry: &Entry, cx: &mut Context<Self>) {
@@ -827,24 +919,7 @@ impl SourceControlPage {
 
     fn add_environment(&mut self, cx: &mut Context<Self>) {
         let Some(project) = self.project.clone() else { return };
-        let env = Environment {
-            id: crate::source_control_environment::new_id(&project),
-            project: project.clone(),
-            name: String::new(),
-            // Not asked any more: every server is treated as live - web.config and the like protected.
-            kind: dnnm_application::source_control::model::EnvironmentKind::Production,
-            protocol: dnnm_application::source_control::model::Protocol::Ftps,
-            host: String::new(),
-            port: 21,
-            user: String::new(),
-            auth: dnnm_application::source_control::model::Auth::Password,
-            remote_root: crate::source_control_environment::DEFAULT_REMOTE_DIRECTORY.into(),
-            mappings: Vec::new(),
-            ignore: Vec::new(),
-            protected: Vec::new(),
-            backup_remote: true,
-            host_key: None,
-        };
+        let env = crate::source_control_environment::new_environment(&project);
         cx.emit(SourceControlEvent::EditEnvironment { env, is_new: true });
     }
 
@@ -1052,7 +1127,7 @@ impl Render for SourceControlPage {
         let env = self.environment().cloned();
         let busy = matches!(self.status, Status::Working(_));
         // The comparison (or the history) fills the main view; the files are in the primary side bar.
-        let right = self.render_right(env.as_ref(), busy, cx);
+        let right = self.render_right(env.as_ref(), busy, window, cx);
         let page = div()
             .id("source-control-page")
             .track_focus(&self.focus)
@@ -1114,6 +1189,7 @@ impl SourceControlPage {
                 this.project_open = false;
                 let name = this.projects.get(*i).map(|(n, _)| n.clone());
                 this.choose_project(name, cx);
+                this.remember_choice(cx);
             }),
             cx,
         );
@@ -1136,6 +1212,7 @@ impl SourceControlPage {
                 this.env_open = false;
                 if let Some(id) = this.environments.get(*i).map(|e| e.id.clone()) {
                     this.choose_env(id, cx);
+                    this.remember_choice(cx);
                 }
             }),
             cx,
@@ -1544,7 +1621,65 @@ impl SourceControlPage {
     /// VS Code's tab bar: a tab a file - its icon, its name in its change's colour (in italics while it is the
     /// preview), and its close button on the one shown and the one under the mouse. A click shows it, a double click
     /// keeps it, a middle click closes it.
-    fn render_tabs(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    /// The shown file's buttons, on the right of the tab bar as VS Code has its editor's: the previous and next
+    /// change, then what can be done with this file (merge or settle a conflict, download, delete on the server) -
+    /// sending changes is Stage and Commit in the side bar.
+    fn diff_actions(&self, busy: bool, cx: &mut Context<Self>) -> Option<gpui::Div> {
+        let diff = self.tab()?;
+        let c = Theme::get(cx).colors;
+        let entry = diff.entry.clone();
+        let e = entry.clone();
+        let mut row = div().flex().flex_none().items_center().gap(px(4.0)).pad(px(0.0), px(6.0));
+        let text_diff = matches!(diff.state, DiffState::Text(_));
+        row = row
+            .child(
+                ui::icon_button("sc-prev-change", Icon::ChevronUp, c.text_primary, text_diff, cx)
+                    .tip("Previous change (Shift+F7)")
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.step_change(false, cx))),
+            )
+            .child(
+                ui::icon_button("sc-next-change", Icon::ChevronDown, c.text_primary, text_diff, cx)
+                    .tip("Next change (F7)")
+                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.step_change(true, cx))),
+            );
+        let action = |id: &'static str, label: &'static str, enabled: bool| {
+            ui::button(id, label, ui::ButtonKind::Secondary, enabled && !busy, cx)
+        };
+        match e.change {
+            Change::Conflict => {
+                let (a, b, m) = (e.clone(), e.clone(), e.clone());
+                row = row
+                    .child(action("sc-merge", "Merge…", text_diff).tip("Both copies in the project's file between markers, opened in your editor - keep what belongs, save, Refresh, then Keep mine").on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| this.merge(&m, cx),
+                    )))
+                    .child(action("sc-keep-local", "Keep mine", e.local.is_some()).on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| this.keep_local(vec![a.clone()], cx),
+                    )))
+                    .child(action("sc-keep-server", "Keep the server's", e.remote.is_some()).on_click(cx.listener(
+                        move |this, _: &ClickEvent, _, cx| this.keep_server(vec![b.clone()], cx),
+                    )));
+            }
+            change if change.downloads() => {
+                let a = e.clone();
+                row = row.child(action("sc-diff-download", "Download", true).on_click(cx.listener(
+                    move |this, _: &ClickEvent, _, cx| {
+                        let title = format!("Download {}", a.path);
+                        this.send(vec![a.clone()], Action::Download, false, title, cx)
+                    },
+                )));
+            }
+            Change::Deleted => {
+                let a = e.clone();
+                row = row.child(action("sc-diff-delete", "Delete on server…", true).on_click(cx.listener(
+                    move |this, _: &ClickEvent, _, cx| this.delete_on_server(vec![a.clone()], cx),
+                )));
+            }
+            _ => {}
+        }
+        Some(row)
+    }
+
+    fn render_tabs(&mut self, actions: Option<gpui::Div>, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = Theme::get(cx).clone();
         let c = theme.colors;
         let tabs = self.tabs.iter().enumerate().map(|(i, tab)| {
@@ -1620,22 +1755,27 @@ impl SourceControlPage {
                 }))
         });
         div()
-            .id("sc-tabs")
             .flex()
             .flex_none()
+            .items_center()
             .h(px(35.0))
-            .overflow_x_scroll()
             .bg(c.window_bg)
             .border_b_1()
             .border_color(c.card_border)
-            .children(tabs)
+            .child(div().id("sc-tabs").flex().flex_1().min_w_0().h_full().overflow_x_scroll().children(tabs))
+            .children(actions)
             .into_any_element()
     }
 
-    fn render_right(&mut self, env: Option<&Environment>, busy: bool, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_right(&mut self, env: Option<&Environment>, busy: bool, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = Theme::get(cx).clone();
+        // The diff's font is monospaced: one character's width gives how wide its widest line is.
+        let text_system = window.text_system();
+        let font_id = text_system.resolve_font(&gpui::font(theme.mono_font.clone()));
+        self.char_width = text_system.advance(font_id, theme.text.caption, 'm').map_or(theme.text.caption * 0.6, |s| s.width);
         let c = theme.colors;
-        let mut tab_bar = (!self.tabs.is_empty()).then(|| self.render_tabs(cx));
+        let actions = if self.history.is_none() { self.diff_actions(busy, cx) } else { None };
+        let mut tab_bar = (!self.tabs.is_empty()).then(|| self.render_tabs(actions, cx));
         let mut frame = || {
             div()
                 .flex()
@@ -1715,71 +1855,6 @@ impl SourceControlPage {
                 .into_any_element();
         };
         let entry = diff.entry.clone();
-        let header_buttons = {
-            let e = entry.clone();
-            let mut row = div().flex().items_center().gap(px(2.0));
-            let text_diff = matches!(diff.state, DiffState::Text(_));
-            row = row
-                .child(
-                    ui::button("sc-diff-mode", if self.inline { "Side by side" } else { "Inline" }, ui::ButtonKind::Secondary, text_diff, cx)
-                        .tip(if self.inline { "Show the two copies side by side" } else { "Show the changes in one column" })
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_inline(cx))),
-                )
-                .child(
-                    ui::icon_button("sc-prev-change", Icon::ChevronUp, c.text_primary, text_diff, cx)
-                        .tip("Previous change (Shift+F7)")
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.step_change(false, cx))),
-                )
-                .child(
-                    ui::icon_button("sc-next-change", Icon::ChevronDown, c.text_primary, text_diff, cx)
-                        .tip("Next change (F7)")
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.step_change(true, cx))),
-                );
-            let action = |id: &'static str, label: &'static str, enabled: bool| {
-                ui::button(id, label, ui::ButtonKind::Secondary, enabled && !busy, cx)
-            };
-            match e.change {
-                Change::Conflict => {
-                    let (a, b, m) = (e.clone(), e.clone(), e.clone());
-                    row = row
-                        .child(action("sc-merge", "Merge…", text_diff).tip("Both copies in the project's file between markers, opened in your editor - keep what belongs, save, Refresh, then Keep mine").on_click(cx.listener(
-                            move |this, _: &ClickEvent, _, cx| this.merge(&m, cx),
-                        )))
-                        .child(action("sc-keep-local", "Keep mine", e.local.is_some()).on_click(cx.listener(
-                            move |this, _: &ClickEvent, _, cx| this.keep_local(vec![a.clone()], cx),
-                        )))
-                        .child(action("sc-keep-server", "Keep the server's", e.remote.is_some()).on_click(cx.listener(
-                            move |this, _: &ClickEvent, _, cx| this.keep_server(vec![b.clone()], cx),
-                        )));
-                }
-                change if change.uploads() => {
-                    let a = e.clone();
-                    row = row.child(action("sc-diff-upload", "Upload", true).on_click(cx.listener(
-                        move |this, _: &ClickEvent, _, cx| {
-                            let title = format!("Upload {}", a.path);
-                            this.send(vec![a.clone()], Action::Upload, false, title, cx)
-                        },
-                    )));
-                }
-                change if change.downloads() => {
-                    let a = e.clone();
-                    row = row.child(action("sc-diff-download", "Download", true).on_click(cx.listener(
-                        move |this, _: &ClickEvent, _, cx| {
-                            let title = format!("Download {}", a.path);
-                            this.send(vec![a.clone()], Action::Download, false, title, cx)
-                        },
-                    )));
-                }
-                Change::Deleted => {
-                    let a = e.clone();
-                    row = row.child(action("sc-diff-delete", "Delete on server…", true).on_click(cx.listener(
-                        move |this, _: &ClickEvent, _, cx| this.delete_on_server(vec![a.clone()], cx),
-                    )));
-                }
-                _ => {}
-            }
-            row
-        };
         let summary = match &diff.state {
             DiffState::Text(text) => {
                 let (added, removed) = text.sides.added_removed();
@@ -1829,25 +1904,31 @@ impl SourceControlPage {
             .border_b_1()
             .border_color(c.card_border)
             .child(crumbs)
-            .child(div().text_size(theme.text.caption).text_color(c.text_muted).child(summary))
-            .child(header_buttons);
-        let sides = div()
-            .flex()
-            .text_size(theme.text.caption)
-            .text_color(c.text_muted)
-            .border_b_1()
-            .border_color(c.card_border)
-            .map(|d| match &diff.state {
-                // One copy: only its own.
-                DiffState::File(file) => d.child(div().flex_1().pad(px(3.0), px(12.0)).child(if file.server {
-                    format!("Server - {}", meta_text(entry.remote.as_ref()))
-                } else {
-                    format!("Project - {}", meta_text(entry.local.as_ref()))
-                })),
-                _ => d
-                    .child(div().flex_1().pad(px(3.0), px(12.0)).child(format!("Server - {}", meta_text(entry.remote.as_ref()))))
-                    .child(div().flex_1().pad(px(3.0), px(12.0)).child(format!("Project - {}", meta_text(entry.local.as_ref())))),
-            });
+            .child(div().text_size(theme.text.caption).text_color(c.text_muted).child(summary));
+        // The labels over the halves; the area, with the sideways wheel and the drags of the line between the halves
+        // and of the sideways scroll bars.
+        let labels = match &diff.state {
+            DiffState::File(file) if file.server => (format!("Server - {}", meta_text(entry.remote.as_ref())), String::new()),
+            DiffState::File(_) => (format!("Project - {}", meta_text(entry.local.as_ref())), String::new()),
+            _ => (
+                format!("Server - {}", meta_text(entry.remote.as_ref())),
+                format!("Project - {}", meta_text(entry.local.as_ref())),
+            ),
+        };
+        let layout = Layout {
+            split: self.split,
+            scroll_x: diff.scroll_x,
+            char_width: self.char_width,
+            labels,
+            bounds: self.diff_area.clone(),
+        };
+        let area = |cx: &mut Context<Self>| {
+            div()
+                .id("sc-diff-area")
+                .on_scroll_wheel(cx.listener(Self::wheel_sideways))
+                .on_drag_move(cx.listener(|this, e: &DragMoveEvent<SplitDrag>, _, cx| this.drag_split(e, cx)))
+                .on_drag_move(cx.listener(|this, e: &DragMoveEvent<HScrollDrag>, _, cx| this.drag_sideways(e, cx)))
+        };
         let body: gpui::AnyElement = match &diff.state {
             DiffState::Loading => div()
                 .flex()
@@ -1864,15 +1945,21 @@ impl SourceControlPage {
                 .text_color(c.text_muted)
                 .child("A binary file: no line-by-line comparison. The sizes and times are above.")
                 .into_any_element(),
-            DiffState::Text(text) if self.inline => {
-                source_control_diff::inline_view(text, diff.at, &diff.scroll, theme.mono_font.clone(), cx)
+            DiffState::Text(text) => source_control_diff::side_by_side_view(
+                text,
+                diff.at,
+                &diff.scroll,
+                theme.mono_font.clone(),
+                &layout,
+                area(cx),
+                cx,
+            ),
+            DiffState::File(file) => {
+                source_control_diff::one_file_view(file, &diff.scroll, theme.mono_font.clone(), &layout, area(cx), cx)
             }
-            DiffState::Text(text) => source_control_diff::side_by_side_view(text, diff.at, &diff.scroll, theme.mono_font.clone(), cx),
-            DiffState::File(file) => source_control_diff::one_file_view(file, &diff.scroll, theme.mono_font.clone(), cx),
         };
         frame()
             .child(header)
-            .child(sides)
             .child(div().flex_1().min_h_0().text_size(theme.text.caption).child(body))
             .into_any_element()
     }

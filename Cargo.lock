@@ -1888,6 +1888,7 @@ version = "1.8.7"
 name = "dnnm-infrastructure"
 version = "1.8.7"
 dependencies = [
+ "base64 0.23.1",
  "dnnm-application",
  "log",
  "notify",

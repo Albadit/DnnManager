@@ -115,6 +115,28 @@ pub fn new_id(project: &str) -> String {
     format!("{slug}-{:x}", nanos & 0xFFFF_FFFF_FFFF)
 }
 
+/// A new server as the dialog starts it: FTP over TLS on 21 to `/site/wwwroot`, its server copies backed up. Every
+/// server is treated as live - web.config and the like protected.
+pub fn new_environment(project: &str) -> Environment {
+    Environment {
+        id: new_id(if project.is_empty() { "server" } else { project }),
+        project: project.to_string(),
+        name: String::new(),
+        kind: dnnm_application::source_control::model::EnvironmentKind::Production,
+        protocol: Protocol::Ftps,
+        host: String::new(),
+        port: 21,
+        user: String::new(),
+        auth: Auth::Password,
+        remote_root: DEFAULT_REMOTE_DIRECTORY.into(),
+        mappings: Vec::new(),
+        ignore: Vec::new(),
+        protected: Vec::new(),
+        backup_remote: true,
+        host_key: None,
+    }
+}
+
 /// The environment the form describes, keeping what the form doesn't hold (its id, its kind, the trusted key).
 pub fn environment(form: &Form, backup: bool, base: &Environment) -> Environment {
     Environment {
