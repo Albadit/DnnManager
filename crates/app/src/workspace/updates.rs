@@ -27,7 +27,8 @@ fn update_folder() -> Result<PathBuf, String> {
     Ok(dnnm_sql::dirs::temp()?.join("update"))
 }
 
-/// The helper's result, read by the DNN Manager it starts.
+/// The helper's result, read by the DNN Manager it starts - Windows only: elsewhere there is no helper.
+#[cfg(windows)]
 fn result_file() -> Option<PathBuf> {
     update_folder().ok().map(|f| f.join("result.json"))
 }
